@@ -22,6 +22,7 @@
 #           before the push; the worker gets one revision round on a REJECT.
 set -euo pipefail
 
+BEAD_LOOP_HOME=$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)
 CONFIG_DIR=${BEAD_LOOP_CONFIG:-$HOME/.config/bead-loop}
 STATE_DIR=${BEAD_LOOP_STATE:-$HOME/.local/state/bead-loop}
 mkdir -p "$STATE_DIR"
@@ -73,6 +74,7 @@ load_repo() {
   REVIEW_MODEL=$(cfg REVIEW_MODEL "$rc" "$(cfg REVIEW_MODEL "$G_CONF")")
   STAGES=$(cfg STAGES "$rc" "$(cfg STAGES "$G_CONF" "$MODEL:$REVIEW_MODEL:1")")
   ON_EXHAUST=$(cfg ON_EXHAUST "$rc" "$(cfg ON_EXHAUST "$G_CONF" park)")
+  case " $STAGES " in *" claude/"*|*":claude/"*) need claude ;; esac
   MAX_INFLIGHT=$(cfg MAX_INFLIGHT "$rc" "$(cfg MAX_INFLIGHT "$G_CONF" 1)")
   WORKER_TIMEOUT=$(cfg WORKER_TIMEOUT "$G_CONF" 3600)
   ATTACH=$(cfg ATTACH "$G_CONF")
@@ -91,14 +93,32 @@ ghr() { (cd "$REPO" && gh "$@"); }
 inflight_count() { find "$RS/inflight" -type f ! -name '*.*' | wc -l; }
 
 # ---- the models -------------------------------------------------------------
-# run_agent AGENT MODEL DIR LOG PROMPT: one non-interactive opencode session.
-# Prints the last text the agent wrote; returns opencode's exit code.
+# run_agent AGENT MODEL DIR LOG PROMPT: one non-interactive session, in the harness
+# the model name selects: "claude/<alias>" is Claude Code (claude -p, the agent file's
+# body as its system prompt, tools by role); anything else is an opencode agent.
+# Prints the last text the agent wrote; returns the harness's exit code.
 run_agent() {
   local agent=$1 model=$2 dir=$3 logf=$4 prompt=$5 rc=0
-  OPENCODE_DISABLE_CLAUDE_CODE_SKILLS=1 \
-  timeout --foreground "$WORKER_TIMEOUT" opencode run --dir "$dir" --agent "$agent" \
-      ${ATTACH:+--attach "$ATTACH"} ${model:+-m "$model"} --format json "$prompt" >"$logf" 2>"$logf.err" || rc=$?
-  jq -r 'select(.type=="text") | .part.text' "$logf" 2>/dev/null | tail -20
+  case $model in
+    claude/*)
+      local tools sys
+      case $agent in
+        bead-reviewer) tools='Read,Glob,Grep,Bash(git *),Bash(cat *),Bash(ls *),Bash(rg *),Bash(grep *)' ;;
+        *)             tools='Read,Edit,Write,Glob,Grep,Bash' ;;
+      esac
+      sys=$(awk 'c>=2{print} /^---$/{c++}' "$BEAD_LOOP_HOME/agents/$agent.md")
+      (cd "$dir" && timeout --foreground "$WORKER_TIMEOUT" claude -p "$prompt" --model "${model#claude/}" \
+          --output-format json --allowedTools "$tools" --append-system-prompt "$sys" \
+          --no-session-persistence) >"$logf" 2>"$logf.err" || rc=$?
+      jq -r '.result // empty' "$logf" 2>/dev/null | tail -20
+      ;;
+    *)
+      OPENCODE_DISABLE_CLAUDE_CODE_SKILLS=1 \
+      timeout --foreground "$WORKER_TIMEOUT" opencode run --dir "$dir" --agent "$agent" \
+          ${ATTACH:+--attach "$ATTACH"} ${model:+-m "$model"} --format json "$prompt" >"$logf" 2>"$logf.err" || rc=$?
+      jq -r 'select(.type=="text") | .part.text' "$logf" 2>/dev/null | tail -20
+      ;;
+  esac
   return $rc
 }
 

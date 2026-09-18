@@ -7,7 +7,7 @@ REVIEW_MODEL=acbox/coder          # the senior model that judges the diff before
 # Escalation: "worker:reviewer:attempts[:timeout]" stages in order. A failed attempt sends
 # the bead back to the queue with its note; later attempts may use a later stage. Unset =
 # one attempt with MODEL/REVIEW_MODEL, then park.
-STAGES=devbox/coder:acbox/coder:3 acbox/coder:acbox/instruct:2:14400
+STAGES=devbox/coder:acbox/coder:3 acbox/coder:acbox/instruct:2:14400 claude/opus:claude/opus:1
 ON_EXHAUST=repeat                 # repeat: cycle the stages until it lands | park: leave it for you
 MERGE=auto                         # auto: the next tick squash-merges once every CI check is green | manual: PR only
 #MAX_INFLIGHT=1                    # open PRs before the loop waits for CI

@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# Stub claude (Claude Code, -p mode) for bead-loop tests. Same $TEST_CTRL contract as
+# the opencode stub; the role comes from the tools allowed (Edit = worker).
+set -euo pipefail
+prompt='' model='' tools='' sys=''
+while [ $# -gt 0 ]; do
+  case $1 in
+    -p) prompt=$2; shift;; --model) model=$2; shift;; --allowedTools) tools=$2; shift;;
+    --append-system-prompt) sys=$2; shift;; --output-format) shift;; --no-session-persistence) ;;
+  esac; shift
+done
+case $tools in *Edit*) agent=bead-worker;; *) agent=bead-reviewer;; esac
+n=$(( $(wc -l <"$TEST_CTRL/calls" 2>/dev/null || echo 0) + 1 ))
+printf '%s %s claude/%s claude\n' "$agent" "$PWD" "$model" >>"$TEST_CTRL/calls"
+printf '%s' "$prompt" >"$TEST_CTRL/prompt.$n"
+printf '%s' "$sys" >"$TEST_CTRL/system.$n"
+say() { jq -n --arg t "$1" '{type:"result", result:$t}'; }
+case $agent in
+  bead-worker)
+    round=$(grep -c '^bead-worker' "$TEST_CTRL/calls")
+    echo "opus round $round" >>work.txt; git add -A && git commit -qm "work: opus round $round"
+    say "DONE: acceptance check printed ok" ;;
+  bead-reviewer) say "APPROVE: checked every criterion" ;;
+esac

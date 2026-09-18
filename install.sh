@@ -12,6 +12,11 @@ done
 for a in "$HERE"/agents/*.md; do
   n=$(basename "$a"); ln -sfnT "$a" "$OC/agents/$n"; echo "agent  $OC/agents/$n -> $a"
 done
+# Claude Code (the claude/<model> stages, and you at the terminal) reads ~/.claude/skills.
+if command -v claude >/dev/null; then
+  mkdir -p "$HOME/.claude/skills"
+  for s in "$HERE"/skills/*/; do n=$(basename "$s"); ln -sfnT "$s" "$HOME/.claude/skills/$n"; echo "skill  ~/.claude/skills/$n -> $s (Claude Code)"; done
+fi
 ln -sfnT "$HERE/bin/bead-supervisor" "$HOME/.local/bin/bead-supervisor"
 echo "bin    ~/.local/bin/bead-supervisor"
 case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) echo "       (add ~/.local/bin to PATH, or call $HERE/bin/bead-supervisor)";; esac
