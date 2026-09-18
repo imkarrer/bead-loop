@@ -15,7 +15,8 @@
 # Config, all optional, KEY=VALUE lines (no shell):
 #   ~/.config/bead-loop/config   MODEL, REVIEW_MODEL, REPOS (space separated), WORKER_TIMEOUT, MAX_INFLIGHT,
 #                                ATTACH (an opencode server url: sessions run there and stream in its web UI)
-#   REPO/.bead-loop              LABEL, BASE, SETUP, GATE, REVIEW_MODEL, MERGE (auto|manual), MODEL, MAX_INFLIGHT
+#   REPO/.bead-loop              LABEL, BASE, SETUP, GATE, REVIEW_MODEL, MERGE (auto|manual), MODEL, MAX_INFLIGHT,
+#                                ADOPT (1: open bead/* PRs from anyone join the loop; default 1)
 # Defaults: LABEL=delegate:local  BASE=origin's HEAD  MERGE=auto  MAX_INFLIGHT=1
 #           WORKER_TIMEOUT=3600 (seconds)  SETUP unset  GATE unset (CI is the gate)
 #           REVIEW_MODEL unset (no review). Set it and a second model judges the diff
@@ -74,6 +75,7 @@ load_repo() {
   REVIEW_MODEL=$(cfg REVIEW_MODEL "$rc" "$(cfg REVIEW_MODEL "$G_CONF")")
   STAGES=$(cfg STAGES "$rc" "$(cfg STAGES "$G_CONF" "$MODEL:$REVIEW_MODEL:1")")
   ON_EXHAUST=$(cfg ON_EXHAUST "$rc" "$(cfg ON_EXHAUST "$G_CONF" park)")
+  ADOPT=$(cfg ADOPT "$rc" "$(cfg ADOPT "$G_CONF" 1)")
   case " $STAGES " in *" claude/"*|*":claude/"*) need claude ;; esac
   MAX_INFLIGHT=$(cfg MAX_INFLIGHT "$rc" "$(cfg MAX_INFLIGHT "$G_CONF" 1)")
   WORKER_TIMEOUT=$(cfg WORKER_TIMEOUT "$G_CONF" 3600)
@@ -90,7 +92,18 @@ load_repo() {
 
 bdr() { (cd "$REPO" && bd "$@"); }
 ghr() { (cd "$REPO" && gh "$@"); }
-inflight_count() { find "$RS/inflight" -type f ! -name '*.*' | wc -l; }
+# Markers beside an inflight file are hidden (.ID.red, .ID.nocheck, .ID.adopted);
+# bead ids carry dots themselves, so the marker is what starts with one.
+mark() { printf '%s/inflight/.%s.%s' "$RS" "$1" "$2"; }
+# PRs this loop opened and is waiting on: adopted ones cost CI, not the model.
+inflight_count() {
+  local f n=0
+  for f in "$RS"/inflight/*; do
+    [ -e "$f" ] || continue
+    [ -e "$(mark "$(basename "$f")" adopted)" ] || n=$((n + 1))
+  done
+  echo "$n"
+}
 
 # ---- the models -------------------------------------------------------------
 # run_agent AGENT MODEL DIR LOG PROMPT: one non-interactive session, in the harness
@@ -380,16 +393,34 @@ fail() {
 close_merged() {
   local checks
   checks=$(printf '%s' "$4" | jq -r '[.statusCheckRollup[]? | "\(.context // .name)=\(.conclusion // .state)"] | join(" ") | if . == "" then "none reported" else . end')
-  bdr close "$1" --reason "bead-loop: $3 merged; checks at merge: $checks" >/dev/null
-  rm -f "$2" "$2.red" "$2.nocheck"
+  # An adopted bead may already be closed by whoever wrote the PR; that is fine.
+  bdr close "$1" --reason "bead-loop: $3 merged; checks at merge: $checks" >/dev/null 2>&1 || true
+  rm -f "$2" "$(mark "$1" red)" "$(mark "$1" nocheck)" "$(mark "$1" adopted)"
   log "$SLUG: $1 closed ($3 merged; $checks)"
+}
+
+# adopt: any open PR on a bead/<id>[-slug] branch this loop did not open (another
+# session, a human) joins inflight, so green merges and the bead closes whoever
+# wrote it. ADOPT=0 in .bead-loop turns it off.
+adopt() {
+  [ "$ADOPT" = 1 ] || return 0
+  local num head url id
+  while IFS=$'\t' read -r num head url; do
+    [ -n "$num" ] || continue
+    id=$(printf '%s' "$head" | sed -nE 's|^bead/([a-z]+-[a-z0-9]+(\.[0-9]+)?)(-.*)?$|\1|p')
+    [ -n "$id" ] || continue
+    [ -e "$RS/inflight/$id" ] && continue
+    printf '%s\n' "$url" >"$RS/inflight/$id"; touch "$(mark "$id" adopted)"
+    log "$SLUG: adopted $url ($head) as bead $id"
+  done < <(ghr pr list --state open --limit 100 --json number,headRefName,url \
+             --jq '.[] | select(.headRefName | startswith("bead/")) | [.number, .headRefName, .url] | @tsv' 2>/dev/null || true)
 }
 
 reconcile() {
   local f id url num view state verdict
+  adopt
   for f in "$RS"/inflight/*; do
     [ -e "$f" ] || continue
-    case $f in *.red|*.nocheck) continue ;; esac
     id=$(basename "$f"); url=$(cat "$f"); num=${url##*/}
     need gh
     view=$(ghr pr view "$num" --json state,mergedAt,mergeStateStatus,statusCheckRollup,url) || { log "$SLUG: cannot read PR $num"; continue; }
@@ -398,7 +429,7 @@ reconcile() {
       MERGED) close_merged "$id" "$f" "$url" "$view" ;;
       CLOSED)
         bdr update "$id" --append-notes "bead-loop: $url was closed without merging; left in_progress for you" >/dev/null
-        rm -f "$f" "$f.red" "$f.nocheck"
+        rm -f "$f" "$(mark "$id" red)" "$(mark "$id" nocheck)" "$(mark "$id" adopted)"
         log "$SLUG: $id: PR closed unmerged"
         ;;
       OPEN)
@@ -423,15 +454,15 @@ reconcile() {
             fi
             ;;
           red)
-            if [ ! -e "$f.red" ]; then
+            if [ ! -e "$(mark "$id" red)" ]; then
               bdr update "$id" --append-notes "bead-loop: CI red on $url; PR left open" >/dev/null
-              touch "$f.red"; log "$SLUG: $id: CI red: $url"
+              touch "$(mark "$id" red)"; log "$SLUG: $id: CI red: $url"
             fi
             ;;
           nocheck)
-            if [ ! -e "$f.nocheck" ]; then
+            if [ ! -e "$(mark "$id" nocheck)" ]; then
               bdr update "$id" --append-notes "bead-loop: $url reports no CI checks, so nothing proves it green; merge it yourself or set MERGE=manual" >/dev/null
-              touch "$f.nocheck"; log "$SLUG: $id: no checks on $url"
+              touch "$(mark "$id" nocheck)"; log "$SLUG: $id: no checks on $url"
             fi
             ;;
           *) log "$SLUG: $id: CI pending on $url" ;;
@@ -459,8 +490,7 @@ status_one() {
   printf '%s  label=%s base=%s merge=%s worker=%s reviewer=%s\n' "$SLUG" "$LABEL" "$BASE" "$MERGE" "${MODEL:-agent}" "${REVIEW_MODEL:-none}"
   for f in "$RS"/inflight/*; do
     [ -e "$f" ] || continue
-    case $f in *.red|*.nocheck) continue ;; esac
-    printf '  %s  %s%s\n' "$(basename "$f")" "$(cat "$f")" "$( [ -e "$f.red" ] && printf '  [red]')"
+    printf '  %s  %s%s%s\n' "$(basename "$f")" "$(cat "$f")" "$( [ -e "$(mark "$(basename "$f")" red)" ] && printf '  [red]')" "$( [ -e "$(mark "$(basename "$f")" adopted)" ] && printf '  [adopted]')"
   done
   printf '  ready: %s\n' "$(bdr ready -l "$LABEL" --json -n 0 2>/dev/null | jq -r '[.[].id] | join(" ")')"
 }

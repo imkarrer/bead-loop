@@ -237,6 +237,39 @@ case_claude_stage_after_local_ones() {
   assert_match "$(git -C "$T/origin.git" log -1 --format=%s bead/t-1)" "opus round" "the commit is Claude's"
 }
 
+case_adopts_foreign_bead_prs() {
+  setup
+  jq '. + [{id:"t-9", title:"Theirs", description:"z", status:"open", priority:2, labels:[]}]' "$BD_STATE/issues.json" >"$BD_STATE/i.tmp" && mv "$BD_STATE/i.tmp" "$BD_STATE/issues.json"
+  jq -n '[{number:41, headRefName:"bead/t-9-some-slug", url:"https://github.com/example/repo/pull/41", state:"OPEN", checks:[{context:"ci",state:"SUCCESS"}]},
+          {number:42, headRefName:"feature/not-a-bead", url:"https://github.com/example/repo/pull/42", state:"OPEN", checks:[{context:"ci",state:"SUCCESS"}]}]' >"$TEST_CTRL/extra-prs.json"
+  sup reconcile "$REPO"
+  assert_match "$(cat "$TEST_CTRL/gh.log")" "pr merge 41 --squash" "green foreign bead PR merged"
+  ! grep -q 'pr merge 42' "$TEST_CTRL/gh.log" && ok || bad "non-bead branch left alone"
+  assert_eq "$(jq -r '.[]|select(.id=="t-9")|.status' "$BD_STATE/issues.json")" closed "its bead closed"
+  assert_nofile "$BEAD_LOOP_STATE/repo/inflight/t-9" "untracked after merge"
+}
+case_adopted_prs_do_not_block_new_work() {
+  setup
+  jq -n '[{number:41, headRefName:"bead/x-1", url:"https://github.com/example/repo/pull/41", state:"OPEN", checks:[{context:"ci",state:"PENDING"}]}]' >"$TEST_CTRL/extra-prs.json"
+  sup tick
+  assert_file "$BEAD_LOOP_STATE/repo/inflight/x-1" "adopted and tracked"
+  assert_eq "$(calls)" "bead-worker bead-reviewer" "an adopted PR pending CI does not count toward MAX_INFLIGHT"
+  assert_match "$(sup status "$REPO")" "x-1 .*\[adopted\]" "status says adopted"
+}
+case_adopt_off() {
+  setup true auto stub/reviewer 'ADOPT=0'
+  jq -n '[{number:41, headRefName:"bead/x-1", url:"https://github.com/example/repo/pull/41", state:"OPEN", checks:[{context:"ci",state:"SUCCESS"}]}]' >"$TEST_CTRL/extra-prs.json"
+  sup reconcile "$REPO"
+  assert_nofile "$BEAD_LOOP_STATE/repo/inflight/x-1" "ADOPT=0: ignored"
+}
+case_dotted_ids_count_as_inflight() {
+  setup; jq '.[0].id="t-1.2"' "$BD_STATE/issues.json" >"$BD_STATE/i.tmp" && mv "$BD_STATE/i.tmp" "$BD_STATE/issues.json"
+  sup work "$REPO"; assert_file "$BEAD_LOOP_STATE/repo/inflight/t-1.2" "tracked"
+  jq '. + [{id:"t-3", title:"Next", description:"x", status:"open", priority:2, labels:["delegate:local"]}]' "$BD_STATE/issues.json" >"$BD_STATE/i.tmp" && mv "$BD_STATE/i.tmp" "$BD_STATE/issues.json"
+  : >"$TEST_CTRL/calls"; sup tick
+  assert_eq "$(calls)" "" "a bead id with a dot still counts toward MAX_INFLIGHT"
+}
+
 # ---- main ----------------------------------------------------------------------------
 cases=$(declare -F | awk '{print $3}' | grep '^case_')
 [ $# -gt 0 ] && cases=$(printf 'case_%s\n' "$@")

@@ -8,8 +8,17 @@ case $2 in
     head=; while [ $# -gt 0 ]; do [ "$1" = --head ] && head=$2; shift; done
     jq -n --arg h "$head" '{state:"OPEN", head:$h, mergeStateStatus:"CLEAN", statusCheckRollup:[], url:"https://github.com/example/repo/pull/7"}' >"$TEST_CTRL/pr.json"
     echo https://github.com/example/repo/pull/7 ;;
-  view)   jq '{state, mergedAt: null, mergeStateStatus, statusCheckRollup, url}' "$TEST_CTRL/pr.json" ;;
-  merge)  jq '.state="MERGED"' "$TEST_CTRL/pr.json" >"$TEST_CTRL/pr.json.tmp" && mv "$TEST_CTRL/pr.json.tmp" "$TEST_CTRL/pr.json" ;;
+  list)
+    # The stub's one PR (if any) plus any extra PRs the test planted in extra-prs.json.
+    filter=.; while [ $# -gt 0 ]; do [ "$1" = --jq ] && filter=$2; shift; done
+    { [ -e "$TEST_CTRL/pr.json" ] && jq 'select(.state=="OPEN") | {number:7, headRefName:.head, url}' "$TEST_CTRL/pr.json"; jq ".[]" "$TEST_CTRL/extra-prs.json" 2>/dev/null; } | jq -s . | jq -r "$filter"
+    ;;
+  view)
+    if [ "$3" = 7 ]; then jq '{state, mergedAt: null, mergeStateStatus, statusCheckRollup, url}' "$TEST_CTRL/pr.json"
+    else jq --argjson n "$3" '.[] | select(.number==$n) | {state, mergedAt: null, mergeStateStatus: "CLEAN", statusCheckRollup: .checks, url}' "$TEST_CTRL/extra-prs.json"; fi ;;
+  merge)
+    if [ "$3" = 7 ]; then jq '.state="MERGED"' "$TEST_CTRL/pr.json" >"$TEST_CTRL/pr.json.tmp" && mv "$TEST_CTRL/pr.json.tmp" "$TEST_CTRL/pr.json"
+    else echo "$3" >>"$TEST_CTRL/merged-extra"; fi ;;
   update-branch) jq '.mergeStateStatus="CLEAN"' "$TEST_CTRL/pr.json" >"$TEST_CTRL/pr.json.tmp" && mv "$TEST_CTRL/pr.json.tmp" "$TEST_CTRL/pr.json" ;;
   *) echo "stub gh: unknown pr $2" >&2; exit 2 ;;
 esac
