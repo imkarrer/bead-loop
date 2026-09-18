@@ -14,7 +14,9 @@ flowchart TD
     G -- fail, second time --> F
     G -- pass --> V[review session<br/>bead-reviewer agent, read-only]
     V -- REJECT, first time --> W
-    V -- REJECT, second time --> F[bead parked in_progress<br/>note says why · worktree removed]
+    V -- REJECT, second time --> F[attempt failed: note on the bead<br/>worktree removed]
+    F -- next stage, or repeat --> Q[back in the queue<br/>fewest attempts first]
+    F -- exhausted, or BLOCKED at the last stage --> H[parked in_progress<br/>for you]
     V -- APPROVE --> PR[git push · gh pr create<br/>inflight/ID = PR url]
   end
 
@@ -29,4 +31,4 @@ flowchart TD
   classDef model fill:#f3f0ff,stroke:#7c5cff,color:#222
   classDef stop fill:#fff3f0,stroke:#e0503c,color:#222
   class GPU,CPU model
-  class F,N stop
+  class H,N stop
