@@ -4,5 +4,10 @@ BASE=master                        # branch to fork from and PR into     (defaul
 SETUP=npm ci                       # runs in the fresh worktree before the worker (no node_modules there)
 GATE=npm run typecheck && npm run lint   # runs after the worker, before push; unset = CI is the gate
 REVIEW_MODEL=acbox/coder          # the senior model that judges the diff before the push; unset = no review
+# Escalation: "worker:reviewer:attempts[:timeout]" stages in order. A failed attempt sends
+# the bead back to the queue with its note; later attempts may use a later stage. Unset =
+# one attempt with MODEL/REVIEW_MODEL, then park.
+STAGES=devbox/coder:acbox/coder:3 acbox/coder:acbox/instruct:2:14400
+ON_EXHAUST=repeat                 # repeat: cycle the stages until it lands | park: leave it for you
 MERGE=auto                         # auto: the next tick squash-merges once every CI check is green | manual: PR only
 #MAX_INFLIGHT=1                    # open PRs before the loop waits for CI

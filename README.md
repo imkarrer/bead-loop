@@ -24,7 +24,9 @@ flowchart TD
     G -- fail, second time --> F
     G -- pass --> V[review session<br/>bead-reviewer agent, read-only]
     V -- REJECT, first time --> W
-    V -- REJECT, second time --> F[bead parked in_progress<br/>note says why · worktree removed]
+    V -- REJECT, second time --> F[attempt failed: note on the bead<br/>worktree removed]
+    F -- next stage, or repeat --> Q[back in the queue<br/>fewest attempts first]
+    F -- exhausted, or BLOCKED at the last stage --> H[parked in_progress<br/>for you]
     V -- APPROVE --> PR[git push · gh pr create<br/>inflight/ID = PR url]
   end
 
@@ -39,7 +41,7 @@ flowchart TD
   classDef model fill:#f3f0ff,stroke:#7c5cff,color:#222
   classDef stop fill:#fff3f0,stroke:#e0503c,color:#222
   class GPU,CPU model
-  class F,N stop
+  class H,N stop
 ```
 
 | Role | What | Where it runs here |
@@ -115,14 +117,37 @@ systemctl --user enable --now opencode-web.service bead-supervisor.timer
 sudo loginctl enable-linger $USER                       # timers survive logout
 ```
 
+## Lifecycle of one bead
+
+An **attempt** is worker → gate (one fix round on failure) → reviewer (one fix round on
+REJECT). It ends in a PR, or in a note on the bead saying exactly where it stopped.
+
+What happens after a failed attempt is the **escalation path**, `STAGES` in `.bead-loop`:
+
+```
+STAGES=devbox/coder:acbox/coder:3 acbox/coder:acbox/instruct:2:14400
+ON_EXHAUST=repeat
+```
+
+Read: three attempts with the fast GPU worker reviewed by the 80B; then two with the 80B
+implementing and the *other* 80B reviewing (four-hour timeout); then, with `repeat`,
+around again until it lands. A failed attempt puts the bead back in the queue with its
+note; the next attempt reads the notes of the earlier ones. Among ready beads the one
+with the fewest attempts goes first, so a stubborn bead never starves the rest.
+
+Two things park a bead (`in_progress`, no more attempts) for a human: the stages are
+exhausted with `ON_EXHAUST=park`, or the *last* stage says `BLOCKED:` — a claim in the
+bead is false, and no model fixes that.
+
 ## What each outcome does to the bead
 
 | Outcome | Bead | Branch / PR |
 | --- | --- | --- |
-| Worker `BLOCKED:` | in_progress, note with the worker's line | removed |
-| Setup fails, or no commit | in_progress, note with the tail of the log | removed |
-| Gate fails twice (one revision round with its output) | in_progress, note with the errors | removed |
-| Reviewer `REJECT:` twice | in_progress, note with the last rejection | removed |
+| Worker `BLOCKED:` | note with the worker's line; back in the queue for the next stage, parked if this was the last | removed |
+| Setup fails, or no commit | note with the tail of the log; next attempt | removed |
+| Gate fails twice (one revision round with its output) | note with the errors; next attempt | removed |
+| Reviewer `REJECT:` twice | note with the last rejection; next attempt | removed |
+| Attempts exhausted (`ON_EXHAUST=park`) | in_progress, for you | — |
 | PR opened | in_progress, comment with the url | pushed |
 | CI green | closed with the PR url | squash-merged, branch deleted |
 | CI red | in_progress, one note | PR left open for you |

@@ -71,6 +71,8 @@ load_repo() {
   GATE=$(cfg GATE "$rc")
   MODEL=${MODEL_FLAG:-$(cfg MODEL "$rc" "$(cfg MODEL "$G_CONF")")}
   REVIEW_MODEL=$(cfg REVIEW_MODEL "$rc" "$(cfg REVIEW_MODEL "$G_CONF")")
+  STAGES=$(cfg STAGES "$rc" "$(cfg STAGES "$G_CONF" "$MODEL:$REVIEW_MODEL:1")")
+  ON_EXHAUST=$(cfg ON_EXHAUST "$rc" "$(cfg ON_EXHAUST "$G_CONF" park)")
   MAX_INFLIGHT=$(cfg MAX_INFLIGHT "$rc" "$(cfg MAX_INFLIGHT "$G_CONF" 1)")
   WORKER_TIMEOUT=$(cfg WORKER_TIMEOUT "$G_CONF" 3600)
   ATTACH=$(cfg ATTACH "$G_CONF")
@@ -81,7 +83,7 @@ load_repo() {
   fi
   [ -n "$BASE" ] || die "$SLUG: cannot tell the base branch; set BASE in .bead-loop"
   RS=$STATE_DIR/$SLUG
-  mkdir -p "$RS/inflight" "$RS/logs" "$RS/wt"
+  mkdir -p "$RS/inflight" "$RS/logs" "$RS/wt" "$RS/attempts"
 }
 
 bdr() { (cd "$REPO" && bd "$@"); }
@@ -122,6 +124,41 @@ run_gate() {
   (cd "$wt" && bash -c "$GATE") >"$logf" 2>&1
 }
 
+# ---- attempts and stages ---------------------------------------------------
+# STAGES is "worker:reviewer:attempts[:timeout] ..." in order. An attempt that
+# fails sends the bead back to open with its note; the next attempt may be a
+# later stage. attempts_of ID reads the counter; stage_for N resolves attempt N
+# (0-based) into S_MODEL S_REVIEW S_TIMEOUT S_LAST, or returns 1 when exhausted.
+attempts_of() { cat "$RS/attempts/$1" 2>/dev/null || echo 0; }
+stage_for() {
+  local n=$1 total=0 s a
+  for s in $STAGES; do IFS=: read -r _ _ a _ <<<"$s"; total=$((total + ${a:-1})); done
+  if [ "$n" -ge "$total" ]; then
+    [ "$ON_EXHAUST" = repeat ] || return 1
+    n=$((n % total))
+  fi
+  local i=0 count=0
+  set -- $STAGES
+  for s in "$@"; do
+    i=$((i + 1)); IFS=: read -r S_MODEL S_REVIEW a S_TIMEOUT <<<"$s"
+    count=$((count + ${a:-1}))
+    if [ "$n" -lt "$count" ]; then
+      S_TIMEOUT=${S_TIMEOUT:-$WORKER_TIMEOUT}; S_LAST=$([ "$i" = $# ] && echo 1 || echo 0)
+      return 0
+    fi
+  done
+}
+# pick_bead: among ready beads, the fewest attempts first (then bd's own order),
+# so everything is tried once before anything is tried twice.
+pick_bead() {
+  local best='' best_n=-1 id n
+  for id in $(bdr ready -l "$LABEL" --json -n 0 2>/dev/null | jq -r '.[].id'); do
+    n=$(attempts_of "$id")
+    if [ "$best_n" -lt 0 ] || [ "$n" -lt "$best_n" ]; then best=$id; best_n=$n; fi
+  done
+  printf '%s' "$best"
+}
+
 # ---- work one bead ----------------------------------------------------------
 work_one() {
   local id=${1:-}
@@ -130,10 +167,14 @@ work_one() {
       log "$SLUG: $(inflight_count) in flight (max $MAX_INFLIGHT); waiting on CI"
       return 0
     fi
-    id=$(bdr ready -l "$LABEL" --json -n 1 2>/dev/null | jq -r '.[0].id // empty')
+    id=$(pick_bead)
     if [ -z "$id" ]; then log "$SLUG: nothing ready with label $LABEL"; return 0; fi
   fi
-  local json title branch wt stamp logf prompt final verdict rc
+  local json title branch wt stamp logf prompt final verdict rc attempt history
+  attempt=$(attempts_of "$id")
+  if ! stage_for "$attempt"; then log "$SLUG: $id: attempts exhausted ($attempt), parked"; bdr update "$id" --status in_progress >/dev/null; return 0; fi
+  MODEL=${MODEL_FLAG:-$S_MODEL}; REVIEW_MODEL=$S_REVIEW; WORKER_TIMEOUT=$S_TIMEOUT
+  history=$(tail -n 3 "$RS/attempts/$id.notes" 2>/dev/null || true)
   json=$(bdr show "$id" --json)
   [ "$(printf '%s' "$json" | jq 'length')" -gt 0 ] || die "$SLUG: bd show $id returned nothing"
   title=$(printf '%s' "$json" | jq -r '.[0].title')
@@ -149,12 +190,18 @@ Work the bead below in this repository, following the bead-workflow skill.
 $(printf '%s' "$json" | render_bead)
 </bead>
 
-You are on branch $branch, a fresh worktree of $BASE. Commit your work on this branch and leave .beads/ untouched. End your turn with one line: DONE: <evidence> or BLOCKED: <note>.
+You are on branch $branch, a fresh worktree of $BASE. Commit your work on this branch and leave .beads/ untouched. End your turn with one line: DONE: <evidence> or BLOCKED: <note>.${history:+
+
+Earlier attempts at this bead failed; their notes follow. Read them before you start and do not repeat them.
+
+<previous-attempts>
+$history
+</previous-attempts>}
 PROMPT
 )
-  log "$SLUG: bead $id — $title"
+  log "$SLUG: bead $id — $title (attempt $((attempt + 1)), worker $MODEL, reviewer ${REVIEW_MODEL:-none})"
   if [ "$DRY" = 1 ]; then
-    printf '%s\n' "--- model: ${MODEL:-agent default}  base: $BASE  setup: ${SETUP:-none}  gate: ${GATE:-none}  review: ${REVIEW_MODEL:-none}  merge: $MERGE" "$prompt"
+    printf '%s\n' "--- attempt $((attempt + 1))  model: ${MODEL:-agent default}  base: $BASE  setup: ${SETUP:-none}  gate: ${GATE:-none}  review: ${REVIEW_MODEL:-none}  merge: $MERGE" "$prompt"
     return 0
   fi
   if [ "$LOCAL" = 0 ]; then need gh; fi
@@ -284,14 +331,28 @@ $(git -C "$wt" diff "origin/$BASE...HEAD" --stat; git -C "$wt" diff "origin/$BAS
 End with one line: APPROVE: <what you checked> or REJECT: <file:line, what is wrong, what would fix it>."
 }
 
-# Leave the bead in_progress with the note: bd ready will not hand it out again,
-# and the owner sees why in bd show.
+# A failed attempt. The note goes on the bead and into the attempt history; the
+# bead goes back to open for the next stage, or stays in_progress (parked) when
+# the stages are exhausted, or when the last stage said BLOCKED: that needs a
+# human, not another model.
 fail() {
-  local id=$1 wt=$2 note=$3
-  log "$SLUG: $id stopped: $(printf '%s' "$note" | head -1)"
-  bdr update "$id" --append-notes "bead-loop $(date -Iminutes): $note" >/dev/null
+  local id=$1 wt=$2 note=$3 n
+  n=$(( $(attempts_of "$id") + 1 ))
+  log "$SLUG: $id attempt $n stopped: $(printf '%s' "$note" | head -1)"
+  bdr update "$id" --append-notes "bead-loop attempt $n ($MODEL) $(date -Iminutes): $note" >/dev/null
+  printf '%s\n' "$n" >"$RS/attempts/$id"
+  printf 'attempt %s (%s): %s\n' "$n" "$MODEL" "$(printf '%s' "$note" | tr '\n' ' ' | cut -c1-600)" >>"$RS/attempts/$id.notes"
   git -C "$REPO" worktree remove --force "$wt" 2>/dev/null || true
   git -C "$REPO" branch -D "bead/$id" >/dev/null 2>&1 || true
+  if [ "$S_LAST" = 1 ] && printf '%s' "$note" | grep -q 'BLOCKED:'; then
+    log "$SLUG: $id: BLOCKED at the last stage, parked for you"; return 0
+  fi
+  if stage_for "$n"; then
+    bdr update "$id" --status open >/dev/null
+    log "$SLUG: $id: back in the queue; next attempt: worker $S_MODEL, reviewer ${S_REVIEW:-none}"
+  else
+    log "$SLUG: $id: attempts exhausted, parked for you"
+  fi
 }
 
 # ---- reconcile open PRs -----------------------------------------------------

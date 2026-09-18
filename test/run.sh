@@ -10,7 +10,7 @@ export GIT_AUTHOR_NAME=test GIT_AUTHOR_EMAIL=t@example.com GIT_COMMITTER_NAME=te
 PASS=0 FAIL=0
 
 # ---- fixture -----------------------------------------------------------------
-setup() {  # setup [GATE] [MERGE] [REVIEW_MODEL]
+setup() {  # setup [GATE] [MERGE] [REVIEW_MODEL] [EXTRA_CONFIG_LINES]
   T=$(mktemp -d); export T
   export BEAD_LOOP_CONFIG=$T/config BEAD_LOOP_STATE=$T/state TEST_CTRL=$T/ctrl BD_STATE=$T/bd
   mkdir -p "$BEAD_LOOP_CONFIG" "$TEST_CTRL" "$BD_STATE"
@@ -19,7 +19,7 @@ setup() {  # setup [GATE] [MERGE] [REVIEW_MODEL]
   REPO=$T/repo
   mkdir -p "$REPO/.beads"; echo base >"$REPO/README"; touch "$REPO/.beads/issues.jsonl"
   git -C "$REPO" add -A && git -C "$REPO" commit -qm base && git -C "$REPO" branch -qM main && git -C "$REPO" push -q -u origin main
-  printf 'LABEL=delegate:local\nBASE=main\nGATE=%s\nMERGE=%s\nREVIEW_MODEL=%s\n' "${1:-true}" "${2:-auto}" "${3-stub/reviewer}" >"$REPO/.bead-loop"
+  printf 'LABEL=delegate:local\nBASE=main\nGATE=%s\nMERGE=%s\nREVIEW_MODEL=%s\n%s\n' "${1:-true}" "${2:-auto}" "${3-stub/reviewer}" "${4-}" >"$REPO/.bead-loop"
   printf 'MODEL=stub/worker\nREPOS=%s\nWORKER_TIMEOUT=60\n' "$REPO" >"$BEAD_LOOP_CONFIG/config"
   jq -n '[{id:"t-1", title:"Do the thing", description:"Edit work.txt", acceptance_criteria:"work.txt exists", status:"open", priority:2, issue_type:"task", labels:["delegate:local"]}]' >"$BD_STATE/issues.json"
   echo "done" >"$TEST_CTRL/worker"; echo approve >"$TEST_CTRL/review"; : >"$TEST_CTRL/calls"
@@ -183,6 +183,46 @@ case_lock_skips() {
 case_config_comments() {
   setup 'true   # trailing comment'; sup work "$REPO"
   assert_branch bead/t-1 "GATE with a trailing comment still runs as `true`"
+}
+
+case_escalation_stages() {
+  setup true auto '' $'STAGES=stub/fast::2 stub/slow:stub/senior:1'; echo nocommit >"$TEST_CTRL/worker"
+  sup tick; assert_eq "$(bead .status)" open "attempt 1 failed: back in the queue"
+  assert_eq "$(cat "$BEAD_LOOP_STATE/repo/attempts/t-1")" 1 "attempt counted"
+  sup tick; sup tick
+  assert_eq "$(cut -d' ' -f3 "$TEST_CTRL/calls" | tr '\n' ' ' | sed 's/ $//')" "stub/fast stub/fast stub/slow" "two fast attempts, then the slow stage"
+  assert_eq "$(bead .status)" in_progress "exhausted: parked"
+  assert_match "$(bead .notes)" "attempt 3 (stub/slow)" "note names the attempt and model"
+  : >"$TEST_CTRL/calls"; sup tick; assert_eq "$(calls)" "" "parked bead is not retried"
+}
+case_repeat_cycles() {
+  setup true auto '' $'STAGES=stub/fast::1 stub/slow::1\nON_EXHAUST=repeat'; echo nocommit >"$TEST_CTRL/worker"
+  sup tick; sup tick; sup tick; sup tick
+  assert_eq "$(cut -d' ' -f3 "$TEST_CTRL/calls" | tr '\n' ' ' | sed 's/ $//')" "stub/fast stub/slow stub/fast stub/slow" "cycles through the stages"
+  assert_eq "$(bead .status)" open "still in the queue"
+}
+case_blocked_at_last_stage_parks() {
+  setup true auto '' $'STAGES=stub/fast::1 stub/slow::1\nON_EXHAUST=repeat'; echo blocked >"$TEST_CTRL/worker"
+  sup tick; assert_eq "$(bead .status)" open "BLOCKED at the first stage: a stronger model may not be"
+  sup tick; assert_eq "$(bead .status)" in_progress "BLOCKED at the last stage: parked even with repeat"
+}
+case_history_in_prompt() {
+  setup true auto '' 'STAGES=stub/fast::2'; echo nocommit >"$TEST_CTRL/worker"
+  sup tick; ! grep -q '<previous-attempts>' "$TEST_CTRL/prompt.1" && ok || bad "first attempt has no history"
+  sup tick; assert_match "$(cat "$TEST_CTRL/prompt.2")" "<previous-attempts>" "second attempt sees the history"
+  assert_match "$(cat "$TEST_CTRL/prompt.2")" "attempt 1 (stub/fast): worker made no commit" "with the note"
+}
+case_fair_pick() {
+  setup true auto '' 'STAGES=stub/fast::3'; echo nocommit >"$TEST_CTRL/worker"
+  jq '. + [{id:"t-2", title:"Second", description:"y", status:"open", priority:3, labels:["delegate:local"]}]' "$BD_STATE/issues.json" >"$BD_STATE/i.tmp" && mv "$BD_STATE/i.tmp" "$BD_STATE/issues.json"
+  sup tick; sup tick
+  assert_match "$(cat "$TEST_CTRL/prompt.1")" "id: t-1" "first pick is bd's order"
+  assert_match "$(cat "$TEST_CTRL/prompt.2")" "id: t-2" "then the untried bead, not t-1 again"
+  sup tick; assert_match "$(cat "$TEST_CTRL/prompt.3")" "id: t-1" "then t-1's second attempt"
+}
+case_dry_run_names_stage() {
+  setup true auto '' 'STAGES=stub/fast::1:7'; out=$(sup --dry-run work "$REPO")
+  assert_match "$out" "attempt 1  model: stub/fast" "dry run names the stage"
 }
 
 # ---- main ----------------------------------------------------------------------------
