@@ -20,7 +20,8 @@ flowchart TD
     U --> W[implementor session<br/>bead-worker agent]
     W -- DONE + commit --> G[GATE<br/>typecheck · lint]
     W -- BLOCKED --> F
-    G -- fail --> F
+    G -- fail, first time --> W
+    G -- fail, second time --> F
     G -- pass --> V[review session<br/>bead-reviewer agent, read-only]
     V -- REJECT, first time --> W
     V -- REJECT, second time --> F[bead parked in_progress<br/>note says why · worktree removed]
@@ -119,7 +120,8 @@ sudo loginctl enable-linger $USER                       # timers survive logout
 | Outcome | Bead | Branch / PR |
 | --- | --- | --- |
 | Worker `BLOCKED:` | in_progress, note with the worker's line | removed |
-| Setup, gate or no commit | in_progress, note with the tail of the log | removed |
+| Setup fails, or no commit | in_progress, note with the tail of the log | removed |
+| Gate fails twice (one revision round with its output) | in_progress, note with the errors | removed |
 | Reviewer `REJECT:` twice | in_progress, note with the last rejection | removed |
 | PR opened | in_progress, comment with the url | pushed |
 | CI green | closed with the PR url | squash-merged, branch deleted |

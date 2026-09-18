@@ -10,7 +10,8 @@ flowchart TD
     U --> W[implementor session<br/>bead-worker agent]
     W -- DONE + commit --> G[GATE<br/>typecheck · lint]
     W -- BLOCKED --> F
-    G -- fail --> F
+    G -- fail, first time --> W
+    G -- fail, second time --> F
     G -- pass --> V[review session<br/>bead-reviewer agent, read-only]
     V -- REJECT, first time --> W
     V -- REJECT, second time --> F[bead parked in_progress<br/>note says why · worktree removed]
