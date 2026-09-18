@@ -143,6 +143,13 @@ Two things park a bead (`in_progress`, no more attempts) for a human: the stages
 exhausted with `ON_EXHAUST=park`, or the *last* stage says `BLOCKED:` — a claim in the
 bead is false, and no model fixes that.
 
+## PRs from anyone
+
+`reconcile` also **adopts** any open PR on a `bead/<id>…` branch it did not open — another
+session's, or yours by hand. It merges on green like its own and closes the bead the
+branch names. Adopted PRs cost CI, not the model, so they do not count toward
+`MAX_INFLIGHT`. `ADOPT=0` in `.bead-loop` turns it off.
+
 ## What each outcome does to the bead
 
 | Outcome | Bead | Branch / PR |
