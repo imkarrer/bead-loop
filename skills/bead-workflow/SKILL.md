@@ -7,6 +7,8 @@ Command syntax for `bd` is in the `beads` skill; this is the order and the exits
 
 # One bead, start to finish
 
+The work happens on branch `bead/<id>` in its own worktree, never on the main checkout. The supervisor makes it; started by hand, make it first and open opencode there: `git worktree add ../wt/<id> -b bead/<id> origin/<base>`.
+
 1. The bead's text is in your prompt; if only an id was given, `bd show <id>`.
 2. Read its DESCRIPTION and ACCEPTANCE CRITERIA twice. The description names the files; the acceptance criterion is the command or grep that proves the work.
 3. Open every file the bead names before editing any of them. Confirm each claim the description makes (the function exists, the flag exists, the file exists).
