@@ -6,6 +6,7 @@
 #   bead-supervisor work REPO [BEAD_ID]   work one bead now (top ready one, or the id given)
 #   bead-supervisor reconcile [REPO...]   only check PRs: merge green, close beads, note red
 #   bead-supervisor status [REPO...]      what is in flight
+#   bead-supervisor log REPO [BEAD_ID]    follow the newest worker/reviewer session: tool calls and text
 #
 #   --dry-run    pick the bead, print the prompt, change nothing
 #   --local      implement, gate and review; keep the branch here, no push, no PR
@@ -49,7 +50,7 @@ done
 CMD=${ARGS[0]:-tick}
 REPOS=("${ARGS[@]:1}")
 G_CONF=$CONFIG_DIR/config
-if [ ${#REPOS[@]} -eq 0 ] && [ "$CMD" != work ]; then
+if [ ${#REPOS[@]} -eq 0 ] && [ "$CMD" != work ] && [ "$CMD" != log ]; then
   # shellcheck disable=SC2206
   REPOS=($(cfg REPOS "$G_CONF"))
 fi
@@ -341,6 +342,19 @@ reconcile() {
   done
 }
 
+# log_follow [ID]: stream the newest session log for the repo as one line per tool call or text.
+log_follow() {
+  local f
+  f=$(ls -t "$RS"/logs/${1:-*}.*.jsonl 2>/dev/null | head -1)
+  [ -n "$f" ] || die "$SLUG: no session logs${1:+ for $1}"
+  log "$SLUG: following $f (ctrl-c to stop)"
+  tail -n +1 -f "$f" | jq --unbuffered -r '
+    if .type=="tool_use" then "[\(.part.tool)] \(.part.state.input | (.command // .filePath // .path // .pattern // .description // "") | tostring | .[0:160])"
+    elif .type=="text" then "> \(.part.text | .[0:400])"
+    elif .type=="step_finish" then "-- step: \(.part.reason)  tokens in=\(.part.tokens.input) out=\(.part.tokens.output)"
+    else empty end'
+}
+
 status_one() {
   local f
   printf '%s  label=%s base=%s merge=%s worker=%s reviewer=%s\n' "$SLUG" "$LABEL" "$BASE" "$MERGE" "${MODEL:-agent}" "${REVIEW_MODEL:-none}"
@@ -354,7 +368,7 @@ status_one() {
 
 # ---- main --------------------------------------------------------------------
 exec 9>"$STATE_DIR/lock"
-if [ "$CMD" != status ]; then
+if [ "$CMD" != status ] && [ "$CMD" != log ]; then
   flock -n 9 || { log "another bead-supervisor holds $STATE_DIR/lock; skipping this tick"; exit 0; }
 fi
 case $CMD in
@@ -362,5 +376,6 @@ case $CMD in
   work)      load_repo "${REPOS[0]}"; work_one "${REPOS[1]:-}" ;;
   reconcile) for r in "${REPOS[@]}"; do load_repo "$r"; reconcile; done ;;
   status)    for r in "${REPOS[@]}"; do load_repo "$r"; status_one; done ;;
+  log)       load_repo "${REPOS[0]}"; log_follow "${REPOS[1]:-}" ;;
   *) die "unknown command $CMD" ;;
 esac
