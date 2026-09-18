@@ -182,9 +182,25 @@ $(tail -15 "$logf.setup")"; return 0
   if ! settle_worktree "$wt" "$id: $title"; then
     fail "$id" "$wt" "worker made no commit. Last words: $(printf '%s' "$final" | tail -3)"; return 0
   fi
+  # The gate gets one revision round too: a compiler message is the cheapest review there is.
   if ! run_gate "$wt" "$logf.gate"; then
-    fail "$id" "$wt" "gate failed: $GATE
-$(tail -15 "$logf.gate")"; return 0
+    log "$SLUG: $id: gate failed, revision round"
+    rc=0; final=$(run_agent bead-worker "$MODEL" "$wt" "$logf.worker-gate.jsonl" "$prompt
+
+Your commit on this branch failed the repository's gate: \`$GATE\`. Fix exactly what it reports, run it again until it passes, commit, and end with DONE: or BLOCKED:.
+
+<gate-output>
+$(tail -40 "$logf.gate")
+</gate-output>") || rc=$?
+    if [ $rc -ne 0 ]; then fail "$id" "$wt" "worker exited $rc in gate revision round. Log: $logf.worker-gate.jsonl"; return 0; fi
+    if printf '%s' "$final" | grep -q '^BLOCKED:'; then
+      fail "$id" "$wt" "gate revision round: $(printf '%s' "$final" | grep '^BLOCKED:' | tail -1)"; return 0
+    fi
+    settle_worktree "$wt" "$id: fix the gate" || true
+    if ! run_gate "$wt" "$logf.gate-2"; then
+      fail "$id" "$wt" "gate failed twice: $GATE
+$(tail -15 "$logf.gate-2")"; return 0
+    fi
   fi
 
   # Round 2, when a reviewer is configured: the senior model judges the diff;

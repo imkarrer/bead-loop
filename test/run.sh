@@ -81,11 +81,18 @@ case_uncommitted_is_settled() {
   assert_branch bead/t-1 "supervisor committed the leftovers and pushed"
   assert_match "$(git -C "$T/origin.git" log -1 --format=%s bead/t-1)" "t-1: Do the thing" "commit named after the bead"
 }
-case_gate_fails() {
+case_gate_fails_twice() {
   setup 'false'; sup work "$REPO"
-  assert_eq "$(calls)" "bead-worker" "no review after a failed gate"
-  assert_match "$(bead .notes)" "gate failed: false" "noted"
+  assert_eq "$(calls)" "bead-worker bead-worker" "one revision round, no review"
+  assert_match "$(cat "$TEST_CTRL/prompt.2")" "<gate-output>" "gate output fed back"
+  assert_match "$(bead .notes)" "gate failed twice: false" "noted"
   assert_nobranch bead/t-1 "nothing pushed"
+}
+case_gate_fixed_on_revision() {
+  setup '[ -e "$TEST_CTRL/gateok" ] || { touch "$TEST_CTRL/gateok"; false; }'; sup work "$REPO"
+  assert_eq "$(calls)" "bead-worker bead-worker bead-reviewer" "gate revision, then review"
+  assert_branch bead/t-1 "pushed once the gate passes"
+  assert_eq "$(git -C "$T/origin.git" rev-list --count main..bead/t-1)" 2 "the fix is a second commit"
 }
 case_reject_then_approve() {
   setup; printf 'reject\napprove\n' >"$TEST_CTRL/review"; sup work "$REPO"
