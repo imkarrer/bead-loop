@@ -1,3 +1,4 @@
+| PR opened | in_progress, comment with the url | pushed; nothing merges until a later tick sees every check green |
 # bead-loop
 
 Work [beads](https://github.com/steveyegge/beads) with local models in any repo: a
@@ -76,10 +77,10 @@ house style, vocabulary) stay in each repo under `.agents/skills/` or
    (what a fresh worktree needs, e.g. `npm ci`), `GATE` (fast local proof),
    `REVIEW_MODEL`, `MERGE`.
 3. Add the repo to `REPOS` in `~/.config/bead-loop/config`.
-4. On GitHub: CI that reports a status on PRs. `gh` must be logged in. With branch
-   protection and `allow_auto_merge` the merge is GitHub's; without them (private
-   repo, free plan) the next tick merges once every reported check is green — the
-   supervisor's check is then the only thing between a red build and the base branch.
+4. On GitHub: CI that reports a status on PRs. `gh` must be logged in. The supervisor
+   never asks GitHub to auto-merge (on a branch with no required checks that merges
+   immediately); a later tick merges once every reported check is green, and refuses
+   while none is reported. Branch protection, where the plan allows it, is a second lock.
 
 ## Watching it
 

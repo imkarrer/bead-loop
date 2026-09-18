@@ -245,10 +245,6 @@ BODY
   printf '%s\n' "$url" >"$RS/inflight/$id"
   bdr comment "$id" "bead-loop: opened $url" >/dev/null
   log "$SLUG: opened $url"
-  if [ "$MERGE" = auto ]; then
-    ghr pr merge "$num" --auto --squash --delete-branch >/dev/null 2>&1 \
-      || log "$SLUG: GitHub auto-merge not available on this repo; reconcile will merge on green"
-  fi
   git -C "$REPO" worktree remove --force "$wt"
 }
 
@@ -295,7 +291,7 @@ reconcile() {
     state=$(printf '%s' "$view" | jq -r .state)
     case $state in
       MERGED)
-        bdr close "$id" --reason "bead-loop: $url merged, CI green" >/dev/null
+        bdr close "$id" --reason "bead-loop: $url merged; checks at merge: $(printf '%s' "$view" | jq -r '[.statusCheckRollup[]? | "\(.context // .name)=\(.conclusion // .state)"] | join(" ") | if . == "" then "none reported" else . end')" >/dev/null
         rm -f "$f" "$f.red" "$f.nocheck"
         log "$SLUG: $id closed ($url merged)"
         ;;
