@@ -1,0 +1,23 @@
+# What is proven on every push and PR: the scripts parse and pass shellcheck, the
+# skills and agents have the frontmatter opencode needs, and the supervisor's state
+# machine does what the README's outcome table says (test/run.sh, against stub
+# bd/opencode/gh and a real git origin — no model, no network).
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: syntax
+        run: bash -n bin/bead-supervisor install.sh test/run.sh test/lint-skills.sh test/bin/*
+      - name: shellcheck
+        run: shellcheck -S warning bin/bead-supervisor install.sh test/run.sh test/lint-skills.sh test/bin/*
+      - name: skills and agents
+        run: test/lint-skills.sh
+      - name: supervisor state machine
+        run: test/run.sh

@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# Stub bd for bead-loop tests. Issues live in $BD_STATE/issues.json (array).
+set -euo pipefail
+F=$BD_STATE/issues.json
+save() { jq "$1" --arg id "${2:-}" --arg t "${3:-}" "$F" >"$F.tmp" && mv "$F.tmp" "$F"; }
+cmd=$1; shift
+case $cmd in
+  ready)
+    label=; n=100
+    while [ $# -gt 0 ]; do case $1 in -l) label=$2; shift;; -n) n=$2; shift;; esac; shift; done
+    [ "$n" = 0 ] && n=1000
+    jq --arg l "$label" --argjson n "$n" '[.[] | select(.status=="open" and (.labels|index($l)))] | .[0:$n]' "$F" ;;
+  show)  jq --arg id "$1" '[.[] | select(.id==$id)]' "$F" ;;
+  update)
+    id=$1; shift
+    case $1 in
+      --claim) save '(.[] | select(.id==$id)) |= (.status="in_progress")' "$id" ;;
+      --append-notes) save '(.[] | select(.id==$id)) |= (.notes=((.notes // "") + "\n" + $t))' "$id" "$2" ;;
+      --status) save '(.[] | select(.id==$id)) |= (.status=$t)' "$id" "$2" ;;
+    esac ;;
+  comment) save '(.[] | select(.id==$id)) |= (.comments=((.comments // []) + [$t]))' "$1" "$2" ;;
+  close)
+    id=$1; shift; reason=; while [ $# -gt 0 ]; do [ "$1" = --reason ] && reason=$2 && shift; shift; done
+    save '(.[] | select(.id==$id)) |= (.status="closed" | .close_reason=$t)' "$id" "$reason" ;;
+  *) echo "stub bd: unknown $cmd" >&2; exit 2 ;;
+esac

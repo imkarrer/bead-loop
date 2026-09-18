@@ -133,6 +133,14 @@ The worker never runs `bd`; the bead's text is in its prompt and the supervisor
 records every state change in the operator's checkout. `.beads/issues.jsonl` changes
 there, uncommitted, for you to commit with your own work.
 
+## Checks
+
+`test/run.sh` drives the supervisor through every row of the outcome table above with
+stub `bd`, `opencode` and `gh` (`test/bin/`) and a real git origin: no model, no network,
+a few seconds. `test/lint-skills.sh` checks the frontmatter opencode needs. Both run with
+shellcheck in `.github/workflows/ci.yml` on every push and PR, and `main` requires that
+check green.
+
 ## Why this shape
 
 - One model server per box, so one bead in flight per box: `MAX_INFLIGHT` defaults to 1

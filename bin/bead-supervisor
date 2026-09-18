@@ -52,8 +52,7 @@ CMD=${ARGS[0]:-tick}
 REPOS=("${ARGS[@]:1}")
 G_CONF=$CONFIG_DIR/config
 if [ ${#REPOS[@]} -eq 0 ] && [ "$CMD" != work ] && [ "$CMD" != log ]; then
-  # shellcheck disable=SC2206
-  REPOS=($(cfg REPOS "$G_CONF"))
+  read -r -a REPOS <<<"$(cfg REPOS "$G_CONF")"
 fi
 [ ${#REPOS[@]} -gt 0 ] || die "no repos: pass one or set REPOS in $G_CONF"
 
@@ -280,6 +279,15 @@ fail() {
 }
 
 # ---- reconcile open PRs -----------------------------------------------------
+# close_merged ID INFLIGHT_FILE URL PR_JSON: the bead is done; say what CI said at the merge.
+close_merged() {
+  local checks
+  checks=$(printf '%s' "$4" | jq -r '[.statusCheckRollup[]? | "\(.context // .name)=\(.conclusion // .state)"] | join(" ") | if . == "" then "none reported" else . end')
+  bdr close "$1" --reason "bead-loop: $3 merged; checks at merge: $checks" >/dev/null
+  rm -f "$2" "$2.red" "$2.nocheck"
+  log "$SLUG: $1 closed ($3 merged; $checks)"
+}
+
 reconcile() {
   local f id url num view state verdict
   for f in "$RS"/inflight/*; do
@@ -290,11 +298,7 @@ reconcile() {
     view=$(ghr pr view "$num" --json state,mergedAt,mergeStateStatus,statusCheckRollup,url) || { log "$SLUG: cannot read PR $num"; continue; }
     state=$(printf '%s' "$view" | jq -r .state)
     case $state in
-      MERGED)
-        bdr close "$id" --reason "bead-loop: $url merged; checks at merge: $(printf '%s' "$view" | jq -r '[.statusCheckRollup[]? | "\(.context // .name)=\(.conclusion // .state)"] | join(" ") | if . == "" then "none reported" else . end')" >/dev/null
-        rm -f "$f" "$f.red" "$f.nocheck"
-        log "$SLUG: $id closed ($url merged)"
-        ;;
+      MERGED) close_merged "$id" "$f" "$url" "$view" ;;
       CLOSED)
         bdr update "$id" --append-notes "bead-loop: $url was closed without merging; left in_progress for you" >/dev/null
         rm -f "$f" "$f.red" "$f.nocheck"
@@ -313,7 +317,7 @@ reconcile() {
               if [ "$(printf '%s' "$view" | jq -r .mergeStateStatus)" = BEHIND ]; then
                 ghr pr update-branch "$num" >/dev/null 2>&1 && log "$SLUG: $id: updated branch, CI reruns" || log "$SLUG: $id: update-branch failed"
               elif ghr pr merge "$num" --squash --delete-branch >/dev/null 2>&1; then
-                log "$SLUG: $id: merged $url"
+                close_merged "$id" "$f" "$url" "$view"
               else
                 log "$SLUG: $id: green but merge refused ($(printf '%s' "$view" | jq -r .mergeStateStatus))"
               fi

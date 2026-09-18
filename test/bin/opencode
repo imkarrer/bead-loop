@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# Stub opencode for bead-loop tests. `run` only. Behaviour from $TEST_CTRL:
+#   worker      done | blocked | nocommit | uncommitted   (what the implementor leaves behind)
+#   review      one line per round: approve | reject
+#   calls       appended: "<agent> <dir> <model> <attach>" per run, prompt saved to prompt.<n>
+set -euo pipefail
+[ "$1" = run ] || { echo "stub opencode: only run" >&2; exit 2; }
+shift
+dir=. agent='' model='' attach='' prompt=''
+while [ $# -gt 0 ]; do
+  case $1 in
+    --dir) dir=$2; shift;; --agent) agent=$2; shift;; -m) model=$2; shift;; --attach) attach=$2; shift;;
+    --format|--title) shift;; *) prompt=$1;;
+  esac; shift
+done
+n=$(( $(wc -l <"$TEST_CTRL/calls" 2>/dev/null || echo 0) + 1 ))
+printf '%s %s %s %s\n' "$agent" "$dir" "${model:-none}" "${attach:-none}" >>"$TEST_CTRL/calls"
+printf '%s' "$prompt" >"$TEST_CTRL/prompt.$n"
+say() { jq -cn --arg t "$1" '{type:"text", part:{text:$t}}'; }
+case $agent in
+  bead-worker)
+    mode=$(cat "$TEST_CTRL/worker")
+    case $mode in
+      blocked) say "I looked."; say "BLOCKED: lib/x.ts:3 has no such flag" ;;
+      nocommit) say "DONE: nothing to do" ;;
+      uncommitted) echo "work" >"$dir/work.txt"; say "DONE: wrote work.txt (forgot to commit)" ;;
+      done)
+        round=$(grep -c '^bead-worker' "$TEST_CTRL/calls")
+        echo "work round $round" >>"$dir/work.txt"
+        git -C "$dir" add -A && git -C "$dir" commit -qm "work: round $round"
+        say "DONE: acceptance check printed ok" ;;
+    esac ;;
+  bead-reviewer)
+    round=$(grep -c '^bead-reviewer' "$TEST_CTRL/calls")
+    v=$(sed -n "${round}p" "$TEST_CTRL/review")
+    case $v in
+      approve) say "APPROVE: checked every criterion" ;;
+      *) say "REJECT: work.txt:1 wrong, fix it" ;;
+    esac ;;
+esac

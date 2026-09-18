@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# Stub gh for bead-loop tests. PR state in $TEST_CTRL/pr.json; actions logged to $TEST_CTRL/gh.log.
+set -euo pipefail
+echo "$*" >>"$TEST_CTRL/gh.log"
+[ "$1" = pr ] || { echo "stub gh: only pr" >&2; exit 2; }
+case $2 in
+  create)
+    head=; while [ $# -gt 0 ]; do [ "$1" = --head ] && head=$2; shift; done
+    jq -n --arg h "$head" '{state:"OPEN", head:$h, mergeStateStatus:"CLEAN", statusCheckRollup:[], url:"https://github.com/example/repo/pull/7"}' >"$TEST_CTRL/pr.json"
+    echo https://github.com/example/repo/pull/7 ;;
+  view)   jq '{state, mergedAt: null, mergeStateStatus, statusCheckRollup, url}' "$TEST_CTRL/pr.json" ;;
+  merge)  jq '.state="MERGED"' "$TEST_CTRL/pr.json" >"$TEST_CTRL/pr.json.tmp" && mv "$TEST_CTRL/pr.json.tmp" "$TEST_CTRL/pr.json" ;;
+  update-branch) jq '.mergeStateStatus="CLEAN"' "$TEST_CTRL/pr.json" >"$TEST_CTRL/pr.json.tmp" && mv "$TEST_CTRL/pr.json.tmp" "$TEST_CTRL/pr.json" ;;
+  *) echo "stub gh: unknown pr $2" >&2; exit 2 ;;
+esac
