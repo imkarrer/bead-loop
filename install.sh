@@ -21,13 +21,14 @@ if [ ! -f "$HOME/.config/bead-loop/config" ]; then
 # bead-loop global config. KEY=VALUE, no shell.
 MODEL=devbox/coder
 REVIEW_MODEL=
+# ATTACH=http://127.0.0.1:4096   # run sessions inside opencode-web.service; watch them live in the browser
 REPOS=
 WORKER_TIMEOUT=3600
 MAX_INFLIGHT=1
 CFG
   echo "config ~/.config/bead-loop/config (set REPOS)"
 fi
-cp "$HERE"/systemd/bead-supervisor.{service,timer} "$HOME/.config/systemd/user/"
+cp "$HERE"/systemd/*.service "$HERE"/systemd/*.timer "$HOME/.config/systemd/user/"
 systemctl --user daemon-reload
 echo "timer  installed, not enabled. Start the loop with:"
 echo "       systemctl --user enable --now bead-supervisor.timer"

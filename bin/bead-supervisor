@@ -13,7 +13,8 @@
 #   --model M    opencode provider/model for the worker this run
 #
 # Config, all optional, KEY=VALUE lines (no shell):
-#   ~/.config/bead-loop/config   MODEL, REVIEW_MODEL, REPOS (space separated), WORKER_TIMEOUT, MAX_INFLIGHT
+#   ~/.config/bead-loop/config   MODEL, REVIEW_MODEL, REPOS (space separated), WORKER_TIMEOUT, MAX_INFLIGHT,
+#                                ATTACH (an opencode server url: sessions run there and stream in its web UI)
 #   REPO/.bead-loop              LABEL, BASE, SETUP, GATE, REVIEW_MODEL, MERGE (auto|manual), MODEL, MAX_INFLIGHT
 # Defaults: LABEL=delegate:local  BASE=origin's HEAD  MERGE=auto  MAX_INFLIGHT=1
 #           WORKER_TIMEOUT=3600 (seconds)  SETUP unset  GATE unset (CI is the gate)
@@ -73,6 +74,7 @@ load_repo() {
   REVIEW_MODEL=$(cfg REVIEW_MODEL "$rc" "$(cfg REVIEW_MODEL "$G_CONF")")
   MAX_INFLIGHT=$(cfg MAX_INFLIGHT "$rc" "$(cfg MAX_INFLIGHT "$G_CONF" 1)")
   WORKER_TIMEOUT=$(cfg WORKER_TIMEOUT "$G_CONF" 3600)
+  ATTACH=$(cfg ATTACH "$G_CONF")
   BASE=$(cfg BASE "$rc")
   if [ -z "$BASE" ]; then
     BASE=$(git -C "$REPO" symbolic-ref -q --short refs/remotes/origin/HEAD 2>/dev/null | sed 's|^origin/||')
@@ -94,7 +96,7 @@ run_agent() {
   local agent=$1 model=$2 dir=$3 logf=$4 prompt=$5 rc=0
   OPENCODE_DISABLE_CLAUDE_CODE_SKILLS=1 \
   timeout --foreground "$WORKER_TIMEOUT" opencode run --dir "$dir" --agent "$agent" \
-      ${model:+-m "$model"} --format json "$prompt" >"$logf" 2>"$logf.err" || rc=$?
+      ${ATTACH:+--attach "$ATTACH"} ${model:+-m "$model"} --format json "$prompt" >"$logf" 2>"$logf.err" || rc=$?
   jq -r 'select(.type=="text") | .part.text' "$logf" 2>/dev/null | tail -20
   return $rc
 }

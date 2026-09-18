@@ -1,0 +1,13 @@
+[Unit]
+Description=opencode web UI + server: watch bead-loop sessions live at http://127.0.0.1:4096
+After=network.target
+
+[Service]
+ExecStart=%h/.nix-profile/bin/opencode web --port 4096 --hostname 127.0.0.1
+Environment=PATH=%h/.nix-profile/bin:/run/current-system/sw/bin:/usr/bin:/bin
+Environment=OPENCODE_DISABLE_CLAUDE_CODE_SKILLS=1
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
