@@ -14,6 +14,7 @@ permission:
     "*": deny
   webfetch: deny
   doom_loop: deny
+  task: deny
 ---
 
 You are the senior reviewer for one bead worked by a smaller model. The bead and the diff are in your prompt; read any file you need with the read tool or `git show`. Judge only what the bead asked:
