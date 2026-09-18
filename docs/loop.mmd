@@ -1,0 +1,31 @@
+flowchart TD
+  T([systemd user timer<br/>every 10 min, one tick]) --> R
+
+  subgraph tick [bead-supervisor tick — bash, deterministic, one bead per repo]
+    direction TB
+    R[reconcile: read every open bead PR] --> P{bd ready -l LABEL}
+    P -- nothing --> Z([done])
+    P -- top bead --> C[bd claim<br/>git worktree add bead/ID off origin/BASE]
+    C --> U[SETUP<br/>npm ci]
+    U --> W[implementor session<br/>bead-worker agent]
+    W -- DONE + commit --> G[GATE<br/>typecheck · lint]
+    W -- BLOCKED --> F
+    G -- fail --> F
+    G -- pass --> V[review session<br/>bead-reviewer agent, read-only]
+    V -- REJECT, first time --> W
+    V -- REJECT, second time --> F[bead parked in_progress<br/>note says why · worktree removed]
+    V -- APPROVE --> PR[git push · gh pr create<br/>inflight/ID = PR url]
+  end
+
+  W -.- GPU[(devbox/coder<br/>Qwen3-Coder-30B-A3B<br/>RTX 4080, this box)]
+  V -.- CPU[(acbox/coder<br/>Qwen3-Coder-Next 80B Q8<br/>hp 840z, 256 GB RAM, CPU)]
+
+  PR --> CI[Buildkite, queue self on ac-box]
+  CI -- all checks green<br/>on a later tick --> M[squash-merge · delete branch<br/>bd close ID]
+  CI -- red --> N[note on bead<br/>PR stays open for you]
+  CI -- no checks --> N
+
+  classDef model fill:#f3f0ff,stroke:#7c5cff,color:#222
+  classDef stop fill:#fff3f0,stroke:#e0503c,color:#222
+  class GPU,CPU model
+  class F,N stop
