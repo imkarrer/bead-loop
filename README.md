@@ -47,7 +47,7 @@ flowchart TD
 | Role | What | Where it runs here |
 | --- | --- | --- |
 | Supervisor | `bin/bead-supervisor`, bash, deterministic | systemd user timer on this box |
-| Implementor | opencode agent `bead-worker` | `devbox/coder` — Qwen3-Coder-30B on the RTX 4080 |
+| Implementor | opencode agent `bead-worker` | `devbox/coder` — Qwen3-Coder-30B on the RTX 4080; `claude/opus` as the last stage |
 | Reviewer | opencode agent `bead-reviewer`, read-only | `acbox/coder` — Qwen3-Coder-Next 80B Q8 on ac-box's CPU |
 
 Both models are opencode providers in `~/.config/opencode/opencode.json`; any
@@ -131,7 +131,11 @@ ON_EXHAUST=repeat
 
 Read: three attempts with the fast GPU worker reviewed by the 80B; then two with the 80B
 implementing and the *other* 80B reviewing (four-hour timeout); then, with `repeat`,
-around again until it lands. A failed attempt puts the bead back in the queue with its
+around again until it lands. A stage may name `claude/<alias>` (`claude/opus`,
+`claude/sonnet`): that attempt runs in Claude Code (`claude -p`) instead of opencode, the
+agent file's body as its system prompt, tools by role — the frontier model gets only
+what the local ones could not land. It needs `claude` on PATH and logged in once
+(`claude`, then `/login`); the skills are linked into `~/.claude/skills` by `install.sh`. A failed attempt puts the bead back in the queue with its
 note; the next attempt reads the notes of the earlier ones. Among ready beads the one
 with the fewest attempts goes first, so a stubborn bead never starves the rest.
 
@@ -177,5 +181,5 @@ check green.
   the 30B had declared done, for duplicating entries that already existed.
 - Every claim is checked by something that is not the model that made it: the gate,
   the reviewer, CI, and the merge check are independent refusals.
-- `run_agent` in `bin/bead-supervisor` is the one seam to the harness: swapping the
-  implementor for aider, or either model for another, is that one function.
+- `run_agent` in `bin/bead-supervisor` is the one seam to the harness: opencode for local
+  models, Claude Code for `claude/*`; adding aider would be one more case there.

@@ -225,6 +225,18 @@ case_dry_run_names_stage() {
   assert_match "$out" "attempt 1  model: stub/fast" "dry run names the stage"
 }
 
+case_claude_stage_after_local_ones() {
+  setup true auto '' $'STAGES=stub/fast::1 claude/opus:claude/opus:1'; echo nocommit >"$TEST_CTRL/worker"
+  sup tick; assert_eq "$(bead .status)" open "local attempt failed, requeued"
+  sup tick
+  assert_eq "$(cut -d' ' -f3,4 "$TEST_CTRL/calls" | tr '\n' '|')" "stub/fast none|claude/opus claude|claude/opus claude|" "then Claude Code implements and reviews"
+  assert_match "$(cat "$TEST_CTRL/system.2")" "delegated developer for one bead" "worker agent body is the system prompt"
+  assert_match "$(cat "$TEST_CTRL/system.3")" "senior reviewer" "reviewer agent body is the system prompt"
+  assert_match "$(cat "$TEST_CTRL/prompt.2")" "<previous-attempts>" "Claude sees the local attempt's note"
+  assert_branch bead/t-1 "pushed"
+  assert_match "$(git -C "$T/origin.git" log -1 --format=%s bead/t-1)" "opus round" "the commit is Claude's"
+}
+
 # ---- main ----------------------------------------------------------------------------
 cases=$(declare -F | awk '{print $3}' | grep '^case_')
 [ $# -gt 0 ] && cases=$(printf 'case_%s\n' "$@")
