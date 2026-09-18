@@ -86,7 +86,9 @@ house style, vocabulary) stay in each repo under `.agents/skills/` or
 Interactive: `opencode-web.service` serves opencode's web UI at
 <http://127.0.0.1:4096>. With `ATTACH=http://127.0.0.1:4096` in the global config
 every worker and reviewer session runs inside that server, so it streams there live,
-titled by bead, with the diff. No terminal needed.
+titled by bead, with the diff. No terminal needed. The UI starts empty per browser: **Add
+project** → select the repo (e.g. `~/src/inquire-platform`); its bead sessions, run in
+worktrees, file under it. Once per browser per repo.
 
 From a terminal:
 
