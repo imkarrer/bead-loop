@@ -355,7 +355,7 @@ status_one() {
 # ---- main --------------------------------------------------------------------
 exec 9>"$STATE_DIR/lock"
 if [ "$CMD" != status ]; then
-  flock -n 9 || die "another bead-supervisor holds $STATE_DIR/lock"
+  flock -n 9 || { log "another bead-supervisor holds $STATE_DIR/lock; skipping this tick"; exit 0; }
 fi
 case $CMD in
   tick)      for r in "${REPOS[@]}"; do load_repo "$r"; reconcile; work_one; done ;;
