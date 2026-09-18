@@ -1,0 +1,10 @@
+[Unit]
+Description=bead-loop tick every 10 minutes
+
+[Timer]
+OnBootSec=5min
+OnUnitInactiveSec=10min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

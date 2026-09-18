@@ -1,0 +1,8 @@
+# Copy to <repo>/.bead-loop. KEY=VALUE lines, no shell. All optional.
+LABEL=delegate:qwen30b            # bd ready -l LABEL picks the work     (default delegate:local)
+BASE=master                        # branch to fork from and PR into     (default: origin's HEAD)
+SETUP=npm ci                       # runs in the fresh worktree before the worker (no node_modules there)
+GATE=npm run typecheck && npm run lint   # runs after the worker, before push; unset = CI is the gate
+REVIEW_MODEL=acbox/coder          # the senior model that judges the diff before the push; unset = no review
+MERGE=auto                         # auto: squash-merge on green | manual: PR only
+#MAX_INFLIGHT=1                    # open PRs before the loop waits for CI

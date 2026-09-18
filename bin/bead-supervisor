@@ -1,0 +1,366 @@
+#!/usr/bin/env bash
+# bead-supervisor: work labelled beads in any repo with local models, one at a
+# time: implement, gate, review, PR, merge on green, close the bead.
+#
+#   bead-supervisor tick [REPO...]        reconcile open PRs, then work one bead per repo
+#   bead-supervisor work REPO [BEAD_ID]   work one bead now (top ready one, or the id given)
+#   bead-supervisor reconcile [REPO...]   only check PRs: merge green, close beads, note red
+#   bead-supervisor status [REPO...]      what is in flight
+#
+#   --dry-run    pick the bead, print the prompt, change nothing
+#   --local      implement, gate and review; keep the branch here, no push, no PR
+#   --model M    opencode provider/model for the worker this run
+#
+# Config, all optional, KEY=VALUE lines (no shell):
+#   ~/.config/bead-loop/config   MODEL, REVIEW_MODEL, REPOS (space separated), WORKER_TIMEOUT, MAX_INFLIGHT
+#   REPO/.bead-loop              LABEL, BASE, SETUP, GATE, REVIEW_MODEL, MERGE (auto|manual), MODEL, MAX_INFLIGHT
+# Defaults: LABEL=delegate:local  BASE=origin's HEAD  MERGE=auto  MAX_INFLIGHT=1
+#           WORKER_TIMEOUT=3600 (seconds)  SETUP unset  GATE unset (CI is the gate)
+#           REVIEW_MODEL unset (no review). Set it and a second model judges the diff
+#           before the push; the worker gets one revision round on a REJECT.
+set -euo pipefail
+
+CONFIG_DIR=${BEAD_LOOP_CONFIG:-$HOME/.config/bead-loop}
+STATE_DIR=${BEAD_LOOP_STATE:-$HOME/.local/state/bead-loop}
+mkdir -p "$STATE_DIR"
+
+log() { printf '%s %s\n' "$(date +%H:%M:%S)" "$*" >&2; }
+die() { log "error: $*"; exit 1; }
+
+# cfg KEY FILE [DEFAULT]: first KEY=VALUE line; trailing comment and quotes stripped.
+cfg() {
+  local v
+  v=$( [ -f "$2" ] && grep -E "^$1=" "$2" | head -1 | cut -d= -f2- | sed -E "s/[[:space:]]+#.*\$//; s/^[\"']//; s/[\"']\$//" || true)
+  printf '%s' "${v:-${3-}}"
+}
+
+DRY=0 LOCAL=0 MODEL_FLAG=
+ARGS=()
+while [ $# -gt 0 ]; do
+  case $1 in
+    --dry-run) DRY=1 ;;
+    --local) LOCAL=1 ;;
+    --model) MODEL_FLAG=$2; shift ;;
+    -h|--help) sed -n '2,21p' "$0"; exit 0 ;;
+    *) ARGS+=("$1") ;;
+  esac
+  shift
+done
+CMD=${ARGS[0]:-tick}
+REPOS=("${ARGS[@]:1}")
+G_CONF=$CONFIG_DIR/config
+if [ ${#REPOS[@]} -eq 0 ] && [ "$CMD" != work ]; then
+  # shellcheck disable=SC2206
+  REPOS=($(cfg REPOS "$G_CONF"))
+fi
+[ ${#REPOS[@]} -gt 0 ] || die "no repos: pass one or set REPOS in $G_CONF"
+
+need() { command -v "$1" >/dev/null || die "$1 is not installed"; }
+need bd; need jq; need git; need opencode
+
+# ---- per-repo context -------------------------------------------------------
+load_repo() {
+  REPO=$(cd "$1" && pwd) || die "no such repo: $1"
+  [ -d "$REPO/.beads" ] || die "$REPO has no .beads/"
+  local rc=$REPO/.bead-loop
+  SLUG=$(basename "$REPO")
+  LABEL=$(cfg LABEL "$rc" delegate:local)
+  MERGE=$(cfg MERGE "$rc" auto)
+  SETUP=$(cfg SETUP "$rc")
+  GATE=$(cfg GATE "$rc")
+  MODEL=${MODEL_FLAG:-$(cfg MODEL "$rc" "$(cfg MODEL "$G_CONF")")}
+  REVIEW_MODEL=$(cfg REVIEW_MODEL "$rc" "$(cfg REVIEW_MODEL "$G_CONF")")
+  MAX_INFLIGHT=$(cfg MAX_INFLIGHT "$rc" "$(cfg MAX_INFLIGHT "$G_CONF" 1)")
+  WORKER_TIMEOUT=$(cfg WORKER_TIMEOUT "$G_CONF" 3600)
+  BASE=$(cfg BASE "$rc")
+  if [ -z "$BASE" ]; then
+    BASE=$(git -C "$REPO" symbolic-ref -q --short refs/remotes/origin/HEAD 2>/dev/null | sed 's|^origin/||')
+    [ -n "$BASE" ] || BASE=$(git -C "$REPO" remote show origin 2>/dev/null | sed -n 's/.*HEAD branch: //p')
+  fi
+  [ -n "$BASE" ] || die "$SLUG: cannot tell the base branch; set BASE in .bead-loop"
+  RS=$STATE_DIR/$SLUG
+  mkdir -p "$RS/inflight" "$RS/logs" "$RS/wt"
+}
+
+bdr() { (cd "$REPO" && bd "$@"); }
+ghr() { (cd "$REPO" && gh "$@"); }
+inflight_count() { find "$RS/inflight" -type f ! -name '*.*' | wc -l; }
+
+# ---- the models -------------------------------------------------------------
+# run_agent AGENT MODEL DIR LOG PROMPT: one non-interactive opencode session.
+# Prints the last text the agent wrote; returns opencode's exit code.
+run_agent() {
+  local agent=$1 model=$2 dir=$3 logf=$4 prompt=$5 rc=0
+  OPENCODE_DISABLE_CLAUDE_CODE_SKILLS=1 \
+  timeout --foreground "$WORKER_TIMEOUT" opencode run --dir "$dir" --agent "$agent" \
+      ${model:+-m "$model"} --format json "$prompt" >"$logf" 2>"$logf.err" || rc=$?
+  jq -r 'select(.type=="text") | .part.text' "$logf" 2>/dev/null | tail -20
+  return $rc
+}
+
+render_bead() {
+  jq -r '.[0] | "id: \(.id)\ntitle: \(.title)\ntype: \(.issue_type // "task")   priority: P\(.priority)\n\nDESCRIPTION:\n\(.description // "")\n\nACCEPTANCE CRITERIA:\n\(.acceptance_criteria // "(none given: the description is the criterion)")" + (if (.design // "") != "" then "\n\nDESIGN:\n\(.design)" else "" end) + (if (.notes // "") != "" then "\n\nNOTES:\n\(.notes)" else "" end)'
+}
+
+# Commit whatever the worker left uncommitted (the gate, reviewer and CI judge it),
+# with .beads/ restored. Returns 1 when the branch has no commits over base.
+settle_worktree() {
+  local wt=$1 msg=$2
+  git -C "$wt" checkout -q -- .beads 2>/dev/null || true
+  if [ -n "$(git -C "$wt" status --porcelain)" ]; then
+    git -C "$wt" add -A && git -C "$wt" commit -q -m "$msg"
+  fi
+  [ -n "$(git -C "$wt" rev-list "origin/$BASE..HEAD")" ]
+}
+
+run_gate() {
+  local wt=$1 logf=$2
+  [ -n "$GATE" ] || return 0
+  log "$SLUG: gate: $GATE"
+  (cd "$wt" && bash -c "$GATE") >"$logf" 2>&1
+}
+
+# ---- work one bead ----------------------------------------------------------
+work_one() {
+  local id=${1:-}
+  if [ -z "$id" ]; then
+    if [ "$(inflight_count)" -ge "$MAX_INFLIGHT" ]; then
+      log "$SLUG: $(inflight_count) in flight (max $MAX_INFLIGHT); waiting on CI"
+      return 0
+    fi
+    id=$(bdr ready -l "$LABEL" --json -n 1 2>/dev/null | jq -r '.[0].id // empty')
+    if [ -z "$id" ]; then log "$SLUG: nothing ready with label $LABEL"; return 0; fi
+  fi
+  local json title branch wt stamp logf prompt final verdict rc
+  json=$(bdr show "$id" --json)
+  [ "$(printf '%s' "$json" | jq 'length')" -gt 0 ] || die "$SLUG: bd show $id returned nothing"
+  title=$(printf '%s' "$json" | jq -r '.[0].title')
+  branch=bead/$id
+  wt=$RS/wt/$id
+  stamp=$(date +%Y%m%dT%H%M%S)
+  logf=$RS/logs/$id.$stamp
+
+  prompt=$(cat <<PROMPT
+Work the bead below in this repository, following the bead-workflow skill.
+
+<bead>
+$(printf '%s' "$json" | render_bead)
+</bead>
+
+You are on branch $branch, a fresh worktree of $BASE. Commit your work on this branch and leave .beads/ untouched. End your turn with one line: DONE: <evidence> or BLOCKED: <note>.
+PROMPT
+)
+  log "$SLUG: bead $id — $title"
+  if [ "$DRY" = 1 ]; then
+    printf '%s\n' "--- model: ${MODEL:-agent default}  base: $BASE  setup: ${SETUP:-none}  gate: ${GATE:-none}  review: ${REVIEW_MODEL:-none}  merge: $MERGE" "$prompt"
+    return 0
+  fi
+  if [ "$LOCAL" = 0 ]; then need gh; fi
+
+  bdr update "$id" --claim >/dev/null
+  git -C "$REPO" fetch -q origin "$BASE"
+  if [ -e "$wt" ]; then git -C "$REPO" worktree remove --force "$wt" 2>/dev/null || rm -rf "$wt"; fi
+  git -C "$REPO" branch -D "$branch" >/dev/null 2>&1 || true
+  git -C "$REPO" worktree add -q -b "$branch" "$wt" "origin/$BASE"
+
+  if [ -n "$SETUP" ]; then
+    log "$SLUG: setup: $SETUP"
+    if ! (cd "$wt" && bash -c "$SETUP") >"$logf.setup" 2>&1; then
+      fail "$id" "$wt" "setup failed: $SETUP
+$(tail -15 "$logf.setup")"; return 0
+    fi
+  fi
+
+  # Round 1: the implementor.
+  rc=0; final=$(run_agent bead-worker "$MODEL" "$wt" "$logf.worker.jsonl" "$prompt") || rc=$?
+  if [ $rc -ne 0 ]; then fail "$id" "$wt" "worker exited $rc (timeout=$WORKER_TIMEOUT s). Log: $logf.worker.jsonl"; return 0; fi
+  if printf '%s' "$final" | grep -q '^BLOCKED:'; then
+    fail "$id" "$wt" "$(printf '%s' "$final" | grep '^BLOCKED:' | tail -1)"; return 0
+  fi
+  if ! settle_worktree "$wt" "$id: $title"; then
+    fail "$id" "$wt" "worker made no commit. Last words: $(printf '%s' "$final" | tail -3)"; return 0
+  fi
+  if ! run_gate "$wt" "$logf.gate"; then
+    fail "$id" "$wt" "gate failed: $GATE
+$(tail -15 "$logf.gate")"; return 0
+  fi
+
+  # Round 2, when a reviewer is configured: the senior model judges the diff;
+  # one revision round on REJECT, then the reviewer's word is final.
+  if [ -n "$REVIEW_MODEL" ]; then
+    local round
+    for round in 1 2; do
+      verdict=$(review "$id" "$wt" "$json" "$final" "$logf.review$round.jsonl") || {
+        fail "$id" "$wt" "reviewer failed (round $round). Log: $logf.review$round.jsonl"; return 0; }
+      if printf '%s' "$verdict" | grep -q '^APPROVE:'; then
+        log "$SLUG: $id: review approved (round $round)"; break
+      fi
+      if [ $round = 2 ]; then
+        fail "$id" "$wt" "review rejected twice. Last: $(printf '%s' "$verdict" | grep '^REJECT:' | tail -1)"; return 0
+      fi
+      log "$SLUG: $id: review rejected, revision round"
+      rc=0; final=$(run_agent bead-worker "$MODEL" "$wt" "$logf.worker2.jsonl" "$prompt
+
+A senior reviewer read your commit on this branch and rejected it. Fix exactly what the review names, verify again, commit, and end with DONE: or BLOCKED:.
+
+<review>
+$(printf '%s' "$verdict" | grep -A20 '^REJECT:')
+</review>") || rc=$?
+      if [ $rc -ne 0 ]; then fail "$id" "$wt" "worker exited $rc in revision round. Log: $logf.worker2.jsonl"; return 0; fi
+      if printf '%s' "$final" | grep -q '^BLOCKED:'; then
+        fail "$id" "$wt" "revision round: $(printf '%s' "$final" | grep '^BLOCKED:' | tail -1)"; return 0
+      fi
+      settle_worktree "$wt" "$id: revision after review" || true
+      if ! run_gate "$wt" "$logf.gate2"; then
+        fail "$id" "$wt" "gate failed after revision: $GATE
+$(tail -15 "$logf.gate2")"; return 0
+      fi
+    done
+  fi
+
+  if [ "$LOCAL" = 1 ]; then
+    log "$SLUG: --local: branch $branch is ready in $wt; nothing pushed"
+    bdr update "$id" --append-notes "bead-loop: worked locally on $branch (not pushed)" >/dev/null
+    return 0
+  fi
+
+  git -C "$wt" push -q -u origin "$branch" --force-with-lease
+  local body url num
+  body=$(cat <<BODY
+Bead \`$id\`: $title
+
+$(printf '%s' "$json" | jq -r '.[0].acceptance_criteria // ""' | sed 's/^/> /')
+
+Worker: $(printf '%s' "$final" | grep '^DONE:' | tail -1 | cut -c1-500)
+${REVIEW_MODEL:+Reviewer ($REVIEW_MODEL): $(printf '%s' "${verdict:-}" | grep '^APPROVE:' | tail -1 | cut -c1-500)}
+
+Opened by bead-loop; the bead closes when this merges.
+BODY
+)
+  url=$(ghr pr create --base "$BASE" --head "$branch" --title "$id: $title" --body "$body")
+  num=${url##*/}
+  printf '%s\n' "$url" >"$RS/inflight/$id"
+  bdr comment "$id" "bead-loop: opened $url" >/dev/null
+  log "$SLUG: opened $url"
+  if [ "$MERGE" = auto ]; then
+    ghr pr merge "$num" --auto --squash --delete-branch >/dev/null 2>&1 \
+      || log "$SLUG: GitHub auto-merge not available on this repo; reconcile will merge on green"
+  fi
+  git -C "$REPO" worktree remove --force "$wt"
+}
+
+# review ID WT BEAD_JSON WORKER_FINAL LOG: prints the reviewer's last words.
+review() {
+  local id=$1 wt=$2 json=$3 final=$4 logf=$5
+  log "$SLUG: $id: review by $REVIEW_MODEL"
+  run_agent bead-reviewer "$REVIEW_MODEL" "$wt" "$logf" "Review the commit(s) on this branch for the bead below. The diff against $BASE is under <diff>; read any file you need for context.
+
+<bead>
+$(printf '%s' "$json" | render_bead)
+</bead>
+
+<worker-report>
+$(printf '%s' "$final" | tail -5)
+</worker-report>
+
+<diff>
+$(git -C "$wt" diff "origin/$BASE...HEAD" --stat; git -C "$wt" diff "origin/$BASE...HEAD" | head -c 60000)
+</diff>
+
+End with one line: APPROVE: <what you checked> or REJECT: <file:line, what is wrong, what would fix it>."
+}
+
+# Leave the bead in_progress with the note: bd ready will not hand it out again,
+# and the owner sees why in bd show.
+fail() {
+  local id=$1 wt=$2 note=$3
+  log "$SLUG: $id stopped: $(printf '%s' "$note" | head -1)"
+  bdr update "$id" --append-notes "bead-loop $(date -Iminutes): $note" >/dev/null
+  git -C "$REPO" worktree remove --force "$wt" 2>/dev/null || true
+  git -C "$REPO" branch -D "bead/$id" >/dev/null 2>&1 || true
+}
+
+# ---- reconcile open PRs -----------------------------------------------------
+reconcile() {
+  local f id url num view state verdict
+  for f in "$RS"/inflight/*; do
+    [ -e "$f" ] || continue
+    case $f in *.red|*.nocheck) continue ;; esac
+    id=$(basename "$f"); url=$(cat "$f"); num=${url##*/}
+    need gh
+    view=$(ghr pr view "$num" --json state,mergedAt,mergeStateStatus,statusCheckRollup,url) || { log "$SLUG: cannot read PR $num"; continue; }
+    state=$(printf '%s' "$view" | jq -r .state)
+    case $state in
+      MERGED)
+        bdr close "$id" --reason "bead-loop: $url merged, CI green" >/dev/null
+        rm -f "$f" "$f.red" "$f.nocheck"
+        log "$SLUG: $id closed ($url merged)"
+        ;;
+      CLOSED)
+        bdr update "$id" --append-notes "bead-loop: $url was closed without merging; left in_progress for you" >/dev/null
+        rm -f "$f" "$f.red" "$f.nocheck"
+        log "$SLUG: $id: PR closed unmerged"
+        ;;
+      OPEN)
+        verdict=$(printf '%s' "$view" | jq -r '
+          [.statusCheckRollup[]? | (.conclusion // .state // .status)] as $c
+          | if ($c | any(IN("FAILURE","ERROR","CANCELLED","TIMED_OUT","ACTION_REQUIRED","STARTUP_FAILURE"))) then "red"
+            elif ($c | length) == 0 then "nocheck"
+            elif ($c | all(IN("SUCCESS","NEUTRAL","SKIPPED"))) then "green"
+            else "pending" end')
+        case $verdict in
+          green)
+            if [ "$MERGE" = auto ]; then
+              if [ "$(printf '%s' "$view" | jq -r .mergeStateStatus)" = BEHIND ]; then
+                ghr pr update-branch "$num" >/dev/null 2>&1 && log "$SLUG: $id: updated branch, CI reruns" || log "$SLUG: $id: update-branch failed"
+              elif ghr pr merge "$num" --squash --delete-branch >/dev/null 2>&1; then
+                log "$SLUG: $id: merged $url"
+              else
+                log "$SLUG: $id: green but merge refused ($(printf '%s' "$view" | jq -r .mergeStateStatus))"
+              fi
+            else
+              log "$SLUG: $id: green, MERGE=manual, waiting for you: $url"
+            fi
+            ;;
+          red)
+            if [ ! -e "$f.red" ]; then
+              bdr update "$id" --append-notes "bead-loop: CI red on $url; PR left open" >/dev/null
+              touch "$f.red"; log "$SLUG: $id: CI red: $url"
+            fi
+            ;;
+          nocheck)
+            if [ ! -e "$f.nocheck" ]; then
+              bdr update "$id" --append-notes "bead-loop: $url reports no CI checks, so nothing proves it green; merge it yourself or set MERGE=manual" >/dev/null
+              touch "$f.nocheck"; log "$SLUG: $id: no checks on $url"
+            fi
+            ;;
+          *) log "$SLUG: $id: CI pending on $url" ;;
+        esac
+        ;;
+    esac
+  done
+}
+
+status_one() {
+  local f
+  printf '%s  label=%s base=%s merge=%s worker=%s reviewer=%s\n' "$SLUG" "$LABEL" "$BASE" "$MERGE" "${MODEL:-agent}" "${REVIEW_MODEL:-none}"
+  for f in "$RS"/inflight/*; do
+    [ -e "$f" ] || continue
+    case $f in *.red|*.nocheck) continue ;; esac
+    printf '  %s  %s%s\n' "$(basename "$f")" "$(cat "$f")" "$( [ -e "$f.red" ] && printf '  [red]')"
+  done
+  printf '  ready: %s\n' "$(bdr ready -l "$LABEL" --json -n 0 2>/dev/null | jq -r '[.[].id] | join(" ")')"
+}
+
+# ---- main --------------------------------------------------------------------
+exec 9>"$STATE_DIR/lock"
+if [ "$CMD" != status ]; then
+  flock -n 9 || die "another bead-supervisor holds $STATE_DIR/lock"
+fi
+case $CMD in
+  tick)      for r in "${REPOS[@]}"; do load_repo "$r"; reconcile; work_one; done ;;
+  work)      load_repo "${REPOS[0]}"; work_one "${REPOS[1]:-}" ;;
+  reconcile) for r in "${REPOS[@]}"; do load_repo "$r"; reconcile; done ;;
+  status)    for r in "${REPOS[@]}"; do load_repo "$r"; status_one; done ;;
+  *) die "unknown command $CMD" ;;
+esac
