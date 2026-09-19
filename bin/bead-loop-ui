@@ -265,6 +265,18 @@ const actions = {
     return { loggedIn: true };
   },
   async claude_cancel() { if (login && !login.done) login.child.kill(); login = null; return { cancelled: true }; },
+  // answer {repo, id, text}: the reply to a bead in the human queue — noted on the bead,
+  // back to the dev queue at the stage it stopped on, and a tick starts.
+  async answer({ repo, id, text }) {
+    if (!ID.test(String(id || ''))) throw new Error('bad bead id');
+    if (!String(text || '').trim()) throw new Error('write the answer first');
+    const repos = await knownRepos();
+    if (!repos.some((r) => r.repo === repo)) throw new Error('unknown repo');
+    const r = await run(SUPERVISOR, ['answer', repo, id, String(text).trim()]);
+    if (!r.ok) throw new Error(r.stderr.trim().split('\n').pop() || `supervisor exited ${r.code}`);
+    await systemctl('start', '--no-block', `${UNIT}.service`).catch(() => {});
+    return { answered: id };
+  },
   // reopen {repo, id}: a parked bead back in the queue, `bd update ID --status open`.
   async reopen({ repo, id }) {
     if (!ID.test(String(id || ''))) throw new Error('bad bead id');

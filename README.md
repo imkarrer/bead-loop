@@ -178,8 +178,14 @@ event stream; nobody presses refresh):
   stage that puts it on), **review** (how long each has waited), **merge** (each PR with
   GitHub's word on it — CI running m/n, red with the failing check, green, merged — asked
   once a minute, so "merged · bead closes on the next tick" shows the moment it merges).
-  Then the parked beads, each with **why** — the last note the loop left on it (the rejection,
-  the failing check, the BLOCKED line), in full — and Reopen. Only when there is one, a session the server is still
+  Then **Needs you** — the human queue: each bead with the question it stopped on (the
+  `BLOCKED:` line, the last rejection, the failing check), in full, and the ways out:
+  **Answer & resume** (your reply goes on the bead, the bead returns to the dev queue at the
+  stage it stopped on with that round forgiven, the next round reads the answer), **Work with
+  Claude** (the last stage, now), **Reopen** (as is), or the one-line command that opens an
+  interactive Claude Code session in the bead's worktree with the bead and the question as
+  the first prompt — you and Claude work it out, commit on the branch, then Answer & resume
+  sends it through review and merge. Only when there is one, a session the server is still
   running that is on no lane (an orphan of a killed round, a hand-run `work`), with Abort.
   Idle sessions are history and are not shown; the session link has them.
 - **The supervisor's log**, live, and the timer: running or paused, when the next tick is.
@@ -272,6 +278,8 @@ bead-supervisor --local work ~/src/repo inq-abc.1       # implement, gate, revie
 bead-supervisor work ~/src/repo                         # one bead through both lanes, to a PR
 bead-supervisor lane dev                                # one lane by itself, until its queue is empty
 bead-supervisor pause review                            # that lane starts no new round until resume
+bead-supervisor answer ~/src/repo inq-abc.1 "use --dry-run"   # reply to a bead in the human queue; back to dev
+bead-supervisor open ~/src/repo inq-abc.1               # you + Claude Code in the bead's worktree, question in hand
 bead-supervisor tick                                    # what the timer does: both lanes, side by side
 systemctl --user start --no-block bead-supervisor.service   # a tick now, in the background (a tick runs as long as there is work)
 systemctl --user enable --now opencode-web.service bead-loop-ui.service bead-supervisor.timer
@@ -328,9 +336,10 @@ Both queues are ordered **fewest failures first**, then bd's own order: everythi
 tried once before anything is tried twice, and a bead that keeps failing gets out of the
 way of the ones that do not. The next round's worker reads the notes of the earlier ones.
 
-Two things park a bead (`in_progress`, no more rounds) for a human: the stages are
+Three things put a bead in the **human queue** (`in_progress`, no more rounds until you act): the stages are
 exhausted with `on_exhaust = "park"`, or the *last* stage says `BLOCKED:` — a claim in the
-bead is false, and no model fixes that. A PR closed unmerged parks it too.
+bead is false, or a decision is yours — and a PR closed unmerged. The UI shows the question and
+takes the answer; `bead-supervisor answer` and `open` are the same from a terminal.
 
 ## PRs from anyone
 
