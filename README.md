@@ -1,4 +1,3 @@
-| PR opened | in_progress, comment with the url | pushed; nothing merges until a later tick sees every check green |
 # bead-loop
 
 Work [beads](https://github.com/steveyegge/beads) with local models in any repo: a
@@ -34,7 +33,7 @@ flowchart TD
   V -.- CPU[(acbox/coder<br/>Qwen3-Coder-Next 80B Q8<br/>hp 840z, 256 GB RAM, CPU)]
 
   PR --> CI[Buildkite, queue self on ac-box]
-  CI -- all checks green<br/>on a later tick --> M[squash-merge · delete branch<br/>bd close ID]
+  CI -- all checks green<br/>next tick, or the pipeline itself<br/>on the automerge label --> M[squash-merge · delete branch<br/>bd close ID]
   CI -- red --> N[note on bead<br/>PR stays open for you]
   CI -- no checks --> N
 
@@ -83,10 +82,16 @@ house style, vocabulary) stay in each repo under `.agents/skills/` or
 3. Add the repo to `repos` in `~/.config/bead-loop/config.toml`. Everything else in
    that file is a default the repo file may override; the models and `[[stages]]`
    usually live there once, not per repo.
-4. On GitHub: CI that reports a status on PRs. `gh` must be logged in. The supervisor
-   never asks GitHub to auto-merge (on a branch with no required checks that merges
-   immediately); a later tick merges once every reported check is green, and refuses
-   while none is reported. Branch protection, where the plan allows it, is a second lock.
+4. On GitHub: CI that reports a status on PRs. `gh` must be logged in. By default
+   (`merge = "auto"`) the supervisor never asks GitHub to auto-merge: a later tick merges
+   once every reported check is green, and refuses while none is reported. Branch
+   protection, where the plan allows it, is a second lock.
+5. Optional, `merge = "pipeline"`: the loop puts a label on each PR it opens or adopts
+   (`merge_label`, default `automerge`) and merging is the pipeline's job — it merges
+   the moment its own run is green, no tick in between, and the loop never calls
+   `gh pr merge`. The next tick sees `MERGED` and closes the bead. The label must exist in
+   the repo; if GitHub refuses it, that is noted on the bead and the PR waits for you.
+   (GitHub's own auto-merge is not used: private repos need a paid plan for it.)
 
 ## Watching it
 

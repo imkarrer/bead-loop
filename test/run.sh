@@ -159,6 +159,34 @@ case_merge_manual() {
   assert_eq "$(jq -r .state "$TEST_CTRL/pr.json")" OPEN "manual: green stays open"
   assert_eq "$(bead .status)" in_progress "manual: bead waits for you"
 }
+case_merge_pipeline() {
+  setup true pipeline; sup work "$REPO"
+  assert_match "$(cat "$TEST_CTRL/gh.log")" "pr edit 7 --add-label automerge" "labelled as soon as the PR opens"
+  assert_eq "$(jq -r '.labels | join(",")' "$TEST_CTRL/pr.json")" automerge "default label is automerge"
+  set_checks '[{"context":"ci","state":"SUCCESS"}]'; sup reconcile "$REPO"
+  assert_eq "$(jq -r .state "$TEST_CTRL/pr.json")" OPEN "green: the tick does not merge, the pipeline does"
+  ! grep -q 'pr merge' "$TEST_CTRL/gh.log" && ok || bad "no merge call from the loop"
+  assert_eq "$(bead .status)" in_progress "bead waits on the PR"
+  jq '.state="MERGED"' "$TEST_CTRL/pr.json" >"$TEST_CTRL/pr.tmp" && mv "$TEST_CTRL/pr.tmp" "$TEST_CTRL/pr.json"  # the pipeline merged it
+  sup reconcile "$REPO"
+  assert_eq "$(bead .status)" closed "the next tick sees MERGED and closes the bead"
+  assert_nofile "$BEAD_LOOP_STATE/repo/inflight/t-1" "no longer in flight"
+}
+case_merge_pipeline_label_and_adoption() {
+  setup true pipeline stub/reviewer 'merge_label = "ship-it"'
+  jq '. + [{id:"t-9", title:"Theirs", description:"z", status:"open", priority:2, labels:[]}]' "$BD_STATE/issues.json" >"$BD_STATE/i.tmp" && mv "$BD_STATE/i.tmp" "$BD_STATE/issues.json"
+  jq -n '[{number:41, headRefName:"bead/t-9", url:"https://github.com/example/repo/pull/41", state:"OPEN", checks:[{context:"ci",state:"SUCCESS"}]}]' >"$TEST_CTRL/extra-prs.json"
+  sup reconcile "$REPO"
+  assert_eq "$(cat "$TEST_CTRL/labels-extra")" "41 ship-it" "an adopted PR gets the configured label too"
+  ! grep -q 'pr merge 41' "$TEST_CTRL/gh.log" && ok || bad "and is left to the pipeline"
+}
+case_merge_pipeline_label_missing() {
+  setup true pipeline; touch "$TEST_CTRL/label-missing"; sup work "$REPO"
+  assert_match "$(bead .notes)" "could not label .* with automerge" "noted for you"
+  assert_file "$BEAD_LOOP_STATE/repo/inflight/t-1" "still tracked"
+  set_checks '[{"context":"ci","state":"SUCCESS"}]'; sup reconcile "$REPO"
+  assert_eq "$(jq -r .state "$TEST_CTRL/pr.json")" OPEN "green: still nobody merges but you"
+}
 case_behind_updates_branch() {
   setup; sup work "$REPO"
   jq '.mergeStateStatus="BEHIND"' "$TEST_CTRL/pr.json" >"$TEST_CTRL/pr.tmp" && mv "$TEST_CTRL/pr.tmp" "$TEST_CTRL/pr.json"
