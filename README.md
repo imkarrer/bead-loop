@@ -61,13 +61,20 @@ skills/bead-workflow/     one bead, start to finish        -> ~/.config/opencode
 agents/bead-worker.md     implementor agent                -> ~/.config/opencode/agents/
 agents/bead-reviewer.md   reviewer agent                   -> ~/.config/opencode/agents/
 bin/bead-supervisor       the loop                         -> ~/.local/bin/
-systemd/                  supervisor oneshot + 10 min timer, opencode-web service
+bin/bead-loop-ui          the web UI server (node)         -> ~/.local/bin/
+ui/index.html             the page it serves
+systemd/                  supervisor oneshot + 10 min timer, opencode-web and bead-loop-ui services
 bead-loop.example.toml    per-repo config                  -> <repo>/.bead-loop.toml
+.flox/env/manifest.toml   flox: every tool above, pinned; bin/ on PATH; services for a box without systemd
 docs/loop.mmd             the diagram above
 ```
 
 `./install.sh` makes the links (re-runnable). The supervisor needs `bd`, `git`, `jq`, `gh`,
-`opencode` and `yq` (mikefarah, v4: it reads the TOML). Repo-specific skills (how to verify,
+`opencode`, `curl` and `yq` (mikefarah, v4: it reads the TOML); the UI needs `node`.
+**`flox activate`** in this checkout provides all of them, pinned, plus `bin/` on PATH
+(`.flox/env/manifest.toml`), so `bead-supervisor` and `bead-loop-ui` resolve without the
+`~/.local/bin` link; on a machine without the systemd units, `flox services start` runs
+the same three things (`opencode-web`, `ui`, `loop`). Repo-specific skills (how to verify,
 house style, vocabulary) stay in each repo under `.agents/skills/` or
 `.opencode/skills/`; the workflow skill tells the worker to look for them.
 
@@ -122,9 +129,28 @@ silently running with defaults.
 
 ## Watching it
 
+**<http://127.0.0.1:4097>** — `bead-loop-ui.service`, one page, refreshed every 5 s:
+
+- **Repos**: every repo the loop watches, and for each: what the workers are on *right
+  now* (the claimed bead, the stage running — worker or reviewer, which model, when it
+  last produced output, a link into its live session), how many beads are ready, PRs in
+  flight and whether CI is red, how many are parked.
+- **Per repo**: the sessions under each worktree (`busy` / `idle` / `orphan`), the PRs
+  in flight, the ready queue with each bead's attempt count, the parked beads.
+- **The supervisor's log**, live, and the timer: running or paused, when the next tick is.
+
+The levers, each one command you would otherwise type: **Tick now**, **Stop tick**
+(the supervisor aborts its model session first), **Pause / Resume timer**, **Abort** on
+any busy or orphan session, **Reopen** on a parked bead. The server binds to loopback
+and refuses cross-site requests; it needs `node`, and `systemctl`/`journalctl` for the
+timer and log (without them, those parts say so and the rest works).
+
+Same thing in a terminal:
+
 ```bash
 bead-supervisor watch                                     # the screen below, every 5 s (BEAD_LOOP_WATCH=N)
 bead-supervisor status                                    # the same, once
+bead-supervisor --json status                             # one JSON object per repo: what the UI reads
 ```
 
 ```
@@ -142,7 +168,7 @@ inquire-platform  label=delegate:local base=master merge=pipeline stages=3  firs
     idle    bead-worker    devbox/coder        48m ago  Services/grader stamps graderVersion from model   http://127.0.0.1:4096/L2hvbWUv…/session/ses_f4887c37dffe…
 ```
 
-The last supervisor log lines, then per repo: PRs in flight, ready beads, and every
+The last supervisor log lines, then per repo: PRs in flight, ready beads, parked beads, and every
 worktree under `wt/` with what the attached opencode server has for it — newest sessions
 first, each with its state, agent, model, when it last produced anything, and the web UI
 url that opens it. Click the url; no need to know how the UI names things (it files
@@ -179,7 +205,7 @@ bead-supervisor --dry-run work ~/src/repo               # the bead and prompt it
 bead-supervisor --local work ~/src/repo inq-abc.1       # implement, gate, review; no push
 bead-supervisor work ~/src/repo                         # one bead through to a PR
 bead-supervisor tick                                    # what the timer does
-systemctl --user enable --now opencode-web.service bead-supervisor.timer
+systemctl --user enable --now opencode-web.service bead-loop-ui.service bead-supervisor.timer
 sudo loginctl enable-linger $USER                       # timers survive logout
 ```
 

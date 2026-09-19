@@ -5,6 +5,8 @@
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 SUP=$HERE/../bin/bead-supervisor
+# The stubs in test/bin shadow curl; the UI case talks to a real server with the real one.
+REAL_CURL=$(command -v curl || true)
 export PATH=$HERE/bin:$PATH
 export GIT_AUTHOR_NAME=test GIT_AUTHOR_EMAIL=t@example.com GIT_COMMITTER_NAME=test GIT_COMMITTER_EMAIL=t@example.com
 PASS=0 FAIL=0
@@ -325,7 +327,7 @@ case_dotted_ids_count_as_inflight() {
 
 case_status_lists_worktree_sessions() {
   setup true auto stub/reviewer 'attach = "http://oc.test:4096"'
-  wt=$BEAD_LOOP_STATE/repo/wt/t-1; mkdir -p "$wt" "$BEAD_LOOP_STATE/repo/attempts"; echo 2 >"$BEAD_LOOP_STATE/repo/attempts/t-1"
+  wt=$BEAD_LOOP_STATE/repo/wt/t-1; mkdir -p "$wt" "$BEAD_LOOP_STATE/repo/attempts" "$BEAD_LOOP_STATE/repo/inflight"; echo 2 >"$BEAD_LOOP_STATE/repo/attempts/t-1"
   jq -n '[{id:"ses_rev", parentID:null, agent:"bead-reviewer", model:{providerID:"slow",id:"m"}, title:"Reviewing", time:{created:0, updated:(now*1000)}},
           {id:"ses_wrk", parentID:null, agent:"bead-worker",   model:{providerID:"fast",id:"m"}, title:"Working",   time:{created:0, updated:(now*1000-7200000)}},
           {id:"ses_sub", parentID:"ses_wrk", agent:"explore", model:{providerID:"fast",id:"m"}, title:"Sub", time:{created:0, updated:(now*1000)}}]' >"$TEST_CTRL/sessions.json"
@@ -375,6 +377,36 @@ case_new_attempt_aborts_leftover_session() {
   echo '{"ses_old":{"type":"busy"}}' >"$TEST_CTRL/session-status.json"
   sup work "$REPO"
   assert_match "$(head -2 "$TEST_CTRL/curl.log" | tr '\n' ' ')" "session/status .*wt/t-1 .*/session/ses_old/abort" "before the worktree is recreated, what ran there is stopped"
+}
+
+case_status_json_and_ui() {
+  setup true auto stub/reviewer 'attach = "http://oc.test:4096"'
+  wt=$BEAD_LOOP_STATE/repo/wt/t-1; mkdir -p "$wt" "$BEAD_LOOP_STATE/repo/attempts" "$BEAD_LOOP_STATE/repo/inflight"; echo 2 >"$BEAD_LOOP_STATE/repo/attempts/t-1"
+  jq -n '[{id:"ses_rev", parentID:null, agent:"bead-reviewer", model:{providerID:"slow",id:"m"}, title:"Reviewing", time:{created:0, updated:(now*1000)}}]' >"$TEST_CTRL/sessions.json"
+  echo '{"ses_rev":{"type":"busy"}}' >"$TEST_CTRL/session-status.json"
+  echo https://github.com/example/repo/pull/7 >"$BEAD_LOOP_STATE/repo/inflight/t-1"; : >"$BEAD_LOOP_STATE/repo/inflight/.t-1.red"
+  jq '. + [{id:"t-5", title:"Parked one", description:"p", status:"in_progress", priority:2, labels:["delegate:local"]}]' "$BD_STATE/issues.json" >"$BD_STATE/i.tmp" && mv "$BD_STATE/i.tmp" "$BD_STATE/issues.json"
+  echo t-9 >"$BEAD_LOOP_STATE/repo/.working"
+  j=$(sup --json status "$REPO")
+  assert_eq "$(printf '%s' "$j" | jq -r '.slug, .attach, .stages[0].worker, .working.id' | tr '\n' ' ')" "repo http://oc.test:4096 stub/worker t-9 " "config, working bead"
+  assert_eq "$(printf '%s' "$j" | jq -c '.inflight[0] | [.id, .red, .adopted]')" '["t-1",true,false]' "inflight PR with its markers"
+  assert_eq "$(printf '%s' "$j" | jq -r '.parked | map(.id) | join(" ")')" "t-5" "parked = in_progress minus in flight minus working"
+  assert_eq "$(printf '%s' "$j" | jq -r '.worktrees[0] | "\(.id) \(.attempts) \(.sessions[0].state) \(.sessions[0].model) \(.sessions[0].url)"')" \
+    "t-1 2 orphan slow/m http://oc.test:4096/$(printf '%s' "$wt" | base64 -w0 | tr '+/' '-_' | tr -d '=')/session/ses_rev" "worktree with its session"
+  assert_eq "$(printf '%s' "$j" | jq -r '.ready[0] | "\(.id) \(.attempts)"')" "t-1 2" "ready bead carries its attempts"
+  command -v node >/dev/null || { echo "  (no node: ui server not exercised)"; return; }
+  # The UI server: the page, the state it reads, and the two guards on its levers.
+  port=$((20000 + RANDOM % 20000))
+  BEAD_LOOP_UI_PORT=$port node "$HERE/../bin/bead-loop-ui" >"$T/ui.log" 2>&1 & upid=$!
+  for _ in $(seq 50); do "$REAL_CURL" -sf -m 1 "http://127.0.0.1:$port/api/state" >"$T/state.json" 2>/dev/null && break; sleep 0.1; done
+  assert_eq "$(jq -r '.repos[0].slug, (.repos[0].worktrees[0].sessions[0].state), (.error // "none")' "$T/state.json" | tr '\n' ' ')" "repo orphan none " "/api/state carries the supervisor's JSON"
+  assert_match "$("$REAL_CURL" -s -m 3 "http://127.0.0.1:$port/")" "<title>bead-loop</title>" "the page"
+  assert_match "$("$REAL_CURL" -s -m 3 -X POST -H 'sec-fetch-site: cross-site' "http://127.0.0.1:$port/api/tick")" "same-origin only" "cross-site lever refused"
+  assert_match "$("$REAL_CURL" -s -m 3 -X POST -H 'content-type: application/json' -d '{"attach":"http://elsewhere","session":"s"}' "http://127.0.0.1:$port/api/abort")" "unknown server" "abort only against a configured server"
+  assert_match "$("$REAL_CURL" -s -m 3 -X POST -H 'content-type: application/json' -d '{"repo":"/nope","id":"t-5"}' "http://127.0.0.1:$port/api/reopen")" "unknown repo" "reopen only in a configured repo"
+  assert_match "$("$REAL_CURL" -s -m 3 -X POST -H 'content-type: application/json' -d "{\"repo\":\"$REPO\",\"id\":\"t-5\"}" "http://127.0.0.1:$port/api/reopen")" '"reopened":"t-5"' "reopen runs bd"
+  assert_eq "$(jq -r '.[]|select(.id=="t-5")|.status' "$BD_STATE/issues.json")" open "the bead is open again"
+  kill $upid
 }
 
 # ---- main ----------------------------------------------------------------------------
