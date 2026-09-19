@@ -402,10 +402,13 @@ case_status_json_and_ui() {
   command -v node >/dev/null || { echo "  (no node: ui server not exercised)"; return; }
   # The UI server: the page, the state it reads, and the two guards on its levers.
   port=$((20000 + RANDOM % 20000))
-  BEAD_LOOP_UI_PORT=$port node "$HERE/../bin/bead-loop-ui" >"$T/ui.log" 2>&1 & upid=$!
+  mkdir -p "$T/gpu"; echo game >"$T/gpu/mode"; echo auto >"$T/gpu/by"
+  GPU_MODE_STATE=$T/gpu BEAD_LOOP_UI_PORT=$port node "$HERE/../bin/bead-loop-ui" >"$T/ui.log" 2>&1 & upid=$!
   for _ in $(seq 50); do "$REAL_CURL" -sf -m 1 "http://127.0.0.1:$port/api/state" >"$T/state.json" 2>/dev/null && break; sleep 0.1; done
   assert_eq "$(jq -r '.repos[0].slug, (.repos[0].worktrees[0].sessions[0].state), (.error // "none")' "$T/state.json" | tr '\n' ' ')" "repo orphan none " "/api/state carries the supervisor's JSON"
   assert_match "$("$REAL_CURL" -s -m 3 "http://127.0.0.1:$port/")" "<title>bead-loop</title>" "the page"
+  assert_eq "$(jq -r '.gpu | "\(.available) \(.mode) \(.by)"' "$T/state.json")" "true game auto" "gpu-mode read from its state dir"
+  assert_match "$(timeout 5 "$REAL_CURL" -sN -m 4 "http://127.0.0.1:$port/api/events" | head -1)" '^data: {"now":[0-9]*,"repos":\[{"slug":"repo"' "the event stream opens with the state"
   assert_match "$("$REAL_CURL" -s -m 3 -X POST -H 'sec-fetch-site: cross-site' "http://127.0.0.1:$port/api/tick")" "same-origin only" "cross-site lever refused"
   assert_match "$("$REAL_CURL" -s -m 3 -X POST -H 'content-type: application/json' -d '{"attach":"http://elsewhere","session":"s"}' "http://127.0.0.1:$port/api/abort")" "unknown server" "abort only against a configured server"
   assert_match "$("$REAL_CURL" -s -m 3 -X POST -H 'content-type: application/json' -d '{"repo":"/nope","id":"t-5"}' "http://127.0.0.1:$port/api/reopen")" "unknown repo" "reopen only in a configured repo"

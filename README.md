@@ -129,7 +129,8 @@ silently running with defaults.
 
 ## Watching it
 
-**<http://127.0.0.1:4097>** — `bead-loop-ui.service`, one page, refreshed every 5 s:
+**<http://127.0.0.1:4097>** — `bead-loop-ui.service`, one page, pushed every change (an
+event stream; nobody presses refresh):
 
 - **Repos**: every repo the loop watches, and for each: what the workers are on *right
   now* (the claimed bead, the stage running — worker or reviewer, which model, when it
@@ -141,7 +142,10 @@ silently running with defaults.
 
 The levers, each one command you would otherwise type: **Tick now**, **Stop tick**
 (the supervisor aborts its model session first), **Pause / Resume timer**, **Abort** on
-any busy or orphan session, **Reopen** on a parked bead. The server binds to loopback
+any busy or orphan session, **Reopen** on a parked bead, and — where the box has a
+`gpu-mode` command (this workstation does: `game` stops the loop and the local model
+server to free the GPU, `work` starts them again) — a **Work / Game** switch, run as
+`sudo -n gpu-mode`, so sudoers must allow it without a password. The server binds to loopback
 and refuses cross-site requests; it needs `node`, and `systemctl`/`journalctl` for the
 timer and log (without them, those parts say so and the rest works).
 
