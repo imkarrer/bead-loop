@@ -22,7 +22,10 @@
   header h1 { font-size: 16px; margin: 0; letter-spacing: .02em; }
   .unit { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
   .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); display: inline-block; }
-  .dot.on { background: var(--ok); } .dot.busy { background: var(--busy); animation: pulse 1.6s infinite; } .dot.bad { background: var(--bad); }
+  .dot.on { background: var(--ok); } .dot.warn { background: var(--warn); }
+  .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+  .seg button { border: 0; border-radius: 0; } .seg button + button { border-left: 1px solid var(--line); }
+  .seg button.cur { background: var(--accent); color: var(--panel); } .dot.busy { background: var(--busy); animation: pulse 1.6s infinite; } .dot.bad { background: var(--bad); }
   @keyframes pulse { 50% { opacity: .35; } }
   button { font: inherit; font-size: 13px; padding: 4px 10px; border-radius: 6px; border: 1px solid var(--line);
            background: var(--panel); color: var(--ink); cursor: pointer; }
@@ -61,6 +64,8 @@
   <h1>bead-loop</h1>
   <div class="unit" id="timer"></div>
   <div class="unit" id="tick"></div>
+  <div class="unit" id="gpu"></div>
+  <div class="unit" id="live" style="margin-left:auto"></div>
 </header>
 <main id="main"><div class="empty">loading…</div></main>
 <footer id="foot"></footer>
@@ -82,12 +87,21 @@ async function act(name, body, confirmText) {
     const j = await r.json();
     if (!r.ok) alert(j.error || r.statusText);
   } catch (e) { alert(e.message); }
-  busyAction = false;
-  await refresh();
+  busyAction = false; render();
 }
 window.act = act;
 
+function gpu(s) {
+  const g = s.gpu;
+  if (!g || !g.available) { $('gpu').innerHTML = ''; return; }
+  const dis = busyAction ? 'disabled' : '';
+  // game: the loop and the model server are stopped for the GPU; work: running, and the
+  // guard may flip to game by itself when it sees one (then `by` says auto).
+  $('gpu').innerHTML = `<span class="dot ${g.mode === 'game' ? 'warn' : 'on'}"></span>GPU ${esc(g.mode)}<span class="muted"> (${esc(g.by)})</span>
+    <span class="seg"><button class="${g.mode === 'work' ? 'cur' : ''}" ${dis} onclick="act('gpu',{mode:'work'})">Work</button><button class="${g.mode === 'game' ? 'cur' : ''}" ${dis} onclick="act('gpu',{mode:'game'},'Game mode: stop the loop (aborting its session) and the local model server?')">Game</button></span>`;
+}
 function header(s) {
+  gpu(s);
   const t = s.timer, v = s.service, dis = busyAction ? 'disabled' : '';
   const ticking = v.available && (v.active === 'active' || v.active === 'activating');
   const next = systemdTime(t.next), since = systemdTime(v.since);
@@ -166,14 +180,18 @@ function render() {
     + overview(last) + last.repos.map((r) => repo(r, last.now)).join("")
     + `<section class="card"><h3 style="margin-top:0">Supervisor log</h3>${log}</section>`;
   const el = $('log'); if (el) el.scrollTop = el.scrollHeight;
-  $('foot').textContent = `refreshed ${clock(last.now)} · every 5 s`;
+  $('foot').textContent = `state as of ${clock(last.now)} · pushed on every change`;
 }
-async function refresh() {
-  try { last = await (await fetch('/api/state')).json(); }
-  catch (e) { $('main').innerHTML = `<div class="banner">bead-loop-ui unreachable: ${esc(e.message)}</div>`; return; }
-  render();
-}
-refresh(); setInterval(refresh, 5000);
+// Pushed, not polled: the server sends the whole state whenever anything in it changes.
+// EventSource reconnects by itself; the dot says which.
+let live = false;
+function setLive(on) { live = on; $('live').innerHTML = on ? '<span class="dot on"></span><span class="muted">live</span>' : '<span class="dot bad"></span><span class="muted">reconnecting…</span>'; }
+const es = new EventSource('/api/events');
+es.onopen = () => setLive(true);
+es.onerror = () => setLive(false);
+es.onmessage = (m) => { last = JSON.parse(m.data); render(); };
+// Between pushes the clock still moves: re-render the ages every 10 s from the last state.
+setInterval(() => { if (last && live) { last.now = Math.floor(Date.now() / 1000); render(); } }, 10000);
 </script>
 </body>
 </html>

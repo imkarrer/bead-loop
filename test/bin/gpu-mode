@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Stub gpu-mode for bead-loop tests: only its presence matters to the UI, which reads
+# the mode from $GPU_MODE_STATE itself. Logged for the record.
+echo "$*" >>"$TEST_CTRL/gpu-mode.log"
