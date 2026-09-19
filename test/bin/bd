@@ -11,6 +11,10 @@ case $cmd in
     [ "$n" = 0 ] && n=1000
     jq --arg l "$label" --argjson n "$n" '[.[] | select(.status=="open" and (.labels|index($l)))] | .[0:$n]' "$F" ;;
   show)  jq --arg id "$1" '[.[] | select(.id==$id)]' "$F" ;;
+  list)
+    status=; label=
+    while [ $# -gt 0 ]; do case $1 in --status) status=$2; shift;; -l) label=$2; shift;; -n) shift;; esac; shift; done
+    jq --arg s "$status" --arg l "$label" '[.[] | select(($s=="" or .status==$s) and ($l=="" or (.labels|index($l))))]' "$F" ;;
   update)
     id=$1; shift
     case $1 in

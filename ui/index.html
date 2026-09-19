@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>bead-loop</title>
+<style>
+  :root {
+    --bg: #f6f6f4; --panel: #ffffff; --ink: #1c1c1a; --muted: #6b6b66; --line: #e3e3df;
+    --accent: #3b6ea5; --ok: #2f8f5b; --warn: #b7791f; --bad: #c2413b; --busy: #3b6ea5;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #151614; --panel: #1e1f1c; --ink: #ecebe6; --muted: #9a9a92; --line: #2e2f2b;
+            --accent: #7fb0e6; --ok: #5cc48a; --warn: #e0a84a; --bad: #ef6b63; --busy: #7fb0e6; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.45 system-ui, -apple-system, Segoe UI, sans-serif; }
+  a { color: var(--accent); text-decoration: none; } a:hover { text-decoration: underline; }
+  header { position: sticky; top: 0; z-index: 2; background: var(--panel); border-bottom: 1px solid var(--line);
+           padding: 10px 16px; display: flex; flex-wrap: wrap; gap: 10px 24px; align-items: center; }
+  header h1 { font-size: 16px; margin: 0; letter-spacing: .02em; }
+  .unit { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); display: inline-block; }
+  .dot.on { background: var(--ok); } .dot.busy { background: var(--busy); animation: pulse 1.6s infinite; } .dot.bad { background: var(--bad); }
+  @keyframes pulse { 50% { opacity: .35; } }
+  button { font: inherit; font-size: 13px; padding: 4px 10px; border-radius: 6px; border: 1px solid var(--line);
+           background: var(--panel); color: var(--ink); cursor: pointer; }
+  button:hover { border-color: var(--accent); color: var(--accent); }
+  button.danger:hover { border-color: var(--bad); color: var(--bad); }
+  button:disabled { opacity: .5; cursor: default; }
+  main { padding: 16px; max-width: 1400px; margin: 0 auto; display: grid; gap: 16px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; }
+  .card h2 { margin: 0 0 4px; font-size: 15px; display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+  .card h3 { margin: 14px 0 6px; font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
+  .cfg { color: var(--muted); font-size: 12.5px; }
+  .chip { display: inline-block; padding: 1px 7px; border-radius: 999px; font-size: 11.5px; border: 1px solid var(--line); color: var(--muted); }
+  .chip.ok { color: var(--ok); border-color: var(--ok); } .chip.warn { color: var(--warn); border-color: var(--warn); }
+  .chip.bad { color: var(--bad); border-color: var(--bad); } .chip.busy { color: var(--busy); border-color: var(--busy); }
+  table { border-collapse: collapse; width: 100%; }
+  td, th { text-align: left; padding: 4px 8px 4px 0; vertical-align: top; border-top: 1px solid var(--line); }
+  th { border-top: 0; font-size: 11.5px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); font-weight: 500; }
+  .overview td { padding-top: 7px; padding-bottom: 7px; }
+  tr:first-child td { border-top: 0; }
+  td.id, .mono { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
+  td.muted, .muted { color: var(--muted); }
+  td.act { text-align: right; white-space: nowrap; }
+  .wt { margin: 6px 0 2px; font-family: var(--mono); font-size: 12.5px; color: var(--muted); }
+  .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 0 24px; }
+  @media (max-width: 800px) { .cols { grid-template-columns: 1fr; } }
+  .working { padding: 8px 10px; border-left: 3px solid var(--busy); background: color-mix(in srgb, var(--busy) 8%, transparent); border-radius: 4px; margin-top: 8px; }
+  pre.log { margin: 0; font: 12px/1.5 var(--mono); white-space: pre-wrap; max-height: 40vh; overflow: auto; color: var(--ink); }
+  pre.log .t { color: var(--muted); }
+  .banner { background: color-mix(in srgb, var(--bad) 12%, transparent); border: 1px solid var(--bad); color: var(--ink); padding: 8px 12px; border-radius: 8px; }
+  footer { color: var(--muted); font-size: 12px; text-align: right; }
+  .empty { color: var(--muted); font-style: italic; }
+</style>
+</head>
+<body>
+<header>
+  <h1>bead-loop</h1>
+  <div class="unit" id="timer"></div>
+  <div class="unit" id="tick"></div>
+</header>
+<main id="main"><div class="empty">loading…</div></main>
+<footer id="foot"></footer>
+<script>
+'use strict';
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const ago = (t, now) => { const d = Math.max(0, now - t); return d < 90 ? `${d}s` : d < 5400 ? `${Math.floor(d / 60)}m` : `${Math.floor(d / 3600)}h${String(Math.floor((d % 3600) / 60)).padStart(2, '0')}`; };
+const clock = (t) => new Date(t * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+// systemd prints "Sat 2026-09-19 03:50:00 UTC"; Date.parse wants the weekday gone.
+const systemdTime = (s) => { if (!s) return null; const d = Date.parse(s.replace(/^\w+ /, '')); return Number.isNaN(d) ? null : Math.floor(d / 1000); };
+
+let last = null, busyAction = false;
+async function act(name, body, confirmText) {
+  if (confirmText && !confirm(confirmText)) return;
+  busyAction = true; render();
+  try {
+    const r = await fetch(`/api/${name}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body || {}) });
+    const j = await r.json();
+    if (!r.ok) alert(j.error || r.statusText);
+  } catch (e) { alert(e.message); }
+  busyAction = false;
+  await refresh();
+}
+window.act = act;
+
+function header(s) {
+  const t = s.timer, v = s.service, dis = busyAction ? 'disabled' : '';
+  const ticking = v.available && (v.active === 'active' || v.active === 'activating');
+  const next = systemdTime(t.next), since = systemdTime(v.since);
+  // OnUnitInactiveSec: the next elapse is only known once the tick has finished.
+  const when = next ? `next tick ${clock(next)} (in ${ago(s.now, next)})` : ticking ? 'next tick 10 min after this one ends' : '';
+  $('timer').innerHTML = !t.available ? `<span class="dot"></span><span class="muted">no systemd timer here</span>` : t.active === 'active'
+    ? `<span class="dot on"></span>timer running${when ? ` · ${when}` : ''} <button ${dis} onclick="act('timer',{on:false})">Pause timer</button>`
+    : `<span class="dot"></span>timer paused <button ${dis} onclick="act('timer',{on:true})">Resume timer</button>`;
+  const working = s.repos.map((r) => r.working && `${r.slug}: ${r.working.id}`).filter(Boolean).join(', ');
+  $('tick').innerHTML = !v.available ? '' : ticking
+    ? `<span class="dot busy"></span>tick running${since ? ` ${ago(since, s.now)}` : ''}${working ? ` — ${esc(working)}` : ''} <button class="danger" ${dis} onclick="act('stop',{},'Stop the running tick? The supervisor aborts the model session it is on and the attempt is not recorded.')">Stop tick</button>`
+    : `<span class="dot ${v.result && v.result !== 'success' ? 'bad' : ''}"></span>tick idle${v.result && v.result !== 'success' ? ` (last: ${esc(v.result)})` : ''} <button ${dis} onclick="act('tick')">Tick now</button>`;
+}
+
+const stateChip = (st) => st === 'busy' ? '<span class="chip busy">busy</span>' : st === 'orphan' ? '<span class="chip bad">orphan</span>' : '<span class="chip">idle</span>';
+const beadRow = (b, extra = '') => `<tr><td class="id">${esc(b.id)}</td><td>${esc(b.title || '')}</td><td class="muted">${b.attempts ? `${b.attempts} attempt${b.attempts > 1 ? 's' : ''}` : ''}</td>${extra}</tr>`;
+
+// What the workers are on right now, per repo: the bead the supervisor claimed and the
+// session the server calls busy under its worktree (that is the stage: worker or reviewer).
+function nowLine(r, now) {
+  const w = r.working;
+  const wt = w && r.worktrees.find((x) => x.id === w.id);
+  const live = wt && wt.sessions.find((s) => s.state === 'busy');
+  const anyBusy = r.worktrees.flatMap((x) => x.sessions.filter((s) => s.state !== 'idle').map((s) => ({ ...s, wt: x.id })));
+  if (w) return `<b class="mono">${esc(w.id)}</b> ${esc(w.title || '')}${live ? `<div class="muted">${esc(live.agent)} · ${esc(live.model)} · last output ${ago(live.updated, now)} ago · <a href="${esc(live.url)}" target="_blank" rel="noopener">open ↗</a></div>` : wt ? '<div class="muted">between stages (setup, gate, or the push)</div>' : ''}`;
+  if (anyBusy.length) return anyBusy.map((s) => `<span class="chip ${s.state === 'orphan' ? 'bad' : 'busy'}">${s.state}</span> <span class="mono">${esc(s.agent)}</span> on ${esc(s.wt)} <span class="muted">(no claim recorded: an older supervisor, or a hand-run work)</span>`).join('<br>');
+  return '<span class="muted">idle</span>';
+}
+function overview(s) {
+  if (s.repos.length === 0) return '<section class="card"><div class="empty">no repos: set <span class="mono">repos</span> in ~/.config/bead-loop/config.toml</div></section>';
+  return `<section class="card"><h3 style="margin-top:0">Repos (${s.repos.length})</h3><table class="overview">
+    <tr><th>repo</th><th>now</th><th>ready</th><th>in flight</th><th>parked</th><th>label · base · merge</th></tr>
+    ${s.repos.map((r) => `<tr>
+      <td class="id"><a href="#repo-${esc(r.slug)}">${esc(r.slug)}</a></td>
+      <td>${nowLine(r, s.now)}</td>
+      <td>${r.ready.length}</td>
+      <td>${r.inflight.length}/${r.max_inflight}${r.inflight.some((p) => p.red) ? ' <span class="chip bad">CI red</span>' : ''}</td>
+      <td>${r.parked.length}</td>
+      <td class="muted">${esc(r.label)} · ${esc(r.base)} · ${esc(r.merge)}</td></tr>`).join('')}
+  </table></section>`;
+}
+
+function repo(r, now) {
+  const stages = r.stages.map((s) => `${esc(s.worker)}${s.reviewer ? ` ⇢ ${esc(s.reviewer)}` : ''} ×${s.attempts}`).join(' → ');
+  const sessions = r.worktrees.length === 0 ? '<div class="empty">no worktrees</div>' : r.worktrees.map((w) => `
+    <div class="wt">wt/${esc(w.id)} · attempt ${w.attempts}</div>
+    ${w.sessions.length === 0 ? '<div class="empty">no sessions on the server</div>' : `<table>${w.sessions.map((s) => `
+      <tr><td>${stateChip(s.state)}</td><td class="mono">${esc(s.agent)}</td><td class="mono muted">${esc(s.model)}</td>
+          <td class="muted" title="last activity">${ago(s.updated, now)} ago</td>
+          <td><a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.title || s.id)} ↗</a></td>
+          <td class="act">${s.state !== 'idle' ? `<button class="danger" ${busyAction ? 'disabled' : ''} onclick="act('abort',{attach:${JSON.stringify(r.attach)},session:${JSON.stringify(s.id)}},'Abort ${esc(s.agent)} on ${esc(w.id)}?')">Abort</button>` : ''}</td></tr>`).join('')}</table>`}`).join('');
+  const inflight = r.inflight.length === 0 ? '<div class="empty">none</div>' : `<table>${r.inflight.map((p) => `
+    <tr><td class="id">${esc(p.id)}</td><td><a href="${esc(p.url)}" target="_blank" rel="noopener">${esc(p.url.replace(/^https?:\/\/github\.com\//, ''))} ↗</a></td>
+        <td>${p.red ? '<span class="chip bad">CI red</span>' : '<span class="chip ok">waiting on CI</span>'} ${p.adopted ? '<span class="chip warn">adopted</span>' : ''}</td></tr>`).join('')}</table>`;
+  const ready = r.ready.length === 0 ? '<div class="empty">nothing ready</div>' : `<table>${r.ready.map((b) => beadRow(b)).join('')}</table>`;
+  const parked = r.parked.length === 0 ? '<div class="empty">none</div>' : `<table>${r.parked.map((b) => beadRow(b,
+    `<td class="act"><button ${busyAction ? 'disabled' : ''} onclick="act('reopen',{repo:${JSON.stringify(r.repo)},id:${JSON.stringify(b.id)}})">Reopen</button></td>`)).join('')}</table>`;
+  return `<section class="card" id="repo-${esc(r.slug)}">
+    <h2>${esc(r.slug)} <span class="cfg">${esc(r.label)} · ${esc(r.base)} · merge ${esc(r.merge)} · ${stages}${r.attach ? '' : ' · <b>no attach</b>: sessions not visible'}</span></h2>
+    ${r.working ? `<div class="working">working on <b class="mono">${esc(r.working.id)}</b> ${esc(r.working.title || '')}</div>` : ''}
+    <h3>Sessions</h3>${sessions}
+    <h3>In flight (${r.inflight.length}/${r.max_inflight})</h3>${inflight}
+    <div class="cols">
+      <div><h3>Ready (${r.ready.length})</h3>${ready}</div>
+      <div><h3>Parked (${r.parked.length}) <span class="muted" style="text-transform:none;letter-spacing:0">— in_progress, waiting for you</span></h3>${parked}</div>
+    </div>
+  </section>`;
+}
+
+function render() {
+  if (!last) return;
+  header(last);
+  const log = last.log.length === 0 ? '<div class="empty">no journal (not running under systemd?)</div>'
+    : `<pre class="log" id="log">${last.log.map((l) => `<span class="t">${clock(l.t)}</span>  ${esc(l.msg.replace(/^\d\d:\d\d:\d\d /, ''))}`).join('\n')}</pre>`;
+  $('main').innerHTML = (last.error ? `<div class="banner">status failed: ${esc(last.error)}</div>` : '')
+    + overview(last) + last.repos.map((r) => repo(r, last.now)).join("")
+    + `<section class="card"><h3 style="margin-top:0">Supervisor log</h3>${log}</section>`;
+  const el = $('log'); if (el) el.scrollTop = el.scrollHeight;
+  $('foot').textContent = `refreshed ${clock(last.now)} · every 5 s`;
+}
+async function refresh() {
+  try { last = await (await fetch('/api/state')).json(); }
+  catch (e) { $('main').innerHTML = `<div class="banner">bead-loop-ui unreachable: ${esc(e.message)}</div>`; return; }
+  render();
+}
+refresh(); setInterval(refresh, 5000);
+</script>
+</body>
+</html>

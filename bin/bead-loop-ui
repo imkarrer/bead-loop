@@ -1,0 +1,122 @@
+#!/usr/bin/env node
+// bead-loop-ui: the loop on one page, and the few levers that are worth a button.
+//
+//   bead-loop-ui                 serve http://127.0.0.1:4097 (BEAD_LOOP_UI_PORT, BEAD_LOOP_UI_HOST)
+//
+// Reads: `bead-supervisor --json status` (the one description of a repo's state),
+// journalctl for the supervisor's log, systemctl for the timer and the running tick.
+// Levers, each one command the operator would otherwise type:
+//   abort a session on the opencode server, run a tick now, stop the running tick
+//   (the supervisor's TERM handler aborts its session), pause/resume the timer,
+//   reopen a parked bead. No dependencies beyond node; the page is ui/index.html.
+'use strict';
+const http = require('node:http');
+const fs = require('node:fs');
+const path = require('node:path');
+const { execFile } = require('node:child_process');
+
+const HOME = path.resolve(__dirname, '..');
+const SUPERVISOR = path.join(HOME, 'bin', 'bead-supervisor');
+const PAGE = path.join(HOME, 'ui', 'index.html');
+const PORT = Number(process.env.BEAD_LOOP_UI_PORT || 4097);
+const HOST = process.env.BEAD_LOOP_UI_HOST || '127.0.0.1';
+const UNIT = 'bead-supervisor';
+
+const run = (cmd, args, opts = {}) => new Promise((resolve) => {
+  execFile(cmd, args, { maxBuffer: 16 << 20, ...opts }, (err, stdout, stderr) =>
+    resolve({ ok: !err, code: err ? err.code : 0, stdout: String(stdout || ''), stderr: String(stderr || '') }));
+});
+const jsonLines = (s) => s.split('\n').filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
+
+// ---- what the page reads -------------------------------------------------------------
+async function unitState(name) {
+  const r = await run('systemctl', ['--user', 'show', name, '-p', 'ActiveState,SubState,ExecMainStartTimestamp,LastTriggerUSec,NextElapseUSecRealtime,Result']);
+  if (!r.ok) return { available: false };
+  const p = Object.fromEntries(r.stdout.split('\n').filter(Boolean).map((l) => l.split(/=(.*)/s).slice(0, 2)));
+  return { available: true, active: p.ActiveState, sub: p.SubState, next: p.NextElapseUSecRealtime || null,
+           since: p.ExecMainStartTimestamp || p.LastTriggerUSec || null, result: p.Result || null };
+}
+async function journal(n) {
+  const r = await run('journalctl', ['--user', '-u', `${UNIT}.service`, '-o', 'json', '-n', String(n), '--no-pager']);
+  if (!r.ok) return [];
+  return jsonLines(r.stdout).map((e) => ({ t: Math.floor(Number(e.__REALTIME_TIMESTAMP) / 1e6), msg: typeof e.MESSAGE === 'string' ? e.MESSAGE : '' }))
+    .filter((e) => !/^bead-supervisor\.service: Consumed /.test(e.msg));  // systemd's accounting line, not the loop's
+}
+async function state() {
+  const [status, timer, service, log] = await Promise.all([
+    run(SUPERVISOR, ['--json', 'status']), unitState(`${UNIT}.timer`), unitState(`${UNIT}.service`), journal(80),
+  ]);
+  return {
+    now: Math.floor(Date.now() / 1000),
+    repos: jsonLines(status.stdout),
+    error: status.ok ? null : status.stderr.trim().split('\n').pop(),
+    timer, service, log,
+  };
+}
+
+// ---- the levers ------------------------------------------------------------------------
+const ID = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+async function knownRepos() {
+  const r = await run(SUPERVISOR, ['--json', 'status']);
+  return jsonLines(r.stdout);
+}
+const actions = {
+  // abort {attach, session}: the server keeps a session running after its client is
+  // gone; this is the same POST the supervisor makes when it notices.
+  async abort({ attach, session }) {
+    if (!ID.test(String(session || ''))) throw new Error('bad session id');
+    const repos = await knownRepos();
+    if (!repos.some((r) => r.attach && r.attach === attach)) throw new Error('unknown server');
+    const res = await fetch(`${attach}/session/${session}/abort`, { method: 'POST' });
+    if (!res.ok) throw new Error(`server said ${res.status}`);
+    return { aborted: session };
+  },
+  async tick() { return systemctl('start', '--no-block', `${UNIT}.service`); },
+  async stop() { return systemctl('stop', `${UNIT}.service`); },
+  async timer({ on }) { return systemctl(on ? 'start' : 'stop', `${UNIT}.timer`); },
+  // reopen {repo, id}: a parked bead back in the queue, `bd update ID --status open`.
+  async reopen({ repo, id }) {
+    if (!ID.test(String(id || ''))) throw new Error('bad bead id');
+    const repos = await knownRepos();
+    if (!repos.some((r) => r.repo === repo)) throw new Error('unknown repo');
+    const r = await run('bd', ['update', id, '--status', 'open'], { cwd: repo });
+    if (!r.ok) throw new Error(r.stderr.trim() || `bd exited ${r.code}`);
+    return { reopened: id };
+  },
+};
+async function systemctl(...args) {
+  const r = await run('systemctl', ['--user', ...args]);
+  if (!r.ok) throw new Error(r.stderr.trim() || `systemctl exited ${r.code}`);
+  return { ran: `systemctl --user ${args.join(' ')}` };
+}
+
+// ---- http -------------------------------------------------------------------------------
+const send = (res, code, body, type = 'application/json') => {
+  res.writeHead(code, { 'content-type': type + '; charset=utf-8', 'cache-control': 'no-store' });
+  res.end(type === 'application/json' ? JSON.stringify(body) : body);
+};
+const readBody = (req) => new Promise((resolve, reject) => {
+  let s = ''; req.on('data', (c) => { s += c; if (s.length > 1e5) reject(new Error('body too large')); });
+  req.on('end', () => { try { resolve(s ? JSON.parse(s) : {}); } catch (e) { reject(e); } });
+});
+
+const server = http.createServer(async (req, res) => {
+  const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+  try {
+    if (req.method === 'GET' && url.pathname === '/') return send(res, 200, fs.readFileSync(PAGE, 'utf8'), 'text/html');
+    if (req.method === 'GET' && url.pathname === '/api/state') return send(res, 200, await state());
+    if (req.method === 'POST' && url.pathname.startsWith('/api/')) {
+      // Only the page itself may pull a lever: a browser sends Sec-Fetch-Site on every
+      // request, and anything cross-site (another tab, another origin) is refused.
+      const site = req.headers['sec-fetch-site'];
+      if (site && site !== 'same-origin' && site !== 'none') return send(res, 403, { error: 'same-origin only' });
+      const name = url.pathname.slice('/api/'.length);
+      if (!actions[name]) return send(res, 404, { error: 'no such action' });
+      return send(res, 200, await actions[name](await readBody(req)));
+    }
+    send(res, 404, { error: 'not found' });
+  } catch (e) {
+    send(res, 500, { error: e.message });
+  }
+});
+server.listen(PORT, HOST, () => console.log(`bead-loop-ui: http://${HOST}:${PORT}  (supervisor: ${SUPERVISOR})`));

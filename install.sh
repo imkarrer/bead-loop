@@ -18,6 +18,7 @@ if command -v claude >/dev/null; then
   for s in "$HERE"/skills/*/; do n=$(basename "$s"); ln -sfnT "$s" "$HOME/.claude/skills/$n"; echo "skill  ~/.claude/skills/$n -> $s (Claude Code)"; done
 fi
 ln -sfnT "$HERE/bin/bead-supervisor" "$HOME/.local/bin/bead-supervisor"
+ln -sfnT "$HERE/bin/bead-loop-ui" "$HOME/.local/bin/bead-loop-ui"
 echo "bin    ~/.local/bin/bead-supervisor"
 case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) echo "       (add ~/.local/bin to PATH, or call $HERE/bin/bead-supervisor)";; esac
 
@@ -43,5 +44,6 @@ CFG
 fi
 cp "$HERE"/systemd/*.service "$HERE"/systemd/*.timer "$HOME/.config/systemd/user/"
 systemctl --user daemon-reload
+echo "ui     bead-loop-ui.service: http://127.0.0.1:4097 once started"
 echo "timer  installed, not enabled. Start the loop with:"
-echo "       systemctl --user enable --now bead-supervisor.timer"
+echo "       systemctl --user enable --now opencode-web.service bead-loop-ui.service bead-supervisor.timer"

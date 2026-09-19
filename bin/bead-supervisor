@@ -10,6 +10,7 @@
 #   bead-supervisor log REPO [BEAD_ID]    follow the newest worker/reviewer session: tool calls and text
 #
 #   --dry-run    pick the bead, print the prompt, change nothing
+#   --json       status as one JSON object per repo (what the web UI reads)
 #   --local      implement, gate and review; keep the branch here, no push, no PR
 #   --model M    opencode provider/model for the worker this run
 #
@@ -59,14 +60,15 @@ stages_words() {
     | map([.worker, (.reviewer // ""), (.attempts // 1), (.timeout // "")] | map(tostring) | join(":")) | join(" ")'
 }
 
-DRY=0 LOCAL=0 MODEL_FLAG=
+DRY=0 LOCAL=0 JSON=0 MODEL_FLAG=
 ARGS=()
 while [ $# -gt 0 ]; do
   case $1 in
     --dry-run) DRY=1 ;;
+    --json) JSON=1 ;;
     --local) LOCAL=1 ;;
     --model) MODEL_FLAG=$2; shift ;;
-    -h|--help) sed -n '2,27p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,28p' "$0"; exit 0 ;;
     *) ARGS+=("$1") ;;
   esac
   shift
@@ -173,7 +175,7 @@ abort_sessions() {
 # systemd stops the unit by signalling the whole cgroup: the client dies with us, the
 # server-side session would not. CUR_WT is the worktree an attempt is working.
 CUR_WT=
-on_signal() { [ -n "$CUR_WT" ] && abort_sessions "$CUR_WT"; exit 143; }
+on_signal() { [ -n "$CUR_WT" ] && abort_sessions "$CUR_WT"; rm -f "${RS:-/nonexistent}/.working"; exit 143; }
 trap on_signal TERM INT
 
 render_bead() {
@@ -281,6 +283,7 @@ PROMPT
   if [ "$LOCAL" = 0 ]; then need gh; fi
 
   bdr update "$id" --claim >/dev/null
+  printf '%s\n' "$id" >"$RS/.working"  # the bead this process is on, for status
   git -C "$REPO" fetch -q origin "$BASE"
   abort_sessions "$wt"  # a killed earlier attempt may have left one running here
   if [ -e "$wt" ]; then git -C "$REPO" worktree remove --force "$wt" 2>/dev/null || rm -rf "$wt"; fi
@@ -385,7 +388,7 @@ BODY
   log "$SLUG: opened $url"
   if [ "$MERGE" = pipeline ]; then hand_to_pipeline "$id" "$num" "$url"; fi
   git -C "$REPO" worktree remove --force "$wt"
-  CUR_WT=
+  CUR_WT=; rm -f "$RS/.working"
 }
 
 # review ID WT BEAD_JSON WORKER_FINAL LOG: prints the reviewer's last words.
@@ -421,7 +424,7 @@ fail() {
   printf '%s\n' "$n" >"$RS/attempts/$id"
   printf 'attempt %s (%s): %s\n' "$n" "$MODEL" "$(printf '%s' "$note" | tr '\n' ' ' | cut -c1-600)" >>"$RS/attempts/$id.notes"
   git -C "$REPO" worktree remove --force "$wt" 2>/dev/null || true
-  CUR_WT=
+  CUR_WT=; rm -f "$RS/.working"
   git -C "$REPO" branch -D "bead/$id" >/dev/null 2>&1 || true
   if [ "$S_LAST" = 1 ] && printf '%s' "$note" | grep -q 'BLOCKED:'; then
     log "$SLUG: $id: BLOCKED at the last stage, parked for you"; return 0
@@ -544,47 +547,80 @@ log_follow() {
     else empty end'
 }
 
-status_one() {
-  local f
-  # What the next attempt would actually get: the first stage, not the bare keys.
-  local s1
-  s1=$(printf '%s' "$STAGES" | cut -d' ' -f1)
-  printf '%s  label=%s base=%s merge=%s stages=%s  first: worker=%s reviewer=%s\n' "$SLUG" "$LABEL" "$BASE" "$MERGE" "$(printf '%s' "$STAGES" | wc -w)" "$(printf '%s' "$s1" | cut -d: -f1)" "$(printf '%s' "$s1" | cut -d: -f2 | sed 's/^$/none/')"
-  for f in "$RS"/inflight/*; do
-    [ -e "$f" ] || continue
-    printf '  %s  %s%s%s\n' "$(basename "$f")" "$(cat "$f")" "$( [ -e "$(mark "$(basename "$f")" red)" ] && printf '  [red]')" "$( [ -e "$(mark "$(basename "$f")" adopted)" ] && printf '  [adopted]')"
-  done
-  printf '  ready: %s\n' "$(bdr ready -l "$LABEL" --json -n 0 2>/dev/null | jq -r '[.[].id] | join(" ")')"
-  sessions_one
+# ---- status -------------------------------------------------------------------
+# The one description of a repo's state, as JSON: config, PRs in flight, the ready
+# queue, parked beads, and every worktree with what the attached opencode server has
+# under it. `status` renders it as text; `status --json` prints it for the web UI.
+
+# sessions_json DIR: the server's top-level sessions under DIR, newest first, with the
+# state and web UI url worked out. The UI files sessions under the worktree's path,
+# base64url-encoded; nobody should have to know that to find one. A session the server
+# calls busy with no `opencode run` client left on this box is an orphan: a timeout or a
+# kill took the client and the model is still working for nobody.
+sessions_json() {
+  local dir=$1 busy list clients
+  { [ -n "$ATTACH" ] && command -v curl >/dev/null; } || { printf '[]'; return; }
+  busy=$(curl -sfG -m 3 "$ATTACH/session/status" --data-urlencode "directory=$dir" 2>/dev/null || echo '{}')
+  list=$(curl -sfG -m 3 "$ATTACH/session" --data-urlencode "directory=$dir" 2>/dev/null || echo '[]')
+  clients=$(pgrep -fc -- "opencode run --dir $dir " 2>/dev/null || true)
+  printf '%s' "$list" | jq -c --argjson busy "$busy" --arg clients "${clients:-0}" \
+      --arg url "$ATTACH/$(printf '%s' "$dir" | base64 -w0 | tr '+/' '-_' | tr -d '=')" '
+    [.[] | select(.parentID == null)] | sort_by(-.time.updated) | .[:4]
+    | map({id, agent, model: "\(.model.providerID)/\(.model.id)", title: (.title // ""),
+           updated: (.time.updated / 1000 | floor),
+           state: (if $busy[.id] then (if ($clients | tonumber) > 0 then "busy" else "orphan" end) else "idle" end),
+           url: "\($url)/session/\(.id)"})'
 }
 
-# sessions_one: every worktree in the repo's state, and what the attached opencode server
-# has under it — one line per session, newest first: state, agent, model, when it last
-# produced anything, its title, and the web UI url (the UI files sessions under the
-# worktree's path, base64url-encoded; nobody should have to know that to find one).
-# A session the server calls busy with no `opencode run` client left on this box is an
-# orphan: a timeout or a kill took the client and the model is still working for nobody.
-sessions_one() {
-  local dir id n busy list clients
-  for dir in "$RS"/wt/*/; do
-    dir=${dir%/}; id=$(basename "$dir")
-    [ -d "$dir" ] || continue
-    n=$(attempts_of "$id")
-    printf '  wt/%s  attempt %s' "$id" "$n"
-    if [ -z "$ATTACH" ] || ! command -v curl >/dev/null; then printf '  (no attach: logs/%s.*)\n' "$id"; continue; fi
-    printf '\n'
-    busy=$(curl -sfG -m 3 "$ATTACH/session/status" --data-urlencode "directory=$dir" 2>/dev/null || echo '{}')
-    list=$(curl -sfG -m 3 "$ATTACH/session" --data-urlencode "directory=$dir" 2>/dev/null || echo '[]')
-    clients=$(pgrep -fc -- "opencode run --dir $dir " 2>/dev/null || true)
-    printf '%s' "$list" | jq -r --argjson busy "$busy" --arg clients "${clients:-0}" --arg attach "$ATTACH" \
-        --arg url "$ATTACH/$(printf '%s' "$dir" | base64 -w0 | tr '+/' '-_' | tr -d '=')" '
-      def pad(n): .[0:n] | . + " " * (n - length);
-      def age: (now - . / 1000) | if . < 90 then "\(.|floor)s" elif . < 5400 then "\(. / 60 | floor)m" else "\(. / 3600 | floor)h" end;
-      [.[] | select(.parentID == null)] | sort_by(-.time.updated) | .[:4][]
-      | (if $busy[.id] then (if ($clients|tonumber) > 0 then "busy  " else "ORPHAN" end) else "idle  " end) as $st
-      | "    \($st)  \(.agent // "?" | pad(13))  \("\(.model.providerID)/\(.model.id)" | pad(18))  \("\(.time.updated | age) ago" | pad(7))  \(.title // "" | pad(48))  \($url)/session/\(.id)"
-      + (if $st == "ORPHAN" then "\n            no client on this box; stop it:  curl -X POST \($attach)/session/\(.id)/abort" else "" end)'
+# status_json: this repo, one JSON object.
+status_json() {
+  local f id dir inflight='[]' worktrees='[]' attempts='{}'
+  for f in "$RS"/inflight/*; do
+    [ -e "$f" ] || continue
+    id=$(basename "$f")
+    inflight=$(printf '%s' "$inflight" | jq -c --arg id "$id" --arg url "$(cat "$f")" \
+      --argjson red "$([ -e "$(mark "$id" red)" ] && echo true || echo false)" \
+      --argjson adopted "$([ -e "$(mark "$id" adopted)" ] && echo true || echo false)" \
+      '. + [{id: $id, url: $url, red: $red, adopted: $adopted}]')
   done
+  for f in "$RS"/attempts/*; do
+    [ -e "$f" ] || continue; case $f in *.notes) continue ;; esac
+    attempts=$(printf '%s' "$attempts" | jq -c --arg id "$(basename "$f")" --arg n "$(cat "$f")" '. + {($id): ($n | tonumber)}')
+  done
+  for dir in "$RS"/wt/*/; do
+    dir=${dir%/}; [ -d "$dir" ] || continue; id=$(basename "$dir")
+    worktrees=$(printf '%s' "$worktrees" | jq -c --arg id "$id" --arg dir "$dir" --argjson n "$(attempts_of "$id")" \
+      --argjson s "$(sessions_json "$dir")" '. + [{id: $id, dir: $dir, attempts: $n, sessions: $s}]')
+  done
+  jq -cn --arg slug "$SLUG" --arg repo "$REPO" --arg label "$LABEL" --arg base "$BASE" --arg merge "$MERGE" \
+    --arg stages "$STAGES" --arg attach "$ATTACH" --argjson max_inflight "$MAX_INFLIGHT" --arg working "$(cat "$RS/.working" 2>/dev/null)" \
+    --argjson inflight "$inflight" --argjson attempts "$attempts" --argjson worktrees "$worktrees" \
+    --argjson ready "$(bdr ready -l "$LABEL" --json -n 0 2>/dev/null | jq -c '. // []' 2>/dev/null || echo '[]')" \
+    --argjson parked "$(bdr list --status in_progress -l "$LABEL" --json -n 0 2>/dev/null | jq -c '. // []' 2>/dev/null || echo '[]')" '
+    def bead: {id, title, priority, attempts: ($attempts[.id] // 0)};
+    {slug: $slug, repo: $repo, label: $label, base: $base, merge: $merge, attach: $attach, max_inflight: $max_inflight,
+     working: (if $working == "" then null else (($parked | map(select(.id == $working) | bead) | .[0]) // {id: $working}) end),
+     stages: ($stages | split(" ") | map(split(":") | {worker: .[0], reviewer: .[1], attempts: (.[2] | tonumber)})),
+     inflight: $inflight, ready: ($ready | map(bead)),
+     parked: ($parked | map(select(.id as $i | ($inflight | map(.id) + [$working]) | index($i) | not) | bead)),
+     worktrees: $worktrees}'
+}
+
+# status_one: status_json as text.
+status_one() {
+  status_json | jq -r '
+    def pad(n): .[0:n] | . + " " * (n - length);
+    def age: (now - .) | if . < 90 then "\(.|floor)s" elif . < 5400 then "\(. / 60 | floor)m" else "\(. / 3600 | floor)h" end;
+    "\(.slug)  label=\(.label) base=\(.base) merge=\(.merge) stages=\(.stages | length)  first: worker=\(.stages[0].worker) reviewer=\(.stages[0].reviewer | if . == "" then "none" else . end)",
+    (.inflight[] | "  \(.id)  \(.url)\(if .red then "  [red]" else "" end)\(if .adopted then "  [adopted]" else "" end)"),
+    "  ready: \(.ready | map(.id) | join(" "))",
+    (if .working then "  working: \(.working.id)" else empty end),
+    (if (.parked | length) > 0 then "  parked: \(.parked | map(.id) | join(" "))" else empty end),
+    (.attach as $attach | .worktrees[] |
+      "  wt/\(.id)  attempt \(.attempts)\(if $attach == "" then "  (no attach: logs/\(.id).*)" else "" end)",
+      (.sessions[] |
+        "    \(.state | ascii_upcase | if . == "ORPHAN" then . else ascii_downcase | pad(6) end)  \(.agent // "?" | pad(13))  \(.model | pad(18))  \("\(.updated | age) ago" | pad(7))  \(.title | pad(48))  \(.url)"
+        + (if .state == "orphan" then "\n            no client on this box; stop it:  curl -X POST \($attach)/session/\(.id)/abort" else "" end)))'
 }
 
 # watch: status every few seconds, with the last supervisor log lines above it.
@@ -610,7 +646,7 @@ case $CMD in
   tick)      for r in "${REPOS[@]}"; do load_repo "$r"; reconcile; work_one; done ;;
   work)      load_repo "${REPOS[0]}"; work_one "${REPOS[1]:-}" ;;
   reconcile) for r in "${REPOS[@]}"; do load_repo "$r"; reconcile; done ;;
-  status)    for r in "${REPOS[@]}"; do load_repo "$r"; status_one; done ;;
+  status)    for r in "${REPOS[@]}"; do load_repo "$r"; if [ "$JSON" = 1 ]; then status_json; else status_one; fi; done ;;
   watch)     WATCH_INTERVAL=${BEAD_LOOP_WATCH:-5}; watch_loop ;;
   log)       load_repo "${REPOS[0]}"; log_follow "${REPOS[1]:-}" ;;
   *) die "unknown command $CMD" ;;
