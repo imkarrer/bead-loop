@@ -178,7 +178,8 @@ event stream; nobody presses refresh):
   stage that puts it on), **review** (how long each has waited), **merge** (each PR with
   GitHub's word on it — CI running m/n, red with the failing check, green, merged — asked
   once a minute, so "merged · bead closes on the next tick" shows the moment it merges).
-  Then the parked beads, with Reopen. Only when there is one, a session the server is still
+  Then the parked beads, each with **why** — the last note the loop left on it (the rejection,
+  the failing check, the BLOCKED line), in full — and Reopen. Only when there is one, a session the server is still
   running that is on no lane (an orphan of a killed round, a hand-run `work`), with Abort.
   Idle sessions are history and are not shown; the session link has them.
 - **The supervisor's log**, live, and the timer: running or paused, when the next tick is.
