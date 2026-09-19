@@ -71,10 +71,15 @@ case_done_to_pr() {
   assert_branch bead/t-1 "branch pushed"
   assert_file "$BEAD_LOOP_STATE/repo/inflight/t-1" "inflight recorded"
   assert_eq "$(bead .status)" in_progress "bead parked in_progress until merge"
+  assert_eq "$(bead .assignee)" delegate:local "claimed as the label, not the git user"
   assert_match "$(bead '.comments[0]')" "pull/7" "PR url on the bead"
   assert_nofile "$BEAD_LOOP_STATE/repo/wt/t-1" "worktree removed after push"
   assert_match "$(cat "$TEST_CTRL/gh.log")" "pr create --base main --head bead/t-1" "PR against base"
   ! grep -q -- '--auto' "$TEST_CTRL/gh.log" && ok || bad "never asks GitHub to auto-merge"
+}
+case_actor_from_env() {
+  setup; BEADS_ACTOR=delegate:acbox sup work "$REPO"
+  assert_eq "$(bead .assignee)" delegate:acbox "BEADS_ACTOR in the environment wins over the label"
 }
 case_blocked() {
   setup; echo blocked >"$TEST_CTRL/worker"; sup work "$REPO"
