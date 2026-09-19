@@ -15,9 +15,9 @@ flowchart TD
     R[reconcile: read every open bead PR] --> P{bd ready -l LABEL}
     P -- nothing --> Z([done])
     P -- top bead --> C[bd claim<br/>git worktree add bead/ID off origin/BASE]
-    C --> U[SETUP<br/>npm ci]
+    C --> U[setup<br/>npm ci]
     U --> W[implementor session<br/>bead-worker agent]
-    W -- DONE + commit --> G[GATE<br/>typecheck · lint]
+    W -- DONE + commit --> G[gate<br/>typecheck · lint · test]
     W -- BLOCKED --> F
     G -- fail, first time --> W
     G -- fail, second time --> F
@@ -93,6 +93,33 @@ house style, vocabulary) stay in each repo under `.agents/skills/` or
    the repo; if GitHub refuses it, that is noted on the bead and the PR waits for you.
    (GitHub's own auto-merge is not used: private repos need a paid plan for it.)
 
+## Config
+
+Two TOML files, every key optional. A key in the repo file wins over the same key in
+the global one; the global one wins over the default. Anything may go in either.
+
+| Key | Default | What |
+| --- | --- | --- |
+| `repos` | `[]` | global only: the repos a `tick` walks, `~` allowed |
+| `label` | `"delegate:local"` | `bd ready -l LABEL` picks the work |
+| `base` | origin's HEAD | branch to fork from and PR into |
+| `setup` | none | runs in the fresh worktree before the worker (`npm ci`) |
+| `gate` | none (CI is the gate) | runs after the worker, before any push; one revision round on failure |
+| `model` | none | the worker when no `[[stages]]` table applies |
+| `review_model` | none (no review) | the senior model that judges the diff before the push |
+| `[[stages]]` | one attempt with `model`/`review_model` | `worker`, `reviewer`, `attempts` (1), `timeout` (`worker_timeout`), in order |
+| `on_exhaust` | `"park"` | after the last stage: `park` for you, or `repeat` the stages |
+| `merge` | `"auto"` | `auto`: the tick merges on green · `pipeline`: the loop labels, CI merges · `manual`: PR only |
+| `merge_label` | `"automerge"` | the label `pipeline` puts on each PR |
+| `adopt` | `true` | open `bead/*` PRs from anyone join the loop |
+| `max_inflight` | `1` | open PRs per repo before the loop waits for CI |
+| `worker_timeout` | `3600` | seconds per model session |
+| `attach` | none | an opencode server url; sessions run there and stream in its web UI |
+
+`bead-loop.example.toml` is the repo file with every key annotated; `install.sh` seeds
+the global one. A file that does not parse stops the run with its name, rather than
+silently running with defaults.
+
 ## Watching it
 
 Interactive: `opencode-web.service` serves opencode's web UI at
@@ -164,8 +191,8 @@ bead is false, and no model fixes that.
 ## PRs from anyone
 
 `reconcile` also **adopts** any open PR on a `bead/<id>…` branch it did not open — another
-session's, or yours by hand. It merges on green like its own and closes the bead the
-branch names. Adopted PRs cost CI, not the model, so they do not count toward
+session's, or yours by hand. It treats it like its own: merged on green under `auto`,
+labelled for the pipeline under `pipeline`, and the bead the branch names closes. Adopted PRs cost CI, not the model, so they do not count toward
 `max_inflight`. `adopt = false` turns it off.
 
 ## What each outcome does to the bead
@@ -178,7 +205,9 @@ branch names. Adopted PRs cost CI, not the model, so they do not count toward
 | Reviewer `REJECT:` twice | note with the last rejection; next attempt | removed |
 | Attempts exhausted (`on_exhaust = "park"`) | in_progress, for you | — |
 | PR opened | in_progress, comment with the url | pushed |
-| CI green | closed with the PR url | squash-merged, branch deleted |
+| CI green, `merge = "auto"` | closed with the PR url | squash-merged by the tick, branch deleted |
+| CI green, `merge = "pipeline"` | closed once the pipeline has merged | labelled `automerge` at open; the pipeline merges |
+| CI green, `merge = "manual"` | in_progress | PR left open for you |
 | CI red | in_progress, one note | PR left open for you |
 | PR closed unmerged | in_progress, note | gone |
 
