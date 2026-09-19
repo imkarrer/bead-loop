@@ -1,5 +1,5 @@
 flowchart TD
-  T([systemd user timer<br/>every 10 min, one tick]) --> R
+  T([systemd user timer<br/>3 min after the last tick ended]) --> R
 
   subgraph tick [bead-supervisor tick — bash, deterministic, one bead per repo]
     direction TB
@@ -10,7 +10,7 @@ flowchart TD
     U --> W[implementor session<br/>bead-worker agent]
     W -- DONE + commit --> G[gate<br/>typecheck · lint · test]
     W -- BLOCKED --> F
-    G -- fail, first time --> W
+  subgraph tick [bead-supervisor tick — bash, deterministic; a pass per repo, again while there is work]
     G -- fail, second time --> F
     G -- pass --> V[review session<br/>bead-reviewer agent, read-only]
     V -- REJECT, first time --> W

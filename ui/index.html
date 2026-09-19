@@ -78,22 +78,22 @@
   td.title .t { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   td.fit { white-space: nowrap; }
 
-  /* overview: the hero table; counts are big so a glance answers "anything waiting?" */
-  .overview td { padding-top: 12px; padding-bottom: 12px; }
-  .overview td.id { font-size: 14.5px; }
-  .count { font: 600 22px/1 var(--mono); color: var(--bright); }
+  /* the hero: which bead this tick is on, readable from across the room */
+  .hero { margin: 14px 0 0; padding: 16px 20px; border-radius: 8px; background: var(--base03); border-left: 4px solid var(--busy); }
+  .hero.idle { border-left-color: var(--base01); }
+  .hero .label { font-size: 11.5px; text-transform: uppercase; letter-spacing: .12em; color: var(--muted); font-weight: 600; }
+  .hero .label .muted { text-transform: none; letter-spacing: 0; font-weight: 400; }
+  .hero .bead { font: 600 30px/1.15 var(--mono); color: var(--accent); margin-top: 6px; }
+  .hero .what { font-size: 16px; color: var(--base2); margin-top: 4px; line-height: 1.4; }
+  .hero.idle .what { color: var(--muted); font-style: italic; font-size: 15px; }
+  .hero .stage { margin-top: 12px; color: var(--muted); display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .counts { display: flex; gap: 36px; align-items: flex-start; margin: 16px 0 4px; }
+  .count { font: 600 24px/1 var(--mono); color: var(--bright); }
   .count.zero { color: var(--muted); font-weight: 400; }
-  .count small { display: block; font: 11px/1.4 system-ui, sans-serif; color: var(--muted); text-transform: uppercase; letter-spacing: .08em; margin-top: 4px; }
-  .now .bead { font-family: var(--mono); font-size: 13.5px; color: var(--accent); font-weight: 600; }
-  .now .t { color: var(--bright); }
-  .now .stage { margin-top: 4px; color: var(--muted); display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-  .now .idle { color: var(--muted); font-style: italic; }
+  .count small { display: block; font: 11px/1.4 system-ui, sans-serif; color: var(--muted); text-transform: uppercase; letter-spacing: .08em; margin-top: 5px; }
 
-  .wt { margin: 10px 0 4px; font-family: var(--mono); font-size: 12.5px; color: var(--muted); }
-  .wt b { color: var(--base00); font-weight: 600; }
   .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 0 32px; }
   @media (max-width: 900px) { .cols { grid-template-columns: 1fr; } }
-  .working { padding: 10px 14px; border-left: 3px solid var(--busy); background: rgba(42, 161, 152, .08); border-radius: 4px; margin: 12px 0 0; color: var(--bright); }
 
   pre.log { margin: 0; font: 12.5px/1.6 var(--mono); white-space: pre-wrap; max-height: 44vh; overflow: auto; color: var(--ink); }
   pre.log .t { color: var(--muted); }
@@ -151,7 +151,7 @@ function header(s) {
   const ticking = v.available && (v.active === 'active' || v.active === 'activating');
   const next = systemdTime(t.next), since = systemdTime(v.since);
   // OnUnitInactiveSec: the next elapse is only known once the tick has finished.
-  const when = next ? `next tick ${clock(next)} (in ${ago(s.now, next)})` : ticking ? 'next tick 10 min after this one ends' : '';
+  const when = next ? `next tick ${clock(next)} (in ${ago(s.now, next)})` : ticking ? `next tick ${t.gap ? t.gap + ' ' : ''}after this one ends` : '';
   $('timer').innerHTML = !t.available ? `<span class="dot"></span><span class="muted">no systemd timer here</span>` : t.active === 'active'
     ? `<span class="dot on"></span>timer running${when ? ` · ${when}` : ''} <button ${dis} onclick="act('timer',{on:false})">Pause timer</button>`
     : `<span class="dot"></span>timer paused <button ${dis} onclick="act('timer',{on:true})">Resume timer</button>`;
@@ -188,39 +188,51 @@ const count = (n, label, cls = '') => `<div class="count ${n ? '' : 'zero'}">${n
 
 // What the workers are on right now, per repo: the bead the supervisor claimed and the
 // session the server calls busy under its worktree (that is the stage: worker or reviewer).
-function nowLine(r, now) {
-  const w = r.working;
-  const wt = w && r.worktrees.find((x) => x.id === w.id);
+// The one thing that matters per repo: the bead the supervisor is on, and the session
+// that is live for it — that is the stage (worker or reviewer), with the lever to stop it.
+// Idle sessions are history and are not shown; the opencode link has them.
+const abortBtn = (r, sess, label) => `<button class="danger" ${busyAction ? 'disabled' : ''} onclick="act('abort',{attach:${JSON.stringify(r.attach)},session:${JSON.stringify(sess.id)}},'Abort ${esc(label)}?')">Abort</button>`;
+// The hero: which bead this tick is on. The supervisor's own record (.working, written
+// at claim) first; failing that, the one worktree with a busy session while a tick is
+// running — the pre-record case, and a hand-run `work` — said as such.
+function workingOf(r, ticking) {
+  if (r.working) return { ...r.working, inferred: false };
+  if (!ticking) return null;
+  const busy = r.worktrees.filter((x) => x.sessions.some((s) => s.state === 'busy'));
+  if (busy.length !== 1) return null;
+  const b = r.parked.find((p) => p.id === busy[0].id) || r.ready.find((p) => p.id === busy[0].id);
+  return { id: busy[0].id, title: b ? b.title : '', inferred: true };
+}
+function hero(r, now, ticking) {
+  const w = workingOf(r, ticking);
+  if (!w) return `<div class="hero idle"><div class="label">this tick</div><div class="what">${ticking ? 'tick running — reconciling, or picking a bead' : 'nothing — waiting for the next tick'}</div></div>`;
+  const wt = r.worktrees.find((x) => x.id === w.id);
   const live = wt && wt.sessions.find((s) => s.state === 'busy');
-  const anyBusy = r.worktrees.flatMap((x) => x.sessions.filter((s) => s.state !== 'idle').map((s) => ({ ...s, wt: x.id })));
-  if (w) return `<div class="now"><span class="bead">${esc(w.id)}</span> <span class="t">${esc(w.title || '')}</span>
-    <div class="stage">${live ? `${roleChip(live.agent)} <span class="mono">${esc(live.model)}</span> <span>last output ${ago(live.updated, now)} ago</span> <a href="${esc(live.url)}" target="_blank" rel="noopener">open session ↗</a>`
-      : wt ? '<span>between stages — setup, gate, or the push</span>' : '<span>claimed, worktree not up yet</span>'}</div></div>`;
-  if (anyBusy.length) return `<div class="now">${anyBusy.map((s) => `<div class="stage">${stateChip(s.state)} ${roleChip(s.agent)} on <span class="mono">${esc(s.wt)}</span> <span>no claim recorded — an older supervisor, or a hand-run <span class="mono">work</span></span></div>`).join('')}</div>`;
-  return '<div class="now"><span class="idle">idle — waiting for the next tick</span></div>';
+  return `<div class="hero">
+    <div class="label">this tick${w.inferred ? ' <span class="muted">(read from the running session; the supervisor left no claim record)</span>' : ''}</div>
+    <div class="bead">${esc(w.id)}</div>
+    <div class="what">${esc(w.title || '')}</div>
+    <div class="stage">${wt ? `<span>attempt ${wt.attempts + 1}</span>` : ''}
+      ${live ? `${roleChip(live.agent)} <span class="mono">${esc(live.model)}</span> <span>last output ${ago(live.updated, now)} ago</span> <a href="${esc(live.url)}" target="_blank" rel="noopener">open session ↗</a> ${abortBtn(r, live, `${live.agent} on ${w.id}`)}`
+        : wt ? '<span>between stages — setup, gate, or the push</span>' : '<span>claimed, worktree not up yet</span>'}</div>
+  </div>`;
 }
-function overview(s) {
-  if (s.repos.length === 0) return '<section class="card"><div class="empty">no repos: set <span class="mono">repos</span> in ~/.config/bead-loop/config.toml</div></section>';
-  return `<section class="card"><h3>Repos<span class="n">${s.repos.length}</span></h3><table class="overview">
-    <tr><th>repo</th><th>now</th><th></th><th></th><th></th></tr>
-    ${s.repos.map((r) => `<tr>
-      <td class="id"><a href="#repo-${esc(r.slug)}">${esc(r.slug)}</a><div class="cfg" style="margin-top:4px">${esc(r.label)}<br>${esc(r.base)} · ${esc(r.merge)}</div></td>
-      <td class="title">${nowLine(r, s.now)}</td>
-      <td class="fit">${count(r.ready.length, 'ready')}</td>
-      <td class="fit">${count(r.inflight.length, `in flight · max ${r.max_inflight}`)}${r.inflight.some((p) => p.red) ? '<div style="margin-top:6px"><span class="chip bad">CI red</span></div>' : ''}</td>
-      <td class="fit">${count(r.parked.length, 'parked')}</td></tr>`).join('')}
-  </table></section>`;
+// Sessions the server is still running that are not the working bead's: an orphan of a
+// killed attempt, or a hand-run `work`. Nothing here is the common case, so the block
+// only appears when there is something to stop.
+function strays(r, now) {
+  const wid = r.__working && r.__working.id;
+  const rows = r.worktrees.filter((x) => x.id !== wid).flatMap((x) => x.sessions.filter((s) => s.state !== 'idle').map((s) => ({ ...s, wt: x })));
+  if (rows.length === 0) return '';
+  return `<h3>Also running<span class="n">${rows.length}</span><span class="note">not the bead being worked — an older attempt, or a hand-run work</span></h3><table>${rows.map((s) => `
+    <tr><td class="fit">${stateChip(s.state)}</td><td class="fit">${roleChip(s.agent)}</td><td class="id">${esc(s.wt.id)}</td><td class="mono muted fit">${esc(s.model)}</td>
+        <td class="muted fit">${ago(s.updated, now)} ago</td>
+        <td class="title"><span class="t"><a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(titleOf(s, s.wt))} ↗</a></span></td>
+        <td class="act">${abortBtn(r, s, `${s.agent} on ${s.wt.id}`)}</td></tr>`).join('')}</table>`;
 }
-
-function repo(r, now) {
+function repo(r, now, ticking) {
+  r.__working = workingOf(r, ticking);
   const stages = r.stages.map((s) => `<span class="mono">${esc(s.worker)}</span>${s.reviewer ? ` ⇢ <span class="mono">${esc(s.reviewer)}</span>` : ''} ×${s.attempts}`).join(' &nbsp;→&nbsp; ');
-  const sessions = r.worktrees.length === 0 ? '<div class="empty">no worktrees — nothing has been picked up</div>' : r.worktrees.map((w) => `
-    <div class="wt"><b>wt/${esc(w.id)}</b> · attempt ${w.attempts}</div>
-    ${w.sessions.length === 0 ? '<div class="empty">no sessions on the server</div>' : `<table>${w.sessions.map((s) => `
-      <tr><td class="fit">${stateChip(s.state)}</td><td class="fit">${roleChip(s.agent)}</td><td class="mono muted fit">${esc(s.model)}</td>
-          <td class="muted fit" title="last activity">${ago(s.updated, now)} ago</td>
-          <td class="title"><span class="t"><a href="${esc(s.url)}" target="_blank" rel="noopener" title="${esc(titleOf(s, w))}">${esc(titleOf(s, w))} ↗</a></span></td>
-          <td class="act">${s.state !== 'idle' ? `<button class="danger" ${busyAction ? 'disabled' : ''} onclick="act('abort',{attach:${JSON.stringify(r.attach)},session:${JSON.stringify(s.id)}},'Abort ${esc(s.agent)} on ${esc(w.id)}?')">Abort</button>` : ''}</td></tr>`).join('')}</table>`}`).join('');
   const inflight = r.inflight.length === 0 ? '<div class="empty">none</div>' : `<table>${r.inflight.map((p) => `
     <tr><td class="id">${esc(p.id)}</td><td class="title"><span class="t"><a href="${esc(p.url)}" target="_blank" rel="noopener">${esc(p.url.replace(/^https?:\/\/github\.com\//, ''))} ↗</a></span></td>
         <td class="fit">${prChips(p, now)}</td></tr>`).join('')}</table>`;
@@ -228,10 +240,10 @@ function repo(r, now) {
   const parked = r.parked.length === 0 ? '<div class="empty">none</div>' : `<table>${r.parked.map((b) => beadRow(b,
     `<td class="act"><button ${busyAction ? 'disabled' : ''} onclick="act('reopen',{repo:${JSON.stringify(r.repo)},id:${JSON.stringify(b.id)}})">Reopen</button></td>`)).join('')}</table>`;
   return `<section class="card" id="repo-${esc(r.slug)}">
-    <h2>${esc(r.slug)} <span class="cfg">${esc(r.label)} · ${esc(r.base)} · merge ${esc(r.merge)}${r.attach ? '' : ' · <b>no attach</b>: sessions not visible'}</span></h2>
-    <div class="cfg" style="margin-top:4px">stages: ${stages}</div>
-    ${r.working ? `<div class="working">working on <b class="mono">${esc(r.working.id)}</b> ${esc(r.working.title || '')}</div>` : ''}
-    <h3>Sessions</h3>${sessions}
+    <h2>${esc(r.slug)} <span class="cfg">${esc(r.label)} · ${esc(r.base)} · merge ${esc(r.merge)} · stages: ${stages}${r.attach ? '' : ' · <b>no attach</b>: sessions not visible'}</span></h2>
+    ${hero(r, now, ticking)}
+    <div class="counts">${count(r.ready.length, 'ready')}${count(r.inflight.length, `in flight · max ${r.max_inflight}`)}${r.inflight.some((p) => p.red) ? '<span class="chip bad">CI red</span>' : ''}${count(r.parked.length, 'parked')}</div>
+    ${strays(r, now)}
     <div class="cols">
       <div><h3>Ready<span class="n">${r.ready.length}</span></h3>${ready}</div>
       <div><h3>Parked<span class="n">${r.parked.length}</span><span class="note">in_progress, waiting for you</span></h3>${parked}</div>
@@ -256,19 +268,30 @@ function render() {
   const log = last.log.length === 0 ? '<div class="empty">no journal (not running under systemd?)</div>'
     : `<pre class="log" id="log">${last.log.map((l) => { const m = l.msg.replace(/^\d\d:\d\d:\d\d /, ""); return `<span class="t">${clock(l.t)}</span>  <span class="${logClass(m)}">${esc(m)}</span>`; }).join("\n")}</pre>`;
   $('main').innerHTML = (last.error ? `<div class="banner">status failed: ${esc(last.error)}</div>` : '')
-    + overview(last) + last.repos.map((r) => repo(r, last.now)).join("")
+    + (last.repos.length === 0 ? '<section class="card"><div class="empty">no repos: set <span class="mono">repos</span> in ~/.config/bead-loop/config.toml</div></section>' : '')
+    + last.repos.map((r) => repo(r, last.now, last.service.available && (last.service.active === 'active' || last.service.active === 'activating'))).join("")
     + `<section class="card"><h3>Supervisor log</h3>${log}</section>`;
   const el = $('log'); if (el) el.scrollTop = el.scrollHeight;
   $('foot').textContent = `state as of ${clock(last.now)} · pushed on every change`;
 }
 // Pushed, not polled: the server sends the whole state whenever anything in it changes.
 // EventSource reconnects by itself; the dot says which.
-let live = false;
-function setLive(on) { live = on; $('live').innerHTML = on ? '<span class="dot on"></span><span class="muted">live</span>' : '<span class="dot bad"></span><span class="muted">reconnecting…</span>'; }
-const es = new EventSource('/api/events');
-es.onopen = () => setLive(true);
-es.onerror = () => setLive(false);
-es.onmessage = (m) => { last = JSON.parse(m.data); render(); };
+// A hidden tab drops its stream and picks it up again when shown: a browser allows six
+// connections to one host, and a forgotten tab holding one is how the seventh "hangs".
+// It also means an unwatched page costs the server nothing.
+let live = false, es = null;
+function setLive(on, text) { live = on; $('live').innerHTML = on ? '<span class="dot on"></span><span class="muted">live</span>' : `<span class="dot ${text === 'paused' ? '' : 'bad'}"></span><span class="muted">${text || 'reconnecting…'}</span>`; }
+function connect() {
+  if (es) return;
+  setLive(false, 'connecting…');
+  es = new EventSource('/api/events');
+  es.onopen = () => setLive(true);
+  es.onerror = () => setLive(false);
+  es.onmessage = (m) => { last = JSON.parse(m.data); render(); };
+}
+function disconnect() { if (es) { es.close(); es = null; } setLive(false, 'paused'); }
+document.addEventListener('visibilitychange', () => (document.hidden ? disconnect() : connect()));
+connect();
 // Between pushes the clock still moves: re-render the ages every 10 s from the last state.
 setInterval(() => { if (last && live) { last.now = Math.floor(Date.now() / 1000); render(); } }, 10000);
 </script>

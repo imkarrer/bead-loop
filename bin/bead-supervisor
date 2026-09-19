@@ -2,7 +2,8 @@
 # bead-supervisor: work labelled beads in any repo with local models, one at a
 # time: implement, gate, review, PR, merge on green, close the bead.
 #
-#   bead-supervisor tick [REPO...]        reconcile open PRs, then work one bead per repo
+#   bead-supervisor tick [REPO...]        reconcile open PRs, work a bead per repo, again while there is work
+#                                         (--once: one pass); the timer's job is the waits
 #   bead-supervisor work REPO [BEAD_ID]   work one bead now (top ready one, or the id given)
 #   bead-supervisor reconcile [REPO...]   only check PRs: merge green, close beads, note red
 #   bead-supervisor status [REPO...]      what is in flight: PRs, ready beads, worktrees and their sessions
@@ -10,6 +11,7 @@
 #   bead-supervisor log REPO [BEAD_ID]    follow the newest worker/reviewer session: tool calls and text
 #
 #   --dry-run    pick the bead, print the prompt, change nothing
+#   --once       tick: one pass over the repos, whether or not more is ready
 #   --json       status as one JSON object per repo (what the web UI reads)
 #   --local      implement, gate and review; keep the branch here, no push, no PR
 #   --model M    opencode provider/model for the worker this run
@@ -60,15 +62,16 @@ stages_words() {
     | map([.worker, (.reviewer // ""), (.attempts // 1), (.timeout // "")] | map(tostring) | join(":")) | join(" ")'
 }
 
-DRY=0 LOCAL=0 JSON=0 MODEL_FLAG=
+DRY=0 LOCAL=0 JSON=0 ONCE=0 MODEL_FLAG=
 ARGS=()
 while [ $# -gt 0 ]; do
   case $1 in
     --dry-run) DRY=1 ;;
+    --once) ONCE=1 ;;
     --json) JSON=1 ;;
     --local) LOCAL=1 ;;
     --model) MODEL_FLAG=$2; shift ;;
-    -h|--help) sed -n '2,28p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,30p' "$0"; exit 0 ;;
     *) ARGS+=("$1") ;;
   esac
   shift
@@ -286,6 +289,7 @@ PROMPT
     return 0
   fi
   if [ "$LOCAL" = 0 ]; then need gh; fi
+  WORKED=1  # a bead is being attempted: the tick goes round again when this one is done
 
   bdr update "$id" --claim >/dev/null
   printf '%s\n' "$id" >"$RS/.working"  # the bead this process is on, for status
@@ -648,7 +652,15 @@ if [ "$CMD" != status ] && [ "$CMD" != log ] && [ "$CMD" != watch ]; then
   flock -n 9 || { log "another bead-supervisor holds $STATE_DIR/lock; skipping this tick"; exit 0; }
 fi
 case $CMD in
-  tick)      for r in "${REPOS[@]}"; do load_repo "$r"; reconcile; work_one; done ;;
+  # A pass is reconcile + one bead per repo. A bead done — PR up, or the attempt over —
+  # means the next pass starts now, not after the timer: the model is idle otherwise.
+  # The pass that attempts nothing (nothing ready, or waiting on CI) ends the tick, and
+  # the timer's gap is how often that wait is checked.
+  tick)      while :; do
+               WORKED=0
+               for r in "${REPOS[@]}"; do load_repo "$r"; reconcile; work_one; done
+               [ "$WORKED" = 1 ] && [ "$ONCE" = 0 ] || break
+             done ;;
   work)      load_repo "${REPOS[0]}"; work_one "${REPOS[1]:-}" ;;
   reconcile) for r in "${REPOS[@]}"; do load_repo "$r"; reconcile; done ;;
   status)    for r in "${REPOS[@]}"; do load_repo "$r"; if [ "$JSON" = 1 ]; then status_json; else status_one; fi; done ;;
