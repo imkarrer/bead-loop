@@ -8,7 +8,9 @@
 // Levers, each one command the operator would otherwise type:
 //   abort a session on the opencode server, run a tick now, stop the running tick
 //   (the supervisor's TERM handler aborts its session), pause/resume the timer,
-//   reopen a parked bead. No dependencies beyond node; the page is ui/index.html.
+//   reopen a parked bead, gpu-mode game/work where the box has that command.
+// The page holds an EventSource on /api/events and is pushed every change; nobody
+// presses refresh. No dependencies beyond node; the page is ui/index.html.
 'use strict';
 const http = require('node:http');
 const fs = require('node:fs');
@@ -42,17 +44,81 @@ async function journal(n) {
   return jsonLines(r.stdout).map((e) => ({ t: Math.floor(Number(e.__REALTIME_TIMESTAMP) / 1e6), msg: typeof e.MESSAGE === 'string' ? e.MESSAGE : '' }))
     .filter((e) => !/^bead-supervisor\.service: Consumed /.test(e.msg));  // systemd's accounting line, not the loop's
 }
+// gpu-mode, where the box has one (bead-loop's own workstation does: `gpu-mode game`
+// stops the loop and the local model server to free the GPU for a game, `gpu-mode work`
+// starts them again, and a guard flips it by itself while a game runs). It needs root;
+// the page's buttons run `sudo -n gpu-mode ...`, which works once sudoers allows it
+// without a password — the error says so otherwise. The mode itself is readable by all.
+const GPU_MODE_STATE = process.env.GPU_MODE_STATE || '/run/gpu-mode';
+async function gpuMode() {
+  const have = await run('sh', ['-c', 'command -v gpu-mode']);
+  if (!have.ok) return { available: false };
+  const read = (f) => { try { return fs.readFileSync(path.join(GPU_MODE_STATE, f), 'utf8').trim(); } catch { return null; } };
+  return { available: true, mode: read('mode') || 'work', by: read('by') || '-' };
+}
 async function state() {
-  const [status, timer, service, log] = await Promise.all([
-    run(SUPERVISOR, ['--json', 'status']), unitState(`${UNIT}.timer`), unitState(`${UNIT}.service`), journal(80),
+  const [status, timer, service, log, gpu] = await Promise.all([
+    run(SUPERVISOR, ['--json', 'status']), unitState(`${UNIT}.timer`), unitState(`${UNIT}.service`), journal(80), gpuMode(),
   ]);
   return {
     now: Math.floor(Date.now() / 1000),
     repos: jsonLines(status.stdout),
     error: status.ok ? null : status.stderr.trim().split('\n').pop(),
-    timer, service, log,
+    timer, service, log, gpu,
   };
 }
+
+// ---- live: one state, pushed to every open page when it changes ------------------------
+// The page holds an EventSource on /api/events. The server recomputes the state every
+// POLL_MS, and at once when the opencode server reports activity (its own /event stream)
+// or a lever was pulled, and sends it only when something differs — so a page that is
+// open shows a stage transition within a second or two of it happening, and an idle
+// loop costs one `status` every few seconds, not one per page.
+const POLL_MS = Number(process.env.BEAD_LOOP_UI_POLL_MS || 3000);
+const clients = new Set();
+let lastSent = '', computing = null, wanted = false;
+async function broadcast() {
+  if (computing) { wanted = true; return computing; }
+  computing = (async () => {
+    const s = await state();
+    const body = JSON.stringify(s);
+    // `now` alone changes every time; compare the rest.
+    if (body.replace(/"now":\d+/, '') !== lastSent) {
+      lastSent = body.replace(/"now":\d+/, '');
+      for (const res of clients) res.write(`data: ${body}\n\n`);
+    }
+    return s;
+  })().finally(() => { computing = null; if (wanted) { wanted = false; setImmediate(broadcast); } });
+  return computing;
+}
+setInterval(() => { if (clients.size) broadcast(); }, POLL_MS);
+setInterval(() => { for (const res of clients) res.write(': keepalive\n\n'); }, 20000);
+function subscribe(res) {
+  res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store', connection: 'keep-alive' });
+  clients.add(res);
+  res.on('close', () => clients.delete(res));
+  if (lastSent) res.write(`data: ${lastSent.replace(/^\{/, `{"now":${Math.floor(Date.now() / 1000)},`)}\n\n`);
+  broadcast();
+}
+// Nudge from the opencode server: every event on its stream (a token, a tool call, a
+// session finishing) is a reason to look again, debounced. Reconnects on its own.
+async function followOpencode() {
+  const repos = jsonLines((await run(SUPERVISOR, ['--json', 'status'])).stdout);
+  const attach = repos.map((r) => r.attach).find(Boolean);
+  if (!attach) return;
+  let nudge = null;
+  for (;;) {
+    try {
+      const res = await fetch(`${attach}/event`, { headers: { accept: 'text/event-stream' } });
+      for await (const chunk of res.body) {
+        if (clients.size && !nudge) nudge = setTimeout(() => { nudge = null; broadcast(); }, 1500);
+        void chunk;
+      }
+    } catch { /* server down or restarting: try again below */ }
+    await new Promise((r) => setTimeout(r, 5000));
+  }
+}
+followOpencode();
 
 // ---- the levers ------------------------------------------------------------------------
 const ID = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
@@ -74,6 +140,13 @@ const actions = {
   async tick() { return systemctl('start', '--no-block', `${UNIT}.service`); },
   async stop() { return systemctl('stop', `${UNIT}.service`); },
   async timer({ on }) { return systemctl(on ? 'start' : 'stop', `${UNIT}.timer`); },
+  // gpu {mode}: game | work. `sudo -n`: no password prompt, a clear error instead.
+  async gpu({ mode }) {
+    if (mode !== 'game' && mode !== 'work') throw new Error('mode is game or work');
+    const r = await run('sudo', ['-n', 'gpu-mode', mode]);
+    if (!r.ok) throw new Error((r.stderr.trim() || `gpu-mode exited ${r.code}`) + ' — allow it in sudoers: NOPASSWD for gpu-mode');
+    return { mode };
+  },
   // reopen {repo, id}: a parked bead back in the queue, `bd update ID --status open`.
   async reopen({ repo, id }) {
     if (!ID.test(String(id || ''))) throw new Error('bad bead id');
@@ -105,6 +178,7 @@ const server = http.createServer(async (req, res) => {
   try {
     if (req.method === 'GET' && url.pathname === '/') return send(res, 200, fs.readFileSync(PAGE, 'utf8'), 'text/html');
     if (req.method === 'GET' && url.pathname === '/api/state') return send(res, 200, await state());
+    if (req.method === 'GET' && url.pathname === '/api/events') return subscribe(res);
     if (req.method === 'POST' && url.pathname.startsWith('/api/')) {
       // Only the page itself may pull a lever: a browser sends Sec-Fetch-Site on every
       // request, and anything cross-site (another tab, another origin) is refused.
@@ -112,7 +186,9 @@ const server = http.createServer(async (req, res) => {
       if (site && site !== 'same-origin' && site !== 'none') return send(res, 403, { error: 'same-origin only' });
       const name = url.pathname.slice('/api/'.length);
       if (!actions[name]) return send(res, 404, { error: 'no such action' });
-      return send(res, 200, await actions[name](await readBody(req)));
+      const out = await actions[name](await readBody(req));
+      setTimeout(broadcast, 300); setTimeout(broadcast, 2500);  // the lever's effect, once systemd/bd have acted
+      return send(res, 200, out);
     }
     send(res, 404, { error: 'not found' });
   } catch (e) {
