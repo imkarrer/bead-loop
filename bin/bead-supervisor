@@ -132,12 +132,12 @@ inflight_count() {
 }
 
 # ---- the models -------------------------------------------------------------
-# run_agent AGENT MODEL DIR LOG PROMPT: one non-interactive session, in the harness
+# run_agent AGENT MODEL DIR LOG PROMPT [TITLE]: one non-interactive session, in the harness
 # the model name selects: "claude/<alias>" is Claude Code (claude -p, the agent file's
 # body as its system prompt, tools by role); anything else is an opencode agent.
 # Prints the last text the agent wrote; returns the harness's exit code.
 run_agent() {
-  local agent=$1 model=$2 dir=$3 logf=$4 prompt=$5 rc=0
+  local agent=$1 model=$2 dir=$3 logf=$4 prompt=$5 title=${6:-} rc=0
   case $model in
     claude/*)
       local tools sys
@@ -152,9 +152,11 @@ run_agent() {
       jq -r '.result // empty' "$logf" 2>/dev/null | tail -20
       ;;
     *)
+      # --title: the session's name in the web UI, said by us. Left to opencode, a model
+      # call names it from the prompt, and on a busy box that call has come back as "????".
       OPENCODE_DISABLE_CLAUDE_CODE_SKILLS=1 \
       timeout --foreground "$WORKER_TIMEOUT" opencode run --dir "$dir" --agent "$agent" \
-          ${ATTACH:+--attach "$ATTACH"} ${model:+-m "$model"} --format json "$prompt" >"$logf" 2>"$logf.err" || rc=$?
+          ${ATTACH:+--attach "$ATTACH"} ${model:+-m "$model"} ${title:+--title "$title"} --format json "$prompt" >"$logf" 2>"$logf.err" || rc=$?
       # The client is gone (timeout, a kill); with attach the server would keep working
       # the session for nobody. Its log may still be empty, so ask the server by directory.
       [ $rc -eq 0 ] || abort_sessions "$dir"
@@ -303,7 +305,7 @@ $(tail -15 "$logf.setup")"; return 0
   fi
 
   # Round 1: the implementor.
-  rc=0; final=$(run_agent bead-worker "$MODEL" "$wt" "$logf.worker.jsonl" "$prompt") || rc=$?
+  rc=0; final=$(run_agent bead-worker "$MODEL" "$wt" "$logf.worker.jsonl" "$prompt" "$id · worker · attempt $((attempt + 1))") || rc=$?
   if [ $rc -ne 0 ]; then fail "$id" "$wt" "worker exited $rc (timeout=$WORKER_TIMEOUT s). Log: $logf.worker.jsonl"; return 0; fi
   if printf '%s' "$final" | grep -q '^BLOCKED:'; then
     fail "$id" "$wt" "$(printf '%s' "$final" | grep '^BLOCKED:' | tail -1)"; return 0
@@ -320,7 +322,7 @@ Your commit on this branch failed the repository's gate: \`$GATE\`. Fix exactly 
 
 <gate-output>
 $(tail -40 "$logf.gate")
-</gate-output>") || rc=$?
+</gate-output>" "$id · worker · gate fix") || rc=$?
     if [ $rc -ne 0 ]; then fail "$id" "$wt" "worker exited $rc in gate revision round. Log: $logf.worker-gate.jsonl"; return 0; fi
     if printf '%s' "$final" | grep -q '^BLOCKED:'; then
       fail "$id" "$wt" "gate revision round: $(printf '%s' "$final" | grep '^BLOCKED:' | tail -1)"; return 0
@@ -337,7 +339,7 @@ $(tail -15 "$logf.gate-2")"; return 0
   if [ -n "$REVIEW_MODEL" ]; then
     local round
     for round in 1 2; do
-      verdict=$(review "$id" "$wt" "$json" "$final" "$logf.review$round.jsonl") || {
+      verdict=$(review "$id" "$wt" "$json" "$final" "$logf.review$round.jsonl" "$round") || {
         fail "$id" "$wt" "reviewer failed (round $round). Log: $logf.review$round.jsonl"; return 0; }
       if printf '%s' "$verdict" | grep -q '^APPROVE:'; then
         log "$SLUG: $id: review approved (round $round)"; break
@@ -352,7 +354,7 @@ A senior reviewer read your commit on this branch and rejected it. Fix exactly w
 
 <review>
 $(printf '%s' "$verdict" | grep -A20 '^REJECT:')
-</review>") || rc=$?
+</review>" "$id · worker · after review $round") || rc=$?
       if [ $rc -ne 0 ]; then fail "$id" "$wt" "worker exited $rc in revision round. Log: $logf.worker2.jsonl"; return 0; fi
       if printf '%s' "$final" | grep -q '^BLOCKED:'; then
         fail "$id" "$wt" "revision round: $(printf '%s' "$final" | grep '^BLOCKED:' | tail -1)"; return 0
@@ -394,7 +396,7 @@ BODY
   CUR_WT=; rm -f "$RS/.working"
 }
 
-# review ID WT BEAD_JSON WORKER_FINAL LOG: prints the reviewer's last words.
+# review ID WT BEAD_JSON WORKER_FINAL LOG [ROUND]: prints the reviewer's last words.
 review() {
   local id=$1 wt=$2 json=$3 final=$4 logf=$5
   log "$SLUG: $id: review by $REVIEW_MODEL"
@@ -412,7 +414,7 @@ $(printf '%s' "$final" | tail -5)
 $(git -C "$wt" diff "origin/$BASE...HEAD" --stat; git -C "$wt" diff "origin/$BASE...HEAD" | head -c 60000)
 </diff>
 
-End with one line: APPROVE: <what you checked> or REJECT: <file:line, what is wrong, what would fix it>."
+End with one line: APPROVE: <what you checked> or REJECT: <file:line, what is wrong, what would fix it>." "$id · reviewer · round ${6:-1}"
 }
 
 # A failed attempt. The note goes on the bead and into the attempt history; the

@@ -56,13 +56,39 @@ async function gpuMode() {
   const read = (f) => { try { return fs.readFileSync(path.join(GPU_MODE_STATE, f), 'utf8').trim(); } catch { return null; } };
   return { available: true, mode: read('mode') || 'work', by: read('by') || '-' };
 }
+// What GitHub says about a PR in flight, beside what the loop believes. The loop's
+// inflight marker is refreshed only by reconcile, at the start of a tick, and one
+// attempt can hold a tick for an hour — a PR merged a minute after adoption would sit
+// on the page as "waiting on CI" until then. So the page asks gh itself, one call per
+// PR per minute, and says "merged · the bead closes on the next tick" when it has.
+const PR_TTL_MS = Number(process.env.BEAD_LOOP_UI_PR_TTL_MS || 60000);
+const prCache = new Map();  // url -> { at, pr }
+async function prState(repo, url) {
+  const hit = prCache.get(url);
+  if (hit && Date.now() - hit.at < PR_TTL_MS) return hit.pr;
+  const r = await run('gh', ['pr', 'view', url, '--json', 'state,mergedAt,statusCheckRollup'], { cwd: repo });
+  let pr = null;
+  if (r.ok) {
+    try {
+      const j = JSON.parse(r.stdout);
+      const checks = (j.statusCheckRollup || []).map((c) => ({ name: c.context || c.name || '?', state: c.conclusion || c.state || c.status || '?' }));
+      pr = { state: j.state, mergedAt: j.mergedAt ? Math.floor(Date.parse(j.mergedAt) / 1000) : null, checks };
+    } catch { pr = null; }
+  }
+  prCache.set(url, { at: Date.now(), pr });
+  return pr;
+}
+async function withPrs(repos) {
+  await Promise.all(repos.flatMap((r) => r.inflight.map(async (p) => { p.pr = await prState(r.repo, p.url); })));
+  return repos;
+}
 async function state() {
   const [status, timer, service, log, gpu] = await Promise.all([
     run(SUPERVISOR, ['--json', 'status']), unitState(`${UNIT}.timer`), unitState(`${UNIT}.service`), journal(80), gpuMode(),
   ]);
   return {
     now: Math.floor(Date.now() / 1000),
-    repos: jsonLines(status.stdout),
+    repos: await withPrs(jsonLines(status.stdout)),
     error: status.ok ? null : status.stderr.trim().split('\n').pop(),
     timer, service, log, gpu,
   };

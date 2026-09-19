@@ -135,7 +135,9 @@ event stream; nobody presses refresh):
 - **Repos**: every repo the loop watches, and for each: what the workers are on *right
   now* (the claimed bead, the stage running — worker or reviewer, which model, when it
   last produced output, a link into its live session), how many beads are ready, PRs in
-  flight and whether CI is red, how many are parked.
+  flight and whether CI is red, how many are parked. A PR's state is GitHub's, asked once
+  a minute — "merged · bead closes on the next tick" the moment it merges, even while a
+  long attempt keeps the loop from reconciling.
 - **Per repo**: the sessions under each worktree (`busy` / `idle` / `orphan`), the PRs
   in flight, the ready queue with each bead's attempt count, the parked beads.
 - **The supervisor's log**, live, and the timer: running or paused, when the next tick is.
