@@ -6,6 +6,8 @@ save() { jq "$1" --arg id "${2:-}" --arg t "${3:-}" "$F" >"$F.tmp" && mv "$F.tmp
 cmd=$1; shift
 case $cmd in
   ready)
+    # slow-ready: seconds to take, for the tests of what the lanes do while dev has not claimed yet.
+    [ -e "$TEST_CTRL/slow-ready" ] && sleep "$(cat "$TEST_CTRL/slow-ready")"
     label=; n=100
     while [ $# -gt 0 ]; do case $1 in -l) label=$2; shift;; -n) n=$2; shift;; esac; shift; done
     [ "$n" = 0 ] && n=1000
