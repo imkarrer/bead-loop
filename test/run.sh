@@ -501,6 +501,25 @@ case_pause_one_lane() {
   assert_branch bead/t-1 "and pushed"
 }
 
+case_stale_assignee_does_not_block() {
+  # A bead sent back to open keeps its old assignee; bd refuses --claim for another actor.
+  # The loop takes it anyway: an open bead's assignee is stale by definition.
+  setup; jq '.[0].assignee="Somebody Else"' "$BD_STATE/issues.json" >"$BD_STATE/i.tmp" && mv "$BD_STATE/i.tmp" "$BD_STATE/issues.json"
+  sup work "$REPO"
+  assert_eq "$(calls)" "bead-worker bead-reviewer" "worked despite the stale assignee"
+  assert_eq "$(bead .status)" in_progress "claimed"
+  assert_branch bead/t-1 "and pushed"
+}
+case_attempts_carry_over() {
+  # The older attempts/ counter moves into failures/ file by file, even when failures/
+  # already exists (a status run makes it), and the old directory goes.
+  setup; R=$BEAD_LOOP_STATE/repo; mkdir -p "$R/attempts" "$R/failures"
+  echo 2 >"$R/attempts/t-1"; echo "round 1 (x): y" >"$R/attempts/t-1.notes"; echo 5 >"$R/failures/t-9"
+  sup status "$REPO" >/dev/null
+  assert_eq "$(cat "$R/failures/t-1") $(cat "$R/failures/t-9")" "2 5" "both counters in failures/"
+  assert_file "$R/failures/t-1.notes" "the history too"; assert_nofile "$R/attempts" "attempts/ gone"
+}
+
 # ---- main ----------------------------------------------------------------------------
 cases=$(declare -F | awk '{print $3}' | grep '^case_')
 [ $# -gt 0 ] && cases=$(printf 'case_%s\n' "$@")

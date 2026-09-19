@@ -18,7 +18,11 @@ case $cmd in
   update)
     id=$1; shift
     case $1 in
-      --claim) save '(.[] | select(.id==$id)) |= (.status="in_progress" | .assignee=$t)' "$id" "${BEADS_ACTOR:-$USER}" ;;
+      --claim)
+        # bd refuses a claim when someone else holds the assignee, even on an open bead.
+        a=$(jq -r --arg id "$id" '.[] | select(.id==$id) | .assignee // ""' "$F"); actor=${BEADS_ACTOR:-$USER}
+        if [ -n "$a" ] && [ "$a" != "$actor" ]; then echo "Error claiming $id: issue already claimed by $a" >&2; exit 1; fi
+        save '(.[] | select(.id==$id)) |= (.status="in_progress" | .assignee=$t)' "$id" "$actor" ;;
       --append-notes) save '(.[] | select(.id==$id)) |= (.notes=((.notes // "") + "\n" + $t))' "$id" "$2" ;;
       --status) save '(.[] | select(.id==$id)) |= (.status=$t)' "$id" "$2" ;;
     esac ;;
