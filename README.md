@@ -108,7 +108,7 @@ the global one; the global one wins over the default. Anything may go in either.
 | Key | Default | What |
 | --- | --- | --- |
 | `repos` | `[]` | global only: the repos a `tick` walks, `~` allowed |
-| `label` | `"delegate:local"` | `bd ready -l LABEL` picks the work |
+| `label` | `"delegate:local"` | `bd ready -l LABEL` picks the work; the loop claims, notes and closes beads as this actor, not as you (`BEADS_ACTOR` in its environment overrides) |
 | `base` | origin's HEAD | branch to fork from and PR into |
 | `setup` | none | runs in the fresh worktree before the worker (`npm ci`) |
 | `gate` | none (CI is the gate) | runs after the worker, before any push; one revision round on failure |

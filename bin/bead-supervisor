@@ -113,7 +113,10 @@ load_repo() {
   mkdir -p "$RS/inflight" "$RS/logs" "$RS/wt" "$RS/attempts"
 }
 
-bdr() { (cd "$REPO" && bd "$@"); }
+# Every bd call the loop makes acts as the label, not as the git user, so the
+# assignee and the audit trail say the model did it; a BEADS_ACTOR in the
+# environment still wins (bd's own contract).
+bdr() { (cd "$REPO" && BEADS_ACTOR=${BEADS_ACTOR:-$LABEL} bd "$@"); }
 ghr() { (cd "$REPO" && gh "$@"); }
 # Markers beside an inflight file are hidden (.ID.red, .ID.nocheck, .ID.adopted);
 # bead ids carry dots themselves, so the marker is what starts with one.
