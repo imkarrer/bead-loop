@@ -267,6 +267,7 @@ bead-supervisor work ~/src/repo                         # one bead through both 
 bead-supervisor lane dev                                # one lane by itself, until its queue is empty
 bead-supervisor pause review                            # that lane starts no new round until resume
 bead-supervisor tick                                    # what the timer does: both lanes, side by side
+systemctl --user start --no-block bead-supervisor.service   # a tick now, in the background (a tick runs as long as there is work)
 systemctl --user enable --now opencode-web.service bead-loop-ui.service bead-supervisor.timer
 sudo loginctl enable-linger $USER                       # timers survive logout
 ```
