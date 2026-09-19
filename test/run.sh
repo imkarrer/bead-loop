@@ -323,6 +323,29 @@ case_dotted_ids_count_as_inflight() {
   assert_eq "$(calls)" "" "a bead id with a dot still counts toward max_inflight"
 }
 
+case_status_lists_worktree_sessions() {
+  setup true auto stub/reviewer 'attach = "http://oc.test:4096"'
+  wt=$BEAD_LOOP_STATE/repo/wt/t-1; mkdir -p "$wt" "$BEAD_LOOP_STATE/repo/attempts"; echo 2 >"$BEAD_LOOP_STATE/repo/attempts/t-1"
+  jq -n '[{id:"ses_rev", parentID:null, agent:"bead-reviewer", model:{providerID:"slow",id:"m"}, title:"Reviewing", time:{created:0, updated:(now*1000)}},
+          {id:"ses_wrk", parentID:null, agent:"bead-worker",   model:{providerID:"fast",id:"m"}, title:"Working",   time:{created:0, updated:(now*1000-7200000)}},
+          {id:"ses_sub", parentID:"ses_wrk", agent:"explore", model:{providerID:"fast",id:"m"}, title:"Sub", time:{created:0, updated:(now*1000)}}]' >"$TEST_CTRL/sessions.json"
+  echo '{"ses_rev":{"type":"busy"}}' >"$TEST_CTRL/session-status.json"
+  out=$(sup status "$REPO")
+  assert_match "$out" "wt/t-1  attempt 2" "worktree and its attempt"
+  assert_match "$out" "ORPHAN  bead-reviewer  slow/m .* Reviewing" "busy on the server, no client here: orphan"
+  assert_match "$out" "curl -X POST http://oc.test:4096/session/ses_rev/abort" "with the abort hint"
+  assert_match "$out" "idle    bead-worker    fast/m .* 2h ago" "idle session with its age"
+  assert_match "$out" "http://oc.test:4096/$(printf '%s' "$wt" | base64 -w0 | tr '+/' '-_' | tr -d '=')/session/ses_rev" "web UI url under the worktree"
+  ! printf '%s' "$out" | grep -q ses_sub && ok || bad "subagent sessions hidden"
+  assert_match "$(cat "$TEST_CTRL/curl.log")" "session/status $wt" "asked the server about that worktree"
+  # A client process for the worktree makes the same busy session a live one.
+  (exec -a "opencode run --dir $wt --agent bead-reviewer" bash -c "sleep 30; true") & cpid=$!
+  out=$(sup status "$REPO"); kill $cpid
+  assert_match "$out" "busy    bead-reviewer" "busy with a client: not an orphan"
+  # Without attach the block only points at the logs.
+  sed -i '/^attach/d' "$REPO/.bead-loop.toml"
+  assert_match "$(sup status "$REPO")" "wt/t-1  attempt 2  (no attach: logs/t-1\.\*)" "no attach: no server to ask"
+}
 # ---- main ----------------------------------------------------------------------------
 cases=$(declare -F | awk '{print $3}' | grep '^case_')
 [ $# -gt 0 ] && cases=$(printf 'case_%s\n' "$@")

@@ -5,7 +5,8 @@
 #   bead-supervisor tick [REPO...]        reconcile open PRs, then work one bead per repo
 #   bead-supervisor work REPO [BEAD_ID]   work one bead now (top ready one, or the id given)
 #   bead-supervisor reconcile [REPO...]   only check PRs: merge green, close beads, note red
-#   bead-supervisor status [REPO...]      what is in flight
+#   bead-supervisor status [REPO...]      what is in flight: PRs, ready beads, worktrees and their sessions
+#   bead-supervisor watch [REPO...]       status every 5 s (BEAD_LOOP_WATCH=N), the last log lines above it
 #   bead-supervisor log REPO [BEAD_ID]    follow the newest worker/reviewer session: tool calls and text
 #
 #   --dry-run    pick the bead, print the prompt, change nothing
@@ -65,7 +66,7 @@ while [ $# -gt 0 ]; do
     --dry-run) DRY=1 ;;
     --local) LOCAL=1 ;;
     --model) MODEL_FLAG=$2; shift ;;
-    -h|--help) sed -n '2,26p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,27p' "$0"; exit 0 ;;
     *) ARGS+=("$1") ;;
   esac
   shift
@@ -530,11 +531,55 @@ status_one() {
     printf '  %s  %s%s%s\n' "$(basename "$f")" "$(cat "$f")" "$( [ -e "$(mark "$(basename "$f")" red)" ] && printf '  [red]')" "$( [ -e "$(mark "$(basename "$f")" adopted)" ] && printf '  [adopted]')"
   done
   printf '  ready: %s\n' "$(bdr ready -l "$LABEL" --json -n 0 2>/dev/null | jq -r '[.[].id] | join(" ")')"
+  sessions_one
+}
+
+# sessions_one: every worktree in the repo's state, and what the attached opencode server
+# has under it — one line per session, newest first: state, agent, model, when it last
+# produced anything, its title, and the web UI url (the UI files sessions under the
+# worktree's path, base64url-encoded; nobody should have to know that to find one).
+# A session the server calls busy with no `opencode run` client left on this box is an
+# orphan: a timeout or a kill took the client and the model is still working for nobody.
+sessions_one() {
+  local dir id n busy list clients
+  for dir in "$RS"/wt/*/; do
+    dir=${dir%/}; id=$(basename "$dir")
+    [ -d "$dir" ] || continue
+    n=$(attempts_of "$id")
+    printf '  wt/%s  attempt %s' "$id" "$n"
+    if [ -z "$ATTACH" ] || ! command -v curl >/dev/null; then printf '  (no attach: logs/%s.*)\n' "$id"; continue; fi
+    printf '\n'
+    busy=$(curl -sfG -m 3 "$ATTACH/session/status" --data-urlencode "directory=$dir" 2>/dev/null || echo '{}')
+    list=$(curl -sfG -m 3 "$ATTACH/session" --data-urlencode "directory=$dir" 2>/dev/null || echo '[]')
+    clients=$(pgrep -fc -- "opencode run --dir $dir " 2>/dev/null || true)
+    printf '%s' "$list" | jq -r --argjson busy "$busy" --arg clients "${clients:-0}" --arg attach "$ATTACH" \
+        --arg url "$ATTACH/$(printf '%s' "$dir" | base64 -w0 | tr '+/' '-_' | tr -d '=')" '
+      def pad(n): .[0:n] | . + " " * (n - length);
+      def age: (now - . / 1000) | if . < 90 then "\(.|floor)s" elif . < 5400 then "\(. / 60 | floor)m" else "\(. / 3600 | floor)h" end;
+      [.[] | select(.parentID == null)] | sort_by(-.time.updated) | .[:4][]
+      | (if $busy[.id] then (if ($clients|tonumber) > 0 then "busy  " else "ORPHAN" end) else "idle  " end) as $st
+      | "    \($st)  \(.agent // "?" | pad(13))  \("\(.model.providerID)/\(.model.id)" | pad(18))  \("\(.time.updated | age) ago" | pad(7))  \(.title // "" | pad(48))  \($url)/session/\(.id)"
+      + (if $st == "ORPHAN" then "\n            no client on this box; stop it:  curl -X POST \($attach)/session/\(.id)/abort" else "" end)'
+  done
+}
+
+# watch: status every few seconds, with the last supervisor log lines above it.
+watch_loop() {
+  local r
+  while :; do
+    printf '\033[H\033[J%s   bead-supervisor watch (every %ss, ctrl-c to stop)\n\n' "$(date +%H:%M:%S)" "$WATCH_INTERVAL"
+    if command -v journalctl >/dev/null; then
+      journalctl --user -u bead-supervisor.service -o cat -n 8 --no-pager 2>/dev/null | cut -c1-"${COLUMNS:-200}"
+      printf '\n'
+    fi
+    for r in "${REPOS[@]}"; do load_repo "$r"; status_one; done
+    sleep "$WATCH_INTERVAL"
+  done
 }
 
 # ---- main --------------------------------------------------------------------
 exec 9>"$STATE_DIR/lock"
-if [ "$CMD" != status ] && [ "$CMD" != log ]; then
+if [ "$CMD" != status ] && [ "$CMD" != log ] && [ "$CMD" != watch ]; then
   flock -n 9 || { log "another bead-supervisor holds $STATE_DIR/lock; skipping this tick"; exit 0; }
 fi
 case $CMD in
@@ -542,6 +587,7 @@ case $CMD in
   work)      load_repo "${REPOS[0]}"; work_one "${REPOS[1]:-}" ;;
   reconcile) for r in "${REPOS[@]}"; do load_repo "$r"; reconcile; done ;;
   status)    for r in "${REPOS[@]}"; do load_repo "$r"; status_one; done ;;
+  watch)     WATCH_INTERVAL=${BEAD_LOOP_WATCH:-5}; watch_loop ;;
   log)       load_repo "${REPOS[0]}"; log_follow "${REPOS[1]:-}" ;;
   *) die "unknown command $CMD" ;;
 esac
