@@ -521,7 +521,10 @@ log_follow() {
 
 status_one() {
   local f
-  printf '%s  label=%s base=%s merge=%s worker=%s reviewer=%s\n' "$SLUG" "$LABEL" "$BASE" "$MERGE" "${MODEL:-agent}" "${REVIEW_MODEL:-none}"
+  # What the next attempt would actually get: the first stage, not the bare keys.
+  local s1
+  s1=$(printf '%s' "$STAGES" | cut -d' ' -f1)
+  printf '%s  label=%s base=%s merge=%s stages=%s  first: worker=%s reviewer=%s\n' "$SLUG" "$LABEL" "$BASE" "$MERGE" "$(printf '%s' "$STAGES" | wc -w)" "$(printf '%s' "$s1" | cut -d: -f1)" "$(printf '%s' "$s1" | cut -d: -f2 | sed 's/^$/none/')"
   for f in "$RS"/inflight/*; do
     [ -e "$f" ] || continue
     printf '  %s  %s%s%s\n' "$(basename "$f")" "$(cat "$f")" "$( [ -e "$(mark "$(basename "$f")" red)" ] && printf '  [red]')" "$( [ -e "$(mark "$(basename "$f")" adopted)" ] && printf '  [adopted]')"
