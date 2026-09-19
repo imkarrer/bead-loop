@@ -749,6 +749,10 @@ status_json() {
         | (if $n >= $total then (if $on_exhaust == "repeat" then ($n % $total) else null end) else $n end) as $k
         | if $k == null then null else (reduce $st[] as $s ({i: 0, count: 0, hit: null}; if .hit == null then (.count += $s.failures | .i += 1 | if $k < .count then .hit = ($s + {index: .i}) else . end) else . end) | .hit) end;
     def bead($b): {id: $b.id, title: $b.title, priority: $b.priority, failures: ($failures[$b.id] // 0), stage: stage_of($failures[$b.id] // 0)};
+    # why: the last note the loop left on the bead — every send-back and every parking writes one,
+    # "bead-loop [round N (model)] <date>: <what happened>" — split into when and what.
+    def why($b): ($b.notes // "" | split("\n") | map(select(startswith("bead-loop"))) | last // null)
+      | if . == null then null else (capture("^bead-loop(?<round> round [0-9]+ \\([^)]*\\))? (?<when>[0-9T:+-]+): (?<what>.*)$") // {when: null, what: .}) end;
     ($open + $inprog | map({(.id): .}) | add // {}) as $byid
     | ($lanes | [.[]?.id]) as $laneids
     | {slug: $slug, repo: $repo, label: $label, base: $base, merge: $merge_mode, attach: $attach, max_inflight: $max_inflight,
@@ -759,7 +763,7 @@ status_json() {
          review: ($review | map(select(.id as $i | $laneids | index($i) | not) | . + bead($byid[.id] // {id: .id}))),
          merge:  ($merge | map(. + {failures: ($failures[.id] // 0), title: ($byid[.id].title // "")}))
        },
-       parked: ($inprog | map(select(.id as $i | ($merge | map(.id)) + $laneids + ($review | map(.id)) | index($i) | not) | bead(.))),
+       parked: ($inprog | map(select(.id as $i | ($merge | map(.id)) + $laneids + ($review | map(.id)) | index($i) | not) | bead(.) + {why: why(.)})),
        worktrees: $worktrees}'
 }
 
@@ -776,7 +780,7 @@ status_one() {
     q("dev"; .queues.dev), q("review"; .queues.review),
     "  merge queue (\(.queues.merge | length)):" + (if (.queues.merge | length) == 0 then "  —" else "" end),
     (.queues.merge[] | "    \(.id | pad(14)) \(.url)\(if .red then "  [red]" else "" end)\(if .adopted then "  [adopted]" else "" end)"),
-    (if (.parked | length) > 0 then "  parked: \(.parked | map(.id) | join(" "))" else empty end),
+    (if (.parked | length) > 0 then "  parked:", (.parked[] | "    \(.id | pad(14)) \(.why.what // "(no note from the loop)" | .[0:140])") else empty end),
     (.attach as $attach | .worktrees[] |
       (.sessions[] | select(.state != "idle") |
         "  \(.state | ascii_upcase | if . == "ORPHAN" then . else ascii_downcase | pad(6) end)  \(.agent // "?" | pad(13))  \(.model | pad(18))  \("\(.updated | age) ago" | pad(7))  \(.title | pad(40))  \(.url)"

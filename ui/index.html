@@ -100,6 +100,8 @@
   .q td.pos { color: var(--muted); font: 500 12px var(--mono); width: 22px; padding-right: 6px; text-align: right; }
   .q tr:first-child td.pos, .q tr:first-child td.id { color: var(--bright); }
   .q tr.sub td { border-top: 0; padding-top: 0; font-size: 12.5px; }
+  tr.sub td.why { border-top: 0; padding-top: 0; padding-bottom: 10px; font-size: 13px; color: var(--ink); white-space: normal; line-height: 1.5; max-width: 900px; }
+  tr.sub td.why code { font-size: 12px; }
 
 
   pre.log { margin: 0; font: 12.5px/1.6 var(--mono); white-space: pre-wrap; max-height: 44vh; overflow: auto; color: var(--ink); }
@@ -249,8 +251,11 @@ function queueCol(name, rows, r, now) {
 
 function repo(r, now, ticking) {
   const stages = r.stages.map((s, i) => `<span title="stage ${i + 1}: takes the next ${s.failures} failure${s.failures > 1 ? 's' : ''}"><span class="mono">${esc(s.worker)}</span>${s.reviewer ? ` ⇢ <span class="mono">${esc(s.reviewer)}</span>` : ''} ×${s.failures}</span>`).join(' &nbsp;→&nbsp; ');
+  // Why each parked bead is parked: the loop's last note on it, in full — this is what the
+  // human decides on, so it is not truncated.
   const parked = r.parked.length === 0 ? '<div class="empty">none</div>' : `<table>${r.parked.map((b) => `<tr><td class="id">${esc(b.id)}</td><td class="title"><span class="t" title="${esc(b.title || '')}">${esc(b.title || '')}</span></td><td class="fit">${failChip(b.failures)}${b.stage ? '' : ' <span class="chip bad">exhausted</span>'}</td>
-    <td class="act"><button ${busyAction ? 'disabled' : ''} onclick="act('reopen',{repo:${JSON.stringify(r.repo)},id:${JSON.stringify(b.id)}})">Reopen</button></td></tr>`).join('')}</table>`;
+    <td class="act"><button ${busyAction ? 'disabled' : ''} onclick="act('reopen',{repo:${JSON.stringify(r.repo)},id:${JSON.stringify(b.id)}})">Reopen</button></td></tr>
+    <tr class="sub"><td></td><td colspan="3" class="why">${b.why ? `${b.why.when ? `<span class="muted">${esc(b.why.when.replace('T', ' ').slice(0, 16))}${b.why.round ? ' ·' + esc(b.why.round) : ''} — </span>` : ''}${esc(b.why.what)}` : '<span class="muted">no note from the loop — parked by hand, or before the loop kept notes</span>'}</td></tr>`).join('')}</table>`;
   return `<section class="card" id="repo-${esc(r.slug)}">
     <h2>${esc(r.slug)} <span class="cfg">${esc(r.label)} · ${esc(r.base)} · merge ${esc(r.merge)} · stages: ${stages} · then ${esc(r.on_exhaust)}${r.attach ? '' : ' · <b>no attach</b>: sessions not visible'}</span></h2>
     <div class="lanes">${lanePanel(r, 'dev', now, ticking)}${lanePanel(r, 'review', now, ticking)}</div>
