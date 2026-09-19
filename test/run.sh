@@ -521,6 +521,23 @@ case_attempts_carry_over() {
   assert_file "$R/failures/t-1.notes" "the history too"; assert_nofile "$R/attempts" "attempts/ gone"
 }
 
+case_review_lane_waits_for_dev_to_claim() {
+  # At a tick's start the dev lane spends a moment picking before it claims; the review
+  # lane, finding its queue empty and no lane marker yet, must not conclude the tick is
+  # over. It leaves only after the dev lane has looked idle three checks in a row.
+  setup; echo 1 >"$TEST_CTRL/slow-ready"
+  LANE_WAIT=0.5 sup tick
+  assert_eq "$(calls)" "bead-worker bead-reviewer" "review waited, then took the bead"
+  ! grep -q 'going round again' "$T/sup.log" && ok || bad "no second round needed"
+  # With too short a grace the review lane does leave early; the tick notices work is
+  # still queued and runs the lanes again rather than leave it for the timer.
+  setup; echo 1 >"$TEST_CTRL/slow-ready"
+  LANE_WAIT=0.1 sup tick
+  assert_eq "$(calls)" "bead-worker bead-reviewer" "reviewed within the same tick"
+  assert_match "$(cat "$T/sup.log")" "lanes done but work is queued; going round again" "the tick went round again"
+  assert_branch bead/t-1 "and pushed"
+}
+
 # ---- main ----------------------------------------------------------------------------
 cases=$(declare -F | awk '{print $3}' | grep '^case_')
 [ $# -gt 0 ] && cases=$(printf 'case_%s\n' "$@")

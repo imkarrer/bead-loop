@@ -628,7 +628,7 @@ reconcile() {
 # other lane is idle too (the other lane may still send something this way). Each
 # lane has its own lock, so `work` by hand and a running tick do not collide.
 lane() {
-  local name=$1 other moved r
+  local name=$1 other moved r idle=0
   other=$([ "$name" = dev ] && echo review || echo dev)
   LANE=$name; trap on_signal TERM INT
   exec 8>"$STATE_DIR/lock.$name"
@@ -643,27 +643,50 @@ lane() {
       if [ "$name" = dev ]; then dev_one && moved=1; else review_one && moved=1; fi
       [ "$moved" = 1 ] && [ "$ONCE" = 1 ] && return 0
     done
-    [ "$moved" = 1 ] && continue
+    [ "$moved" = 1 ] && { idle=0; continue; }
     [ "$ONCE" = 1 ] && return 0
-    # Nothing for this lane now; the other may still hand something over.
-    if other_busy "$other"; then sleep "${LANE_WAIT:-10}"; continue; fi
-    return 0
+    # Nothing for this lane now; the other may still hand something over. The other
+    # lane looks idle between its rounds too — and at the very start, before it has
+    # claimed anything — so this lane leaves only after seeing it idle three checks in a
+    # row, LANE_WAIT apart.
+    if other_busy "$other"; then idle=0; else idle=$((idle + 1)); fi
+    [ "$idle" -ge 3 ] && return 0
+    sleep "${LANE_WAIT:-10}"
   done
 }
 other_busy() { local r; for r in "${REPOS[@]}"; do load_repo "$r"; if lane_busy "$1"; then return 0; fi; done; return 1; }
 # tick: reconcile, then both lanes at once — dev fills the review queue while review
 # drains it — until neither has anything left; then reconcile once more, so a merge
 # that happened meanwhile closes its bead now rather than next tick.
-tick() {
+# queued_work: something a lane would take right now — the review queue with the review
+# lane not paused, or the dev queue with the dev lane not paused and room in the merge
+# queue. The lanes should never both exit while this is true, but a tick checks anyway.
+queued_work() {
   local r
+  for r in "${REPOS[@]}"; do
+    load_repo "$r"
+    [ ! -e "$STATE_DIR/pause.review" ] && [ -n "$(review_queue)" ] && return 0
+    [ ! -e "$STATE_DIR/pause.dev" ] && [ "$(inflight_count)" -lt "$MAX_INFLIGHT" ] && [ -n "$(dev_queue)" ] && return 0
+  done
+  return 1
+}
+tick() {
+  local r round=0
   for r in "${REPOS[@]}"; do load_repo "$r"; reconcile; done
-  if [ "$SERIAL" = 1 ]; then
-    lane dev; lane review
-  else
-    lane dev & local dp=$!
-    lane review & local rp=$!
-    wait "$dp" "$rp"
-  fi
+  while :; do
+    if [ "$SERIAL" = 1 ]; then
+      lane dev; lane review
+    else
+      lane dev & local dp=$!
+      lane review & local rp=$!
+      wait "$dp" "$rp"
+    fi
+    round=$((round + 1))
+    # Both lanes left. If one left work the other should have taken (a race at startup,
+    # a hand-run lane holding a lock), go round once more rather than wait for the timer.
+    [ "$ONCE" = 0 ] && [ "$round" -lt 3 ] && queued_work && { log "lanes done but work is queued; going round again"; continue; }
+    break
+  done
   for r in "${REPOS[@]}"; do load_repo "$r"; reconcile; done
 }
 
