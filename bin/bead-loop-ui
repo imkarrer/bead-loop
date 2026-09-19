@@ -88,7 +88,7 @@ async function fetchPr(repo, url) {
 }
 function withPrs(repos) {
   const seen = new Set();
-  for (const r of repos) for (const p of r.inflight) {
+  for (const r of repos) for (const p of r.queues.merge) {
     seen.add(p.url);
     if (!prCache.has(p.url)) prCache.set(p.url, { at: 0, pr: undefined, repo: r.repo });
     p.pr = prCache.get(p.url).pr ?? null;

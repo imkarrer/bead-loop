@@ -1,34 +1,43 @@
-flowchart TD
+flowchart LR
   T([systemd user timer<br/>3 min after the last tick ended]) --> R
 
-  subgraph tick [bead-supervisor tick — bash, deterministic, one bead per repo]
-    direction TB
-    R[reconcile: read every open bead PR] --> P{bd ready -l LABEL}
-    P -- nothing --> Z([done])
-    P -- top bead --> C[bd claim<br/>git worktree add bead/ID off origin/BASE]
-    C --> U[setup<br/>npm ci]
-    U --> W[implementor session<br/>bead-worker agent]
-    W -- DONE + commit --> G[gate<br/>typecheck · lint · test]
-    W -- BLOCKED --> F
-  subgraph tick [bead-supervisor tick — bash, deterministic; a pass per repo, again while there is work]
-    G -- fail, second time --> F
-    G -- pass --> V[review session<br/>bead-reviewer agent, read-only]
-    V -- REJECT, first time --> W
-    V -- REJECT, second time --> F[attempt failed: note on the bead<br/>worktree removed]
-    F -- next stage, or repeat --> Q[back in the queue<br/>fewest attempts first]
+  subgraph tick [bead-supervisor tick — bash, deterministic; two lanes side by side until both queues drain]
+    direction LR
+    R[reconcile the merge queue] --> DQ
+
+    subgraph devlane [dev lane — GPU, the fast model]
+      direction TB
+      DQ[[dev queue<br/>bd ready -l LABEL<br/>fewest failures first]] --> C[claim · worktree<br/>fresh, or the branch sent back]
+      C --> W[worker<br/>implements, commits]
+      W -- DONE + commit --> G[gate<br/>typecheck · lint · test]
+      G -- fail, once --> W
+    end
+
+    subgraph reviewlane [review lane — CPU, the strong model]
+      direction TB
+      RQ[[review queue<br/>gate passed]] --> V[reviewer, read-only<br/>judges the diff]
+      V -- APPROVE --> PR[push · PR<br/>or the same PR, updated]
+    end
+
+    G -- pass --> RQ
+    W -- BLOCKED / no commit --> F
+    G -- fail twice --> F
+    V -- REJECT --> F
+    F[failure +1<br/>note on the bead] -- stages left --> DQ
     F -- exhausted, or BLOCKED at the last stage --> H[parked in_progress<br/>for you]
-    V -- APPROVE --> PR[git push · gh pr create<br/>inflight/ID = PR url]
   end
 
-  W -.- GPU[(devbox/coder<br/>Qwen3-Coder-30B-A3B<br/>RTX 4080, this box)]
-  V -.- CPU[(acbox/coder<br/>Qwen3-Coder-Next 80B Q8<br/>hp 840z, 256 GB RAM, CPU)]
+  W -.- GPU[(devbox/coder<br/>Qwen3-Coder-30B<br/>RTX 4080, this box)]
+  V -.- CPU[(acbox/coder<br/>Qwen3-Coder-Next 80B<br/>ac-box, CPU)]
 
-  PR --> CI[Buildkite, queue self on ac-box]
-  CI -- all checks green<br/>next tick, or the pipeline itself<br/>on the automerge label --> M[squash-merge · delete branch<br/>bd close ID]
-  CI -- red --> N[note on bead<br/>PR stays open for you]
-  CI -- no checks --> N
+  PR --> MQ[[merge queue<br/>PRs in CI on GitHub]]
+  MQ -- green: the tick merges,<br/>or the pipeline on the label --> M[squash-merge<br/>bd close ID]
+  MQ -- red --> F
+  MQ -- closed unmerged --> H
 
   classDef model fill:#f3f0ff,stroke:#7c5cff,color:#222
   classDef stop fill:#fff3f0,stroke:#e0503c,color:#222
+  classDef queue fill:#eef7f7,stroke:#2aa198,color:#222
   class GPU,CPU model
-  class H,N stop
+  class H stop
+  class DQ,RQ,MQ queue

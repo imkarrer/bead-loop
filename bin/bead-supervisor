@@ -2,22 +2,24 @@
 # bead-supervisor: work labelled beads in any repo with local models, one at a
 # time: implement, gate, review, PR, merge on green, close the bead.
 #
-#   bead-supervisor tick [REPO...]        reconcile open PRs, work a bead per repo, again while there is work
-#                                         (--once: one pass); the timer's job is the waits
-#   bead-supervisor work REPO [BEAD_ID]   work one bead now (top ready one, or the id given)
-#   bead-supervisor reconcile [REPO...]   only check PRs: merge green, close beads, note red
+#   bead-supervisor tick [REPO...]        reconcile the merge queue, then run the dev and review lanes
+#                                         side by side until both queues are drained; the timer's job is the waits
+#   bead-supervisor work REPO [BEAD_ID]   one bead through dev and review now (top of the dev queue, or the id given)
+#   bead-supervisor lane dev|review       one lane by itself, until its queue is empty
+#   bead-supervisor reconcile [REPO...]   only the merge queue: merge green, close beads, send red back to dev
 #   bead-supervisor status [REPO...]      what is in flight: PRs, ready beads, worktrees and their sessions
 #   bead-supervisor watch [REPO...]       status every 5 s (BEAD_LOOP_WATCH=N), the last log lines above it
 #   bead-supervisor log REPO [BEAD_ID]    follow the newest worker/reviewer session: tool calls and text
 #
 #   --dry-run    pick the bead, print the prompt, change nothing
-#   --once       tick: one pass over the repos, whether or not more is ready
+#   --once       tick: one pass of each lane, in turn, whether or not more is queued
+#   --serial     tick: the lanes one after the other instead of side by side
 #   --json       status as one JSON object per repo (what the web UI reads)
 #   --local      implement, gate and review; keep the branch here, no push, no PR
 #   --model M    opencode provider/model for the worker this run
 #
 # Config, TOML, every key optional. A key in the repo file wins over the global one:
-#   ~/.config/bead-loop/config.toml   repos (list), model, review_model, stages, on_exhaust, adopt,
+#   ~/.config/bead-loop/config.toml   repos (list), model, review_model, stages (worker, reviewer, failures), on_exhaust, adopt,
 #                                     max_inflight, worker_timeout, attach (an opencode server url:
 #                                     sessions run there and stream in its web UI)
 #   REPO/.bead-loop.toml              label, base, setup, gate, merge (auto|pipeline|manual), merge_label, plus any key above
@@ -27,7 +29,7 @@
 #           worker_timeout=3600 (seconds)  setup unset  gate unset (CI is the gate)
 #           review_model unset (no review). Set it and a second model judges the diff
 #           before the push; the worker gets one revision round on a REJECT.
-#           stages unset = one attempt with model/review_model, then park.
+#           stages unset = one stage with model/review_model, one failure, then park.
 set -euo pipefail
 
 BEAD_LOOP_HOME=$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)
@@ -54,20 +56,23 @@ cfg() {
     '($r[$k] // $g[$k] // empty) | if type == "array" then map(tostring) | join(" ") else tostring end')
   printf '%s' "${v:-${2-}}"
 }
-# stages_words: the stages table as "worker:reviewer:attempts:timeout" words, the
-# form stage_for walks; empty when no file sets one.
+# stages_words: the stages table as "worker:reviewer:failures:timeout" words, the
+# form stage_for walks; empty when no file sets one. `attempts` is the older name
+# for `failures` and still reads.
 stages_words() {
   jq -rn --argjson r "${R_JSON:-{\}}" --argjson g "$G_JSON" '($r.stages // $g.stages // [])
     | map(if .worker == null then error("a stage needs a worker") else . end)
-    | map([.worker, (.reviewer // ""), (.attempts // 1), (.timeout // "")] | map(tostring) | join(":")) | join(" ")'
+    | map([.worker, (.reviewer // ""), (.failures // .attempts // 1), (.timeout // "")] | map(tostring) | join(":")) | join(" ")'
 }
 
-DRY=0 LOCAL=0 JSON=0 ONCE=0 MODEL_FLAG=
+DRY=0 LOCAL=0 JSON=0 ONCE=0 SERIAL=0 MODEL_FLAG=
+S_MODEL='' S_REVIEW='' S_TIMEOUT='' S_LAST=0 LANE='' LAST_ID=''
 ARGS=()
 while [ $# -gt 0 ]; do
   case $1 in
     --dry-run) DRY=1 ;;
-    --once) ONCE=1 ;;
+    --once) ONCE=1; SERIAL=1 ;;
+    --serial) SERIAL=1 ;;
     --json) JSON=1 ;;
     --local) LOCAL=1 ;;
     --model) MODEL_FLAG=$2; shift ;;
@@ -80,6 +85,7 @@ CMD=${ARGS[0]:-tick}
 REPOS=("${ARGS[@]:1}")
 G_CONF=$CONFIG_DIR/config.toml
 G_JSON=$(toml_json "$G_CONF")
+if [ "$CMD" = lane ]; then LANE_NAME=${REPOS[0]:-}; REPOS=("${REPOS[@]:1}"); fi
 if [ ${#REPOS[@]} -eq 0 ] && [ "$CMD" != work ] && [ "$CMD" != log ]; then
   # repos = ["~/src/a", ...]; a leading ~ is the home directory.
   while IFS= read -r r; do [ -n "$r" ] && REPOS+=("${r/#\~/$HOME}"); done <<<"$(printf '%s' "$G_JSON" | jq -r '.repos // [] | .[]')"
@@ -99,7 +105,7 @@ load_repo() {
   GATE=$(cfg gate)
   MODEL=${MODEL_FLAG:-$(cfg model)}
   REVIEW_MODEL=$(cfg review_model)
-  STAGES=$(stages_words); STAGES=${STAGES:-$MODEL:$REVIEW_MODEL:1}
+  STAGES=$(stages_words); STAGES=${STAGES:-$MODEL:$REVIEW_MODEL:3}
   ON_EXHAUST=$(cfg on_exhaust park)
   ADOPT=$(cfg adopt true)
   case " $STAGES " in *" claude/"*|*":claude/"*) need claude ;; esac
@@ -113,7 +119,10 @@ load_repo() {
   fi
   [ -n "$BASE" ] || die "$SLUG: cannot tell the base branch; set base in .bead-loop.toml"
   RS=$STATE_DIR/$SLUG
-  mkdir -p "$RS/inflight" "$RS/logs" "$RS/wt" "$RS/attempts"
+  mkdir -p "$RS/inflight" "$RS/logs" "$RS/wt" "$RS/review"
+  # attempts/ was the older name for failures/: same counter, carried over once.
+  if [ -d "$RS/attempts" ] && [ ! -d "$RS/failures" ]; then mv "$RS/attempts" "$RS/failures"; fi
+  mkdir -p "$RS/failures"
 }
 
 # Every bd call the loop makes acts as the label, not as the git user, so the
@@ -181,9 +190,10 @@ abort_sessions() {
   done
 }
 # systemd stops the unit by signalling the whole cgroup: the client dies with us, the
-# server-side session would not. CUR_WT is the worktree an attempt is working.
+# server-side session would not. CUR_WT is the worktree this process is working, LANE
+# the lane it is (each lane runs in its own subshell, and installs this trap itself).
 CUR_WT=
-on_signal() { [ -n "$CUR_WT" ] && abort_sessions "$CUR_WT"; rm -f "${RS:-/nonexistent}/.working"; exit 143; }
+on_signal() { [ -n "$CUR_WT" ] && abort_sessions "$CUR_WT"; [ -n "$LANE" ] && rm -f "${RS:-/nonexistent}/lane.$LANE"; exit 143; }
 trap on_signal TERM INT
 
 render_bead() {
@@ -208,12 +218,15 @@ run_gate() {
   (cd "$wt" && bash -c "$GATE") >"$logf" 2>&1
 }
 
-# ---- attempts and stages ---------------------------------------------------
-# STAGES is "worker:reviewer:attempts:timeout" words, one per [[stages]] table, in order. An attempt that
-# fails sends the bead back to open with its note; the next attempt may be a
-# later stage. attempts_of ID reads the counter; stage_for N resolves attempt N
-# (0-based) into S_MODEL S_REVIEW S_TIMEOUT S_LAST, or returns 1 when exhausted.
-attempts_of() { cat "$RS/attempts/$1" 2>/dev/null || echo 0; }
+# ---- failures and stages ----------------------------------------------------
+# A bead's failure count is how many times it has been sent back to the dev queue:
+# from dev itself (BLOCKED, no commit, the gate failing twice), from review (REJECT),
+# from merge (CI red). failures/ID holds the count, failures/ID.notes the history the
+# next worker reads. STAGES is "worker:reviewer:failures:timeout" words, one per
+# [[stages]] table, in order: a stage takes the bead for the next N failures, so a
+# bead with more failures lands on a later, stronger stage. stage_for N resolves a
+# failure count into S_MODEL S_REVIEW S_TIMEOUT S_LAST, or returns 1 when exhausted.
+failures_of() { cat "$RS/failures/$1" 2>/dev/null || echo 0; }
 stage_for() {
   local n=$1 total=0 s a
   for s in $STAGES; do IFS=: read -r _ _ a _ <<<"$s"; total=$((total + ${a:-1})); done
@@ -232,33 +245,50 @@ stage_for() {
     fi
   done
 }
-# pick_bead: among ready beads, the fewest attempts first (then bd's own order),
-# so everything is tried once before anything is tried twice.
-pick_bead() {
-  local best='' best_n=-1 id n
-  for id in $(bdr ready -l "$LABEL" --json -n 0 2>/dev/null | jq -r '.[].id'); do
-    n=$(attempts_of "$id")
-    if [ "$best_n" -lt 0 ] || [ "$n" -lt "$best_n" ]; then best=$id; best_n=$n; fi
-  done
-  printf '%s' "$best"
-}
 
-# ---- work one bead ----------------------------------------------------------
-work_one() {
+# ---- the three queues ---------------------------------------------------------
+# dev:    bd ready -l LABEL — open beads, the label, unblocked. Fewest failures first,
+#         then bd's own order: everything is tried once before anything is tried twice,
+#         and a bead that keeps failing gets out of the way.
+# review: review/ID — the worker committed and the gate passed; the worktree waits for
+#         the reviewer. Same order; the file holds the worker's last words for the
+#         reviewer's prompt.
+# merge:  inflight/ID — the PR url; GitHub's CI is the queue's worker.
+# lane.dev / lane.review hold the bead each lane is on right now.
+dev_queue() {
+  local id
+  for id in $(bdr ready -l "$LABEL" --json -n 0 2>/dev/null | jq -r '.[].id'); do
+    printf '%s %s\n' "$(failures_of "$id")" "$id"
+  done | sort -s -n -k1,1 | cut -d' ' -f2
+}
+review_queue() {
+  local f
+  for f in "$RS"/review/*; do
+    [ -e "$f" ] || continue
+    printf '%s %s %s\n' "$(failures_of "$(basename "$f")")" "$(stat -c %Y "$f")" "$(basename "$f")"
+  done | sort -n -k1,1 -k2,2 | cut -d' ' -f3
+}
+lane_set() { printf '%s\n' "$2" >"$RS/lane.$1"; }
+lane_clear() { rm -f "$RS/lane.$1"; }
+lane_busy() { [ -e "$RS/lane.$1" ]; }
+
+# ---- the dev lane: one bead, worker + gate, into the review queue ---------------
+# dev_one [ID]: returns 0 when a bead was attempted (the lane goes round again), 1
+# when the dev queue had nothing for it — empty, or the merge queue is full.
+dev_one() {
   local id=${1:-}
   if [ -z "$id" ]; then
     if [ "$(inflight_count)" -ge "$MAX_INFLIGHT" ]; then
-      log "$SLUG: $(inflight_count) in flight (max $MAX_INFLIGHT); waiting on CI"
-      return 0
+      log "$SLUG: dev: $(inflight_count) in flight (max $MAX_INFLIGHT); waiting on CI"; return 1
     fi
-    id=$(pick_bead)
-    if [ -z "$id" ]; then log "$SLUG: nothing ready with label $LABEL"; return 0; fi
+    id=$(dev_queue | head -1)
+    if [ -z "$id" ]; then log "$SLUG: dev: nothing ready with label $LABEL"; return 1; fi
   fi
-  local json title branch wt stamp logf prompt final verdict rc attempt history
-  attempt=$(attempts_of "$id")
-  if ! stage_for "$attempt"; then log "$SLUG: $id: attempts exhausted ($attempt), parked"; bdr update "$id" --status in_progress >/dev/null; return 0; fi
+  local json title branch wt stamp logf prompt final rc n history resumed=0
+  n=$(failures_of "$id")
+  if ! stage_for "$n"; then log "$SLUG: $id: stages exhausted ($n failures), parked"; bdr update "$id" --status in_progress >/dev/null; return 0; fi
   MODEL=${MODEL_FLAG:-$S_MODEL}; REVIEW_MODEL=$S_REVIEW; WORKER_TIMEOUT=$S_TIMEOUT
-  history=$(tail -n 3 "$RS/attempts/$id.notes" 2>/dev/null || true)
+  history=$(tail -n 3 "$RS/failures/$id.notes" 2>/dev/null || true)
   json=$(bdr show "$id" --json)
   [ "$(printf '%s' "$json" | jq 'length')" -gt 0 ] || die "$SLUG: bd show $id returned nothing"
   title=$(printf '%s' "$json" | jq -r '.[0].title')
@@ -266,6 +296,9 @@ work_one() {
   wt=$RS/wt/$id
   stamp=$(date +%Y%m%dT%H%M%S)
   logf=$RS/logs/$id.$stamp
+  # A branch left from an earlier round (sent back by review or CI) is resumed, not
+  # restarted: the worker fixes its commit. A dev-side failure deleted the branch.
+  if git -C "$REPO" show-ref -q "refs/heads/$branch" || git -C "$REPO" show-ref -q "refs/remotes/origin/$branch"; then resumed=1; fi
 
   prompt=$(cat <<PROMPT
 Work the bead below in this repository, following the bead-workflow skill.
@@ -274,52 +307,59 @@ Work the bead below in this repository, following the bead-workflow skill.
 $(printf '%s' "$json" | render_bead)
 </bead>
 
-You are on branch $branch, a fresh worktree of $BASE. Commit your work on this branch and leave .beads/ untouched. End your turn with one line: DONE: <evidence> or BLOCKED: <note>.${history:+
+You are on branch $branch$([ $resumed = 1 ] && printf ', which already carries your earlier commit(s) for this bead: fix them in place rather than starting over' || printf ", a fresh worktree of $BASE"). Commit your work on this branch and leave .beads/ untouched. End your turn with one line: DONE: <evidence> or BLOCKED: <note>.${history:+
 
-Earlier attempts at this bead failed; their notes follow. Read them before you start and do not repeat them.
+Earlier rounds on this bead were sent back; their notes follow. Read them before you start and do not repeat them.
 
 <previous-attempts>
 $history
 </previous-attempts>}
 PROMPT
 )
-  log "$SLUG: bead $id — $title (attempt $((attempt + 1)), worker $MODEL, reviewer ${REVIEW_MODEL:-none})"
+  log "$SLUG: dev: bead $id — $title ($n failures, worker $MODEL, reviewer ${REVIEW_MODEL:-none}$([ $resumed = 1 ] && echo ', resuming the branch'))"
   if [ "$DRY" = 1 ]; then
-    printf '%s\n' "--- attempt $((attempt + 1))  model: ${MODEL:-agent default}  base: $BASE  setup: ${SETUP:-none}  gate: ${GATE:-none}  review: ${REVIEW_MODEL:-none}  merge: $MERGE" "$prompt"
-    return 0
+    printf '%s\n' "--- failures: $n  model: ${MODEL:-agent default}  base: $BASE  setup: ${SETUP:-none}  gate: ${GATE:-none}  review: ${REVIEW_MODEL:-none}  merge: $MERGE" "$prompt"
+    return 1
   fi
+  LAST_ID=$id
   if [ "$LOCAL" = 0 ]; then need gh; fi
-  WORKED=1  # a bead is being attempted: the tick goes round again when this one is done
 
   bdr update "$id" --claim >/dev/null
-  printf '%s\n' "$id" >"$RS/.working"  # the bead this process is on, for status
+  lane_set dev "$id"
   git -C "$REPO" fetch -q origin "$BASE"
-  abort_sessions "$wt"  # a killed earlier attempt may have left one running here
-  if [ -e "$wt" ]; then git -C "$REPO" worktree remove --force "$wt" 2>/dev/null || rm -rf "$wt"; fi
-  git -C "$REPO" branch -D "$branch" >/dev/null 2>&1 || true
-  git -C "$REPO" worktree add -q -b "$branch" "$wt" "origin/$BASE"
+  abort_sessions "$wt"  # a killed earlier round may have left one running here
   CUR_WT=$wt
-
-  if [ -n "$SETUP" ]; then
-    log "$SLUG: setup: $SETUP"
-    if ! (cd "$wt" && bash -c "$SETUP") >"$logf.setup" 2>&1; then
-      fail "$id" "$wt" "setup failed: $SETUP
+  if [ -d "$wt" ] && [ $resumed = 1 ] && git -C "$wt" rev-parse -q --verify HEAD >/dev/null 2>&1; then
+    : # the worktree from the round review sent back, node_modules and all
+  else
+    if [ -e "$wt" ]; then git -C "$REPO" worktree remove --force "$wt" 2>/dev/null || rm -rf "$wt"; fi
+    if [ $resumed = 1 ]; then
+      git -C "$REPO" show-ref -q "refs/heads/$branch" || git -C "$REPO" branch -q --track "$branch" "origin/$branch"
+      git -C "$REPO" worktree add -q "$wt" "$branch"
+    else
+      git -C "$REPO" branch -D "$branch" >/dev/null 2>&1 || true
+      git -C "$REPO" worktree add -q -b "$branch" "$wt" "origin/$BASE"
+    fi
+    if [ -n "$SETUP" ]; then
+      log "$SLUG: setup: $SETUP"
+      if ! (cd "$wt" && bash -c "$SETUP") >"$logf.setup" 2>&1; then
+        send_back "$id" "$wt" fresh "setup failed: $SETUP
 $(tail -15 "$logf.setup")"; return 0
+      fi
     fi
   fi
 
-  # Round 1: the implementor.
-  rc=0; final=$(run_agent bead-worker "$MODEL" "$wt" "$logf.worker.jsonl" "$prompt" "$id · worker · attempt $((attempt + 1))") || rc=$?
-  if [ $rc -ne 0 ]; then fail "$id" "$wt" "worker exited $rc (timeout=$WORKER_TIMEOUT s). Log: $logf.worker.jsonl"; return 0; fi
+  rc=0; final=$(run_agent bead-worker "$MODEL" "$wt" "$logf.worker.jsonl" "$prompt" "$id · worker · round $((n + 1))") || rc=$?
+  if [ $rc -ne 0 ]; then send_back "$id" "$wt" fresh "worker exited $rc (timeout=$WORKER_TIMEOUT s). Log: $logf.worker.jsonl"; return 0; fi
   if printf '%s' "$final" | grep -q '^BLOCKED:'; then
-    fail "$id" "$wt" "$(printf '%s' "$final" | grep '^BLOCKED:' | tail -1)"; return 0
+    send_back "$id" "$wt" fresh "$(printf '%s' "$final" | grep '^BLOCKED:' | tail -1)"; return 0
   fi
   if ! settle_worktree "$wt" "$id: $title"; then
-    fail "$id" "$wt" "worker made no commit. Last words: $(printf '%s' "$final" | tail -3)"; return 0
+    send_back "$id" "$wt" fresh "worker made no commit. Last words: $(printf '%s' "$final" | tail -3)"; return 0
   fi
-  # The gate gets one revision round too: a compiler message is the cheapest review there is.
+  # The gate gets one fix round inside the lane: a compiler message is the cheapest review there is.
   if ! run_gate "$wt" "$logf.gate"; then
-    log "$SLUG: $id: gate failed, revision round"
+    log "$SLUG: $id: gate failed, fix round"
     rc=0; final=$(run_agent bead-worker "$MODEL" "$wt" "$logf.worker-gate.jsonl" "$prompt
 
 Your commit on this branch failed the repository's gate: \`$GATE\`. Fix exactly what it reports, run it again until it passes, commit, and end with DONE: or BLOCKED:.
@@ -327,54 +367,75 @@ Your commit on this branch failed the repository's gate: \`$GATE\`. Fix exactly 
 <gate-output>
 $(tail -40 "$logf.gate")
 </gate-output>" "$id · worker · gate fix") || rc=$?
-    if [ $rc -ne 0 ]; then fail "$id" "$wt" "worker exited $rc in gate revision round. Log: $logf.worker-gate.jsonl"; return 0; fi
+    if [ $rc -ne 0 ]; then send_back "$id" "$wt" fresh "worker exited $rc in gate fix round. Log: $logf.worker-gate.jsonl"; return 0; fi
     if printf '%s' "$final" | grep -q '^BLOCKED:'; then
-      fail "$id" "$wt" "gate revision round: $(printf '%s' "$final" | grep '^BLOCKED:' | tail -1)"; return 0
+      send_back "$id" "$wt" fresh "gate fix round: $(printf '%s' "$final" | grep '^BLOCKED:' | tail -1)"; return 0
     fi
     settle_worktree "$wt" "$id: fix the gate" || true
     if ! run_gate "$wt" "$logf.gate-2"; then
-      fail "$id" "$wt" "gate failed twice: $GATE
+      send_back "$id" "$wt" fresh "gate failed twice: $GATE
 $(tail -15 "$logf.gate-2")"; return 0
     fi
   fi
 
-  # Round 2, when a reviewer is configured: the senior model judges the diff;
-  # one revision round on REJECT, then the reviewer's word is final.
-  if [ -n "$REVIEW_MODEL" ]; then
-    local round
-    for round in 1 2; do
-      verdict=$(review "$id" "$wt" "$json" "$final" "$logf.review$round.jsonl" "$round") || {
-        fail "$id" "$wt" "reviewer failed (round $round). Log: $logf.review$round.jsonl"; return 0; }
-      if printf '%s' "$verdict" | grep -q '^APPROVE:'; then
-        log "$SLUG: $id: review approved (round $round)"; break
-      fi
-      if [ $round = 2 ]; then
-        fail "$id" "$wt" "review rejected twice. Last: $(printf '%s' "$verdict" | grep '^REJECT:' | tail -1)"; return 0
-      fi
-      log "$SLUG: $id: review rejected, revision round"
-      rc=0; final=$(run_agent bead-worker "$MODEL" "$wt" "$logf.worker2.jsonl" "$prompt
+  # Into the review queue, with the worker's last words for the reviewer.
+  printf '%s\n' "$final" | grep '^DONE:' | tail -1 >"$RS/review/$id"
+  lane_clear dev; CUR_WT=
+  log "$SLUG: $id: gate passed → review queue (${REVIEW_MODEL:-no reviewer: straight to PR})"
+}
 
-A senior reviewer read your commit on this branch and rejected it. Fix exactly what the review names, verify again, commit, and end with DONE: or BLOCKED:.
-
-<review>
-$(printf '%s' "$verdict" | grep -A20 '^REJECT:')
-</review>" "$id · worker · after review $round") || rc=$?
-      if [ $rc -ne 0 ]; then fail "$id" "$wt" "worker exited $rc in revision round. Log: $logf.worker2.jsonl"; return 0; fi
-      if printf '%s' "$final" | grep -q '^BLOCKED:'; then
-        fail "$id" "$wt" "revision round: $(printf '%s' "$final" | grep '^BLOCKED:' | tail -1)"; return 0
-      fi
-      settle_worktree "$wt" "$id: revision after review" || true
-      if ! run_gate "$wt" "$logf.gate2"; then
-        fail "$id" "$wt" "gate failed after revision: $GATE
-$(tail -15 "$logf.gate2")"; return 0
-      fi
-    done
+# ---- the review lane: one bead, the reviewer's verdict, into the merge queue -------
+# review_one [ID]: returns 0 when a bead was reviewed, 1 when the queue was empty.
+review_one() {
+  local id=${1:-}
+  if [ -z "$id" ]; then
+    id=$(review_queue | head -1)
+    [ -n "$id" ] || return 1
   fi
+  local json title branch wt stamp logf final verdict rc n
+  n=$(failures_of "$id")
+  stage_for "$n" || { S_REVIEW=$REVIEW_MODEL; S_MODEL=$MODEL; }
+  REVIEW_MODEL=$S_REVIEW; MODEL=${MODEL_FLAG:-$S_MODEL}; WORKER_TIMEOUT=${S_TIMEOUT:-$WORKER_TIMEOUT}
+  branch=bead/$id; wt=$RS/wt/$id
+  stamp=$(date +%Y%m%dT%H%M%S); logf=$RS/logs/$id.$stamp
+  final=$(cat "$RS/review/$id" 2>/dev/null || true)
+  json=$(bdr show "$id" --json)
+  title=$(printf '%s' "$json" | jq -r '.[0].title')
+  lane_set review "$id"; CUR_WT=$wt
+  if [ -n "$REVIEW_MODEL" ]; then
+    log "$SLUG: review: $id by $REVIEW_MODEL ($n failures)"
+    rc=0; verdict=$(run_agent bead-reviewer "$REVIEW_MODEL" "$wt" "$logf.review.jsonl" "Review the commit(s) on this branch for the bead below. The diff against $BASE is under <diff>; read any file you need for context.
+
+<bead>
+$(printf '%s' "$json" | render_bead)
+</bead>
+
+<worker-report>
+$final
+</worker-report>
+
+<diff>
+$(git -C "$wt" diff "origin/$BASE...HEAD" --stat; git -C "$wt" diff "origin/$BASE...HEAD" | head -c 60000)
+</diff>
+
+End with one line: APPROVE: <what you checked> or REJECT: <file:line, what is wrong, what would fix it>." "$id · reviewer · round $((n + 1))") || rc=$?
+    if [ $rc -ne 0 ]; then
+      rm -f "$RS/review/$id"; send_back "$id" "$wt" keep "reviewer exited $rc. Log: $logf.review.jsonl"; return 0
+    fi
+    if ! printf '%s' "$verdict" | grep -q '^APPROVE:'; then
+      rm -f "$RS/review/$id"
+      send_back "$id" "$wt" keep "review ($REVIEW_MODEL) rejected: $(printf '%s' "$verdict" | grep '^REJECT:' | tail -1 | cut -c1-600)"; return 0
+    fi
+    log "$SLUG: $id: review approved"
+  else
+    verdict=''
+  fi
+  rm -f "$RS/review/$id"
 
   if [ "$LOCAL" = 1 ]; then
     log "$SLUG: --local: branch $branch is ready in $wt; nothing pushed"
     bdr update "$id" --append-notes "bead-loop: worked locally on $branch (not pushed)" >/dev/null
-    return 0
+    lane_clear review; CUR_WT=; return 0
   fi
 
   git -C "$wt" push -q -u origin "$branch" --force-with-lease
@@ -384,69 +445,62 @@ Bead \`$id\`: $title
 
 $(printf '%s' "$json" | jq -r '.[0].acceptance_criteria // ""' | sed 's/^/> /')
 
-Worker: $(printf '%s' "$final" | grep '^DONE:' | tail -1 | cut -c1-500)
+Worker: $(printf '%s' "$final" | tail -1 | cut -c1-500)
 ${REVIEW_MODEL:+Reviewer ($REVIEW_MODEL): $(printf '%s' "${verdict:-}" | grep '^APPROVE:' | tail -1 | cut -c1-500)}
 
 Opened by bead-loop; the bead closes when this merges.
 BODY
 )
-  url=$(ghr pr create --base "$BASE" --head "$branch" --title "$id: $title" --body "$body")
+  # A branch sent back by CI already has its PR: the push updated it.
+  url=$(ghr pr list --state open --head "$branch" --json url --jq '.[0].url // empty' 2>/dev/null || true)
+  if [ -n "$url" ]; then
+    log "$SLUG: $id: pushed a new round to $url"
+    bdr comment "$id" "bead-loop: pushed round $((n + 1)) to $url" >/dev/null
+  else
+    url=$(ghr pr create --base "$BASE" --head "$branch" --title "$id: $title" --body "$body")
+    bdr comment "$id" "bead-loop: opened $url" >/dev/null
+    log "$SLUG: opened $url"
+  fi
   num=${url##*/}
   printf '%s\n' "$url" >"$RS/inflight/$id"
-  bdr comment "$id" "bead-loop: opened $url" >/dev/null
-  log "$SLUG: opened $url"
+  rm -f "$(mark "$id" red)" "$(mark "$id" fixing)"
   if [ "$MERGE" = pipeline ]; then hand_to_pipeline "$id" "$num" "$url"; fi
   git -C "$REPO" worktree remove --force "$wt"
-  CUR_WT=; rm -f "$RS/.working"
+  lane_clear review; CUR_WT=
 }
 
-# review ID WT BEAD_JSON WORKER_FINAL LOG [ROUND]: prints the reviewer's last words.
-review() {
-  local id=$1 wt=$2 json=$3 final=$4 logf=$5
-  log "$SLUG: $id: review by $REVIEW_MODEL"
-  run_agent bead-reviewer "$REVIEW_MODEL" "$wt" "$logf" "Review the commit(s) on this branch for the bead below. The diff against $BASE is under <diff>; read any file you need for context.
-
-<bead>
-$(printf '%s' "$json" | render_bead)
-</bead>
-
-<worker-report>
-$(printf '%s' "$final" | tail -5)
-</worker-report>
-
-<diff>
-$(git -C "$wt" diff "origin/$BASE...HEAD" --stat; git -C "$wt" diff "origin/$BASE...HEAD" | head -c 60000)
-</diff>
-
-End with one line: APPROVE: <what you checked> or REJECT: <file:line, what is wrong, what would fix it>." "$id · reviewer · round ${6:-1}"
-}
-
-# A failed attempt. The note goes on the bead and into the attempt history; the
-# bead goes back to open for the next stage, or stays in_progress (parked) when
-# the stages are exhausted, or when the last stage said BLOCKED: that needs a
-# human, not another model.
-fail() {
-  local id=$1 wt=$2 note=$3 n
-  n=$(( $(attempts_of "$id") + 1 ))
-  log "$SLUG: $id attempt $n stopped: $(printf '%s' "$note" | head -1)"
-  bdr update "$id" --append-notes "bead-loop attempt $n ($MODEL) $(date -Iminutes): $note" >/dev/null
-  printf '%s\n' "$n" >"$RS/attempts/$id"
-  printf 'attempt %s (%s): %s\n' "$n" "$MODEL" "$(printf '%s' "$note" | tr '\n' ' ' | cut -c1-600)" >>"$RS/attempts/$id.notes"
-  git -C "$REPO" worktree remove --force "$wt" 2>/dev/null || true
-  CUR_WT=; rm -f "$RS/.working"
-  git -C "$REPO" branch -D "bead/$id" >/dev/null 2>&1 || true
+# send_back ID WT fresh|keep NOTE: a round failed. The failure count goes up, the note
+# goes on the bead and into the history the next worker reads, and the bead goes back
+# to the dev queue (bd open) — on a later stage once this one's failures are spent —
+# or is parked (in_progress) when the stages are exhausted, or when the last stage said
+# BLOCKED: a claim in the bead is false, and no model fixes that. `keep` leaves the
+# branch and worktree for the worker to fix (review and CI send-backs); `fresh` removes
+# them (dev-side failures start over).
+send_back() {
+  local id=$1 wt=$2 mode=$3 note=$4 n
+  n=$(( $(failures_of "$id") + 1 ))
+  log "$SLUG: $id round $n stopped: $(printf '%s' "$note" | head -1)"
+  bdr update "$id" --append-notes "bead-loop round $n ($MODEL) $(date -Iminutes): $note" >/dev/null
+  printf '%s\n' "$n" >"$RS/failures/$id"
+  printf 'round %s (%s): %s\n' "$n" "$MODEL" "$(printf '%s' "$note" | tr '\n' ' ' | cut -c1-600)" >>"$RS/failures/$id.notes"
+  lane_clear dev; lane_clear review; CUR_WT=
+  if [ "$mode" = fresh ]; then
+    git -C "$REPO" worktree remove --force "$wt" 2>/dev/null || true
+    git -C "$REPO" branch -D "bead/$id" >/dev/null 2>&1 || true
+  fi
   if [ "$S_LAST" = 1 ] && printf '%s' "$note" | grep -q 'BLOCKED:'; then
-    log "$SLUG: $id: BLOCKED at the last stage, parked for you"; return 0
+    log "$SLUG: $id: BLOCKED at the last stage, parked for you"; park_cleanup "$id" "$wt"; return 0
   fi
   if stage_for "$n"; then
     bdr update "$id" --status open >/dev/null
-    log "$SLUG: $id: back in the queue; next attempt: worker $S_MODEL, reviewer ${S_REVIEW:-none}"
+    log "$SLUG: $id: → dev queue ($n failures; next: worker $S_MODEL, reviewer ${S_REVIEW:-none})"
   else
-    log "$SLUG: $id: attempts exhausted, parked for you"
+    log "$SLUG: $id: stages exhausted ($n failures), parked for you"; park_cleanup "$id" "$wt"
   fi
 }
+park_cleanup() { git -C "$REPO" worktree remove --force "$2" 2>/dev/null || true; }
 
-# ---- reconcile open PRs -----------------------------------------------------
+# ---- the merge queue: reconcile open PRs ---------------------------------------
 # close_merged ID INFLIGHT_FILE URL PR_JSON: the bead is done; say what CI said at the merge.
 close_merged() {
   local checks
@@ -454,12 +508,10 @@ close_merged() {
   # An adopted bead may already be closed by whoever wrote the PR; that is fine.
   bdr close "$1" --reason "bead-loop: $3 merged; checks at merge: $checks" >/dev/null 2>&1 || true
   rm -f "$2" "$(mark "$1" red)" "$(mark "$1" nocheck)" "$(mark "$1" adopted)"
+  git -C "$REPO" branch -D "bead/$1" >/dev/null 2>&1 || true
   log "$SLUG: $1 closed ($3 merged; $checks)"
 }
 
-# adopt: any open PR on a bead/<id>[-slug] branch this loop did not open (another
-# session, a human) joins inflight, so green merges and the bead closes whoever
-# wrote it. adopt = false in .bead-loop.toml turns it off.
 # hand_to_pipeline ID NUM URL: merge = "pipeline". The loop labels the PR and the CI
 # pipeline merges it on its own terms; the tick only closes the bead once it is MERGED.
 # A label the repo does not have cannot be added: noted, and the PR waits for you.
@@ -472,6 +524,9 @@ hand_to_pipeline() {
   fi
 }
 
+# adopt: any open PR on a bead/<id>[-slug] branch this loop did not open (another
+# session, a human) joins the merge queue, so green merges and the bead closes
+# whoever wrote it. adopt = false in .bead-loop.toml turns it off.
 adopt() {
   [ "$ADOPT" = true ] || return 0
   local num head url id
@@ -480,6 +535,8 @@ adopt() {
     id=$(printf '%s' "$head" | sed -nE 's|^bead/([a-z]+-[a-z0-9]+(\.[0-9]+)?)(-.*)?$|\1|p')
     [ -n "$id" ] || continue
     [ -e "$RS/inflight/$id" ] && continue
+    # A branch of ours sent back to dev is not adopted: dev is fixing it.
+    [ -e "$(mark "$id" fixing)" ] && continue
     printf '%s\n' "$url" >"$RS/inflight/$id"; touch "$(mark "$id" adopted)"
     log "$SLUG: adopted $url ($head) as bead $id"
     if [ "$MERGE" = pipeline ]; then hand_to_pipeline "$id" "$num" "$url"; fi
@@ -488,7 +545,7 @@ adopt() {
 }
 
 reconcile() {
-  local f id url num view state verdict
+  local f id url num view state verdict checks
   adopt
   for f in "$RS"/inflight/*; do
     [ -e "$f" ] || continue
@@ -501,7 +558,7 @@ reconcile() {
       CLOSED)
         bdr update "$id" --append-notes "bead-loop: $url was closed without merging; left in_progress for you" >/dev/null
         rm -f "$f" "$(mark "$id" red)" "$(mark "$id" nocheck)" "$(mark "$id" adopted)"
-        log "$SLUG: $id: PR closed unmerged"
+        log "$SLUG: $id: PR closed unmerged, parked for you"
         ;;
       OPEN)
         verdict=$(printf '%s' "$view" | jq -r '
@@ -525,9 +582,19 @@ reconcile() {
             fi
             ;;
           red)
-            if [ ! -e "$(mark "$id" red)" ]; then
-              bdr update "$id" --append-notes "bead-loop: CI red on $url; PR left open" >/dev/null
-              touch "$(mark "$id" red)"; log "$SLUG: $id: CI red: $url"
+            checks=$(printf '%s' "$view" | jq -r '[.statusCheckRollup[]? | select((.conclusion // .state // .status) | IN("FAILURE","ERROR","CANCELLED","TIMED_OUT","ACTION_REQUIRED","STARTUP_FAILURE")) | (.context // .name)] | join(", ")')
+            if [ -e "$(mark "$id" adopted)" ]; then
+              # Not our branch to fix: one note, the PR waits for whoever opened it.
+              if [ ! -e "$(mark "$id" red)" ]; then
+                bdr update "$id" --append-notes "bead-loop: CI red on $url ($checks); PR left open" >/dev/null
+                touch "$(mark "$id" red)"; log "$SLUG: $id: CI red on adopted $url"
+              fi
+            else
+              # Ours: back to the dev queue on the same branch; the next push updates this PR.
+              rm -f "$f" "$(mark "$id" nocheck)"; touch "$(mark "$id" fixing)"
+              stage_for "$(failures_of "$id")" || true; MODEL=${S_MODEL:-$MODEL}
+              log "$SLUG: $id: CI red on $url ($checks)"
+              send_back "$id" "$RS/wt/$id" keep "CI red on $url: $checks"
             fi
             ;;
           nocheck)
@@ -541,6 +608,47 @@ reconcile() {
         ;;
     esac
   done
+}
+
+# ---- lanes -----------------------------------------------------------------------
+# lane NAME: run one lane's passes over every repo until its queue is empty and the
+# other lane is idle too (the other lane may still send something this way). Each
+# lane has its own lock, so `work` by hand and a running tick do not collide.
+lane() {
+  local name=$1 other moved r
+  other=$([ "$name" = dev ] && echo review || echo dev)
+  LANE=$name; trap on_signal TERM INT
+  exec 8>"$STATE_DIR/lock.$name"
+  flock -n 8 || { log "another $name lane holds $STATE_DIR/lock.$name; skipping"; return 0; }
+  while :; do
+    moved=0
+    for r in "${REPOS[@]}"; do
+      load_repo "$r"
+      if [ "$name" = dev ]; then dev_one && moved=1; else review_one && moved=1; fi
+      [ "$moved" = 1 ] && [ "$ONCE" = 1 ] && return 0
+    done
+    [ "$moved" = 1 ] && continue
+    [ "$ONCE" = 1 ] && return 0
+    # Nothing for this lane now; the other may still hand something over.
+    if other_busy "$other"; then sleep "${LANE_WAIT:-10}"; continue; fi
+    return 0
+  done
+}
+other_busy() { local r; for r in "${REPOS[@]}"; do load_repo "$r"; if lane_busy "$1"; then return 0; fi; done; return 1; }
+# tick: reconcile, then both lanes at once — dev fills the review queue while review
+# drains it — until neither has anything left; then reconcile once more, so a merge
+# that happened meanwhile closes its bead now rather than next tick.
+tick() {
+  local r
+  for r in "${REPOS[@]}"; do load_repo "$r"; reconcile; done
+  if [ "$SERIAL" = 1 ]; then
+    lane dev; lane review
+  else
+    lane dev & local dp=$!
+    lane review & local rp=$!
+    wait "$dp" "$rp"
+  fi
+  for r in "${REPOS[@]}"; do load_repo "$r"; reconcile; done
 }
 
 # log_follow [ID]: stream the newest session log for the repo as one line per tool call or text.
@@ -581,38 +689,61 @@ sessions_json() {
            url: "\($url)/session/\(.id)"})'
 }
 
-# status_json: this repo, one JSON object.
+# status_json: this repo, one JSON object: the three queues in their order, the two
+# lanes and what each is on, the parked beads, and every worktree with its sessions.
 status_json() {
-  local f id dir inflight='[]' worktrees='[]' attempts='{}'
+  local f id dir merge='[]' worktrees='[]' failures='{}' dev='[]' review='[]' lanes='{}' name
   for f in "$RS"/inflight/*; do
     [ -e "$f" ] || continue
     id=$(basename "$f")
-    inflight=$(printf '%s' "$inflight" | jq -c --arg id "$id" --arg url "$(cat "$f")" \
+    merge=$(printf '%s' "$merge" | jq -c --arg id "$id" --arg url "$(cat "$f")" \
       --argjson red "$([ -e "$(mark "$id" red)" ] && echo true || echo false)" \
       --argjson adopted "$([ -e "$(mark "$id" adopted)" ] && echo true || echo false)" \
       '. + [{id: $id, url: $url, red: $red, adopted: $adopted}]')
   done
-  for f in "$RS"/attempts/*; do
+  for f in "$RS"/failures/*; do
     [ -e "$f" ] || continue; case $f in *.notes) continue ;; esac
-    attempts=$(printf '%s' "$attempts" | jq -c --arg id "$(basename "$f")" --arg n "$(cat "$f")" '. + {($id): ($n | tonumber)}')
+    failures=$(printf '%s' "$failures" | jq -c --arg id "$(basename "$f")" --arg n "$(cat "$f")" '. + {($id): ($n | tonumber)}')
   done
   for dir in "$RS"/wt/*/; do
     dir=${dir%/}; [ -d "$dir" ] || continue; id=$(basename "$dir")
-    worktrees=$(printf '%s' "$worktrees" | jq -c --arg id "$id" --arg dir "$dir" --argjson n "$(attempts_of "$id")" \
-      --argjson s "$(sessions_json "$dir")" '. + [{id: $id, dir: $dir, attempts: $n, sessions: $s}]')
+    worktrees=$(printf '%s' "$worktrees" | jq -c --arg id "$id" --arg dir "$dir" --argjson n "$(failures_of "$id")" \
+      --argjson s "$(sessions_json "$dir")" '. + [{id: $id, dir: $dir, failures: $n, sessions: $s}]')
   done
-  jq -cn --arg slug "$SLUG" --arg repo "$REPO" --arg label "$LABEL" --arg base "$BASE" --arg merge "$MERGE" \
-    --arg stages "$STAGES" --arg attach "$ATTACH" --argjson max_inflight "$MAX_INFLIGHT" --arg working "$(cat "$RS/.working" 2>/dev/null)" \
-    --argjson inflight "$inflight" --argjson attempts "$attempts" --argjson worktrees "$worktrees" \
-    --argjson ready "$(bdr ready -l "$LABEL" --json -n 0 2>/dev/null | jq -c '. // []' 2>/dev/null || echo '[]')" \
-    --argjson parked "$(bdr list --status in_progress -l "$LABEL" --json -n 0 2>/dev/null | jq -c '. // []' 2>/dev/null || echo '[]')" '
-    def bead: {id, title, priority, attempts: ($attempts[.id] // 0)};
-    {slug: $slug, repo: $repo, label: $label, base: $base, merge: $merge, attach: $attach, max_inflight: $max_inflight,
-     working: (if $working == "" then null else (($parked | map(select(.id == $working) | bead) | .[0]) // {id: $working}) end),
-     stages: ($stages | split(" ") | map(split(":") | {worker: .[0], reviewer: .[1], attempts: (.[2] | tonumber)})),
-     inflight: $inflight, ready: ($ready | map(bead)),
-     parked: ($parked | map(select(.id as $i | ($inflight | map(.id) + [$working]) | index($i) | not) | bead)),
-     worktrees: $worktrees}'
+  # The queues in the order the lanes take them.
+  dev=$(dev_queue | jq -R . | jq -sc .)
+  for id in $(review_queue); do
+    review=$(printf '%s' "$review" | jq -c --arg id "$id" --arg since "$(stat -c %Y "$RS/review/$id" 2>/dev/null || echo 0)" '. + [{id: $id, since: ($since | tonumber)}]')
+  done
+  for name in dev review; do
+    if [ -e "$RS/lane.$name" ]; then
+      lanes=$(printf '%s' "$lanes" | jq -c --arg n "$name" --arg id "$(cat "$RS/lane.$name")" --arg since "$(stat -c %Y "$RS/lane.$name")" '. + {($n): {id: $id, since: ($since | tonumber)}}')
+    fi
+  done
+  jq -cn --arg slug "$SLUG" --arg repo "$REPO" --arg label "$LABEL" --arg base "$BASE" --arg merge_mode "$MERGE" \
+    --arg stages "$STAGES" --arg attach "$ATTACH" --argjson max_inflight "$MAX_INFLIGHT" --arg on_exhaust "$ON_EXHAUST" \
+    --argjson merge "$merge" --argjson failures "$failures" --argjson worktrees "$worktrees" \
+    --argjson dev "$dev" --argjson review "$review" --argjson lanes "$lanes" \
+    --argjson open "$(bdr ready -l "$LABEL" --json -n 0 2>/dev/null | jq -c '. // []' 2>/dev/null || echo '[]')" \
+    --argjson inprog "$(bdr list --status in_progress -l "$LABEL" --json -n 0 2>/dev/null | jq -c '. // []' 2>/dev/null || echo '[]')" '
+    ($stages | split(" ") | map(split(":") | {worker: .[0], reviewer: .[1], failures: (.[2] | tonumber)})) as $st
+    # stage_for, in jq: the stage a failure count lands on (null when exhausted and on_exhaust = park).
+    | def stage_of($n): ($st | map(.failures) | add) as $total
+        | (if $n >= $total then (if $on_exhaust == "repeat" then ($n % $total) else null end) else $n end) as $k
+        | if $k == null then null else (reduce $st[] as $s ({i: 0, count: 0, hit: null}; if .hit == null then (.count += $s.failures | .i += 1 | if $k < .count then .hit = ($s + {index: .i}) else . end) else . end) | .hit) end;
+    def bead($b): {id: $b.id, title: $b.title, priority: $b.priority, failures: ($failures[$b.id] // 0), stage: stage_of($failures[$b.id] // 0)};
+    ($open + $inprog | map({(.id): .}) | add // {}) as $byid
+    | ($lanes | [.[]?.id]) as $laneids
+    | {slug: $slug, repo: $repo, label: $label, base: $base, merge: $merge_mode, attach: $attach, max_inflight: $max_inflight,
+       stages: $st, on_exhaust: $on_exhaust,
+       lanes: ($lanes | with_entries(.value += (bead($byid[.value.id] // {id: .value.id})))),
+       queues: {
+         dev:    ($dev | map(select(. as $i | $laneids + ($merge | map(.id)) + ($review | map(.id)) | index($i) | not) | bead($byid[.] // {id: .}))),
+         review: ($review | map(select(.id as $i | $laneids | index($i) | not) | . + bead($byid[.id] // {id: .id}))),
+         merge:  ($merge | map(. + {failures: ($failures[.id] // 0), title: ($byid[.id].title // "")}))
+       },
+       parked: ($inprog | map(select(.id as $i | ($merge | map(.id)) + $laneids + ($review | map(.id)) | index($i) | not) | bead(.))),
+       worktrees: $worktrees}'
 }
 
 # status_one: status_json as text.
@@ -620,16 +751,19 @@ status_one() {
   status_json | jq -r '
     def pad(n): .[0:n] | . + " " * (n - length);
     def age: (now - .) | if . < 90 then "\(.|floor)s" elif . < 5400 then "\(. / 60 | floor)m" else "\(. / 3600 | floor)h" end;
-    "\(.slug)  label=\(.label) base=\(.base) merge=\(.merge) stages=\(.stages | length)  first: worker=\(.stages[0].worker) reviewer=\(.stages[0].reviewer | if . == "" then "none" else . end)",
-    (.inflight[] | "  \(.id)  \(.url)\(if .red then "  [red]" else "" end)\(if .adopted then "  [adopted]" else "" end)"),
-    "  ready: \(.ready | map(.id) | join(" "))",
-    (if .working then "  working: \(.working.id)" else empty end),
+    def q($name; $list): "  \($name) queue (\($list | length)):" + (if ($list | length) == 0 then "  —" else "" end),
+      ($list | to_entries[] | "    \(.key + 1 | tostring | pad(3)) \(.value.id | pad(14)) \(.value.failures)× \(.value.stage.worker // "—" | pad(14)) \(.value.title // "" | pad(60))");
+    "\(.slug)  label=\(.label) base=\(.base) merge=\(.merge) stages=\(.stages | map("\(.worker)⇢\(.reviewer | if . == "" then "none" else . end)×\(.failures)") | join(" → "))",
+    "  dev lane:    \(.lanes.dev // {} | if .id then "\(.id) \(.title // "") (\(.since | age))" else "idle" end)",
+    "  review lane: \(.lanes.review // {} | if .id then "\(.id) \(.title // "") (\(.since | age))" else "idle" end)",
+    q("dev"; .queues.dev), q("review"; .queues.review),
+    "  merge queue (\(.queues.merge | length)):" + (if (.queues.merge | length) == 0 then "  —" else "" end),
+    (.queues.merge[] | "    \(.id | pad(14)) \(.url)\(if .red then "  [red]" else "" end)\(if .adopted then "  [adopted]" else "" end)"),
     (if (.parked | length) > 0 then "  parked: \(.parked | map(.id) | join(" "))" else empty end),
     (.attach as $attach | .worktrees[] |
-      "  wt/\(.id)  attempt \(.attempts)\(if $attach == "" then "  (no attach: logs/\(.id).*)" else "" end)",
-      (.sessions[] |
-        "    \(.state | ascii_upcase | if . == "ORPHAN" then . else ascii_downcase | pad(6) end)  \(.agent // "?" | pad(13))  \(.model | pad(18))  \("\(.updated | age) ago" | pad(7))  \(.title | pad(48))  \(.url)"
-        + (if .state == "orphan" then "\n            no client on this box; stop it:  curl -X POST \($attach)/session/\(.id)/abort" else "" end)))'
+      (.sessions[] | select(.state != "idle") |
+        "  \(.state | ascii_upcase | if . == "ORPHAN" then . else ascii_downcase | pad(6) end)  \(.agent // "?" | pad(13))  \(.model | pad(18))  \("\(.updated | age) ago" | pad(7))  \(.title | pad(40))  \(.url)"
+        + (if .state == "orphan" then "\n          no client on this box; stop it:  curl -X POST \($attach)/session/\(.id)/abort" else "" end)))'
 }
 
 # watch: status every few seconds, with the last supervisor log lines above it.
@@ -648,20 +782,16 @@ watch_loop() {
 
 # ---- main --------------------------------------------------------------------
 exec 9>"$STATE_DIR/lock"
-if [ "$CMD" != status ] && [ "$CMD" != log ] && [ "$CMD" != watch ]; then
+if [ "$CMD" != status ] && [ "$CMD" != log ] && [ "$CMD" != watch ] && [ "$CMD" != lane ]; then
   flock -n 9 || { log "another bead-supervisor holds $STATE_DIR/lock; skipping this tick"; exit 0; }
 fi
 case $CMD in
-  # A pass is reconcile + one bead per repo. A bead done — PR up, or the attempt over —
-  # means the next pass starts now, not after the timer: the model is idle otherwise.
-  # The pass that attempts nothing (nothing ready, or waiting on CI) ends the tick, and
-  # the timer's gap is how often that wait is checked.
-  tick)      while :; do
-               WORKED=0
-               for r in "${REPOS[@]}"; do load_repo "$r"; reconcile; work_one; done
-               [ "$WORKED" = 1 ] && [ "$ONCE" = 0 ] || break
-             done ;;
-  work)      load_repo "${REPOS[0]}"; work_one "${REPOS[1]:-}" ;;
+  tick)      tick ;;  # reconcile, both lanes side by side until drained, reconcile
+  # work: one bead through both lanes, in this process, in order: what --local and a
+  # hand-run check want. A bead the dev lane sends back stops there.
+  work)      load_repo "${REPOS[0]}"
+             if dev_one "${REPOS[1]:-}" && [ -e "$RS/review/$LAST_ID" ]; then review_one "$LAST_ID"; fi ;;
+  lane)      case ${LANE_NAME:-} in dev|review) lane "$LANE_NAME" ;; *) die "lane dev or lane review" ;; esac ;;
   reconcile) for r in "${REPOS[@]}"; do load_repo "$r"; reconcile; done ;;
   status)    for r in "${REPOS[@]}"; do load_repo "$r"; if [ "$JSON" = 1 ]; then status_json; else status_one; fi; done ;;
   watch)     WATCH_INTERVAL=${BEAD_LOOP_WATCH:-5}; watch_loop ;;

@@ -10,23 +10,25 @@ merge = "auto"                         # auto: the next tick squash-merges once 
 review_model = "acbox/coder"           # the senior model that judges the diff before the push; unset = no review
 on_exhaust = "repeat"                  # repeat: cycle the stages until it lands | park: leave it for you (default)
 # adopt = true                         # open bead/* PRs from anyone join the loop and merge on green
-# max_inflight = 1                     # open PRs before the loop waits for CI
+# max_inflight = 1                     # PRs in the merge queue before the dev lane pauses
 # merge_label = "automerge"            # the label merge = "pipeline" puts on each PR
 
-# Escalation, in order. A failed attempt sends the bead back to the queue with its
-# note; later attempts may use a later stage. Usually set once, globally.
+# Escalation, in order. Every send-back to the dev queue — the gate failing twice, a
+# REJECT from review, CI red — is one failure; a stage takes the bead for the next
+# `failures` of them, then the next stage does. So the bead reaches Opus below after
+# 3 + 2 = 5 failures. Usually set once, globally. (`attempts` is the older name.)
 [[stages]]
 worker = "devbox/coder"
 reviewer = "acbox/coder"
-attempts = 3
+failures = 3
 
 [[stages]]
 worker = "acbox/coder"
 reviewer = "acbox/instruct"
-attempts = 2
+failures = 2
 timeout = 14400                        # seconds; default worker_timeout
 
 [[stages]]
 worker = "claude/opus"                 # runs in Claude Code instead of opencode
 reviewer = "claude/opus"
-attempts = 1
+failures = 1
