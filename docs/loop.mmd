@@ -6,9 +6,9 @@ flowchart TD
     R[reconcile: read every open bead PR] --> P{bd ready -l LABEL}
     P -- nothing --> Z([done])
     P -- top bead --> C[bd claim<br/>git worktree add bead/ID off origin/BASE]
-    C --> U[SETUP<br/>npm ci]
+    C --> U[setup<br/>npm ci]
     U --> W[implementor session<br/>bead-worker agent]
-    W -- DONE + commit --> G[GATE<br/>typecheck · lint]
+    W -- DONE + commit --> G[gate<br/>typecheck · lint · test]
     W -- BLOCKED --> F
     G -- fail, first time --> W
     G -- fail, second time --> F
