@@ -16,9 +16,10 @@
 #   ~/.config/bead-loop/config.toml   repos (list), model, review_model, stages, on_exhaust, adopt,
 #                                     max_inflight, worker_timeout, attach (an opencode server url:
 #                                     sessions run there and stream in its web UI)
-#   REPO/.bead-loop.toml              label, base, setup, gate, merge (auto|github|manual), plus any key above
+#   REPO/.bead-loop.toml              label, base, setup, gate, merge (auto|pipeline|manual), merge_label, plus any key above
 # Defaults: label=delegate:local  base=origin's HEAD  max_inflight=1  adopt=true
-#           merge=auto (a tick merges on green; github: GitHub auto-merge, no tick between; manual: PR only)
+#           merge=auto (a tick merges on green; pipeline: the loop labels the PR with merge_label,
+#           default "automerge", and CI merges it; manual: PR only)
 #           worker_timeout=3600 (seconds)  setup unset  gate unset (CI is the gate)
 #           review_model unset (no review). Set it and a second model judges the diff
 #           before the push; the worker gets one revision round on a REJECT.
@@ -64,7 +65,7 @@ while [ $# -gt 0 ]; do
     --dry-run) DRY=1 ;;
     --local) LOCAL=1 ;;
     --model) MODEL_FLAG=$2; shift ;;
-    -h|--help) sed -n '2,25p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,26p' "$0"; exit 0 ;;
     *) ARGS+=("$1") ;;
   esac
   shift
@@ -87,6 +88,7 @@ load_repo() {
   SLUG=$(basename "$REPO")
   LABEL=$(cfg label delegate:local)
   MERGE=$(cfg merge auto)
+  MERGE_LABEL=$(cfg merge_label automerge)
   SETUP=$(cfg setup)
   GATE=$(cfg gate)
   MODEL=${MODEL_FLAG:-$(cfg model)}
@@ -358,17 +360,7 @@ BODY
   printf '%s\n' "$url" >"$RS/inflight/$id"
   bdr comment "$id" "bead-loop: opened $url" >/dev/null
   log "$SLUG: opened $url"
-  # merge = "github": GitHub merges the moment its required checks pass, no tick in
-  # between. Refused when the repo has auto-merge off or the branch has no required
-  # checks; then the tick merges on green as under "auto".
-  if [ "$MERGE" = github ]; then
-    if ghr pr merge "$num" --auto --squash --delete-branch >/dev/null 2>&1; then
-      log "$SLUG: $id: GitHub auto-merge armed on $url"
-    else
-      bdr update "$id" --append-notes "bead-loop: GitHub refused auto-merge on $url (the repo needs auto-merge enabled and a branch rule with required checks); the loop merges it on green instead" >/dev/null
-      log "$SLUG: $id: auto-merge refused on $url; the tick merges on green"
-    fi
-  fi
+  if [ "$MERGE" = pipeline ]; then hand_to_pipeline "$id" "$num" "$url"; fi
   git -C "$REPO" worktree remove --force "$wt"
 }
 
@@ -431,6 +423,18 @@ close_merged() {
 # adopt: any open PR on a bead/<id>[-slug] branch this loop did not open (another
 # session, a human) joins inflight, so green merges and the bead closes whoever
 # wrote it. adopt = false in .bead-loop.toml turns it off.
+# hand_to_pipeline ID NUM URL: merge = "pipeline". The loop labels the PR and the CI
+# pipeline merges it on its own terms; the tick only closes the bead once it is MERGED.
+# A label the repo does not have cannot be added: noted, and the PR waits for you.
+hand_to_pipeline() {
+  if ghr pr edit "$2" --add-label "$MERGE_LABEL" >/dev/null 2>&1; then
+    log "$SLUG: $1: labelled $MERGE_LABEL on $3; the pipeline merges it"
+  else
+    bdr update "$1" --append-notes "bead-loop: could not label $3 with $MERGE_LABEL (does the repo have that label?); the pipeline will not merge it, so it waits for you" >/dev/null
+    log "$SLUG: $1: could not label $3 with $MERGE_LABEL; waiting for you"
+  fi
+}
+
 adopt() {
   [ "$ADOPT" = true ] || return 0
   local num head url id
@@ -441,6 +445,7 @@ adopt() {
     [ -e "$RS/inflight/$id" ] && continue
     printf '%s\n' "$url" >"$RS/inflight/$id"; touch "$(mark "$id" adopted)"
     log "$SLUG: adopted $url ($head) as bead $id"
+    if [ "$MERGE" = pipeline ]; then hand_to_pipeline "$id" "$num" "$url"; fi
   done < <(ghr pr list --state open --limit 100 --json number,headRefName,url \
              --jq '.[] | select(.headRefName | startswith("bead/")) | [.number, .headRefName, .url] | @tsv' 2>/dev/null || true)
 }
@@ -470,7 +475,7 @@ reconcile() {
             else "pending" end')
         case $verdict in
           green)
-            if [ "$MERGE" = auto ] || [ "$MERGE" = github ]; then
+            if [ "$MERGE" = auto ]; then
               if [ "$(printf '%s' "$view" | jq -r .mergeStateStatus)" = BEHIND ]; then
                 ghr pr update-branch "$num" >/dev/null 2>&1 && log "$SLUG: $id: updated branch, CI reruns" || log "$SLUG: $id: update-branch failed"
               elif ghr pr merge "$num" --squash --delete-branch >/dev/null 2>&1; then
@@ -479,7 +484,7 @@ reconcile() {
                 log "$SLUG: $id: green but merge refused ($(printf '%s' "$view" | jq -r .mergeStateStatus))"
               fi
             else
-              log "$SLUG: $id: green, merge is manual, waiting for you: $url"
+              log "$SLUG: $id: green, merge is $MERGE, waiting for $([ "$MERGE" = pipeline ] && echo "the pipeline" || echo you): $url"
             fi
             ;;
           red)

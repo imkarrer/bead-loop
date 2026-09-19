@@ -16,13 +16,15 @@ case $2 in
   view)
     if [ "$3" = 7 ]; then jq '{state, mergedAt: null, mergeStateStatus, statusCheckRollup, url}' "$TEST_CTRL/pr.json"
     else jq --argjson n "$3" '.[] | select(.number==$n) | {state, mergedAt: null, mergeStateStatus: "CLEAN", statusCheckRollup: .checks, url}' "$TEST_CTRL/extra-prs.json"; fi ;;
+  edit)
+    # --add-label L: labels land in pr.json (or labels-extra for planted PRs). A test plants
+    # $TEST_CTRL/label-missing to have GitHub refuse, as it does for a label the repo lacks.
+    n=$3 l=; while [ $# -gt 0 ]; do [ "$1" = --add-label ] && l=$2; shift; done
+    [ -e "$TEST_CTRL/label-missing" ] && { echo "'$l' not found" >&2; exit 1; }
+    if [ "$n" = 7 ]; then jq --arg l "$l" '.labels += [$l]' "$TEST_CTRL/pr.json" >"$TEST_CTRL/pr.json.tmp" && mv "$TEST_CTRL/pr.json.tmp" "$TEST_CTRL/pr.json"
+    else echo "$n $l" >>"$TEST_CTRL/labels-extra"; fi ;;
   merge)
-    # --auto arms GitHub auto-merge: the PR stays open (autoMerge:true); a test plants
-    # $TEST_CTRL/automerge-refused to have GitHub turn it down, as it does without a branch rule.
-    if [ "$3" = 7 ] && case " $* " in *" --auto "*) true ;; *) false ;; esac; then
-      [ -e "$TEST_CTRL/automerge-refused" ] && { echo "Pull request is not in the correct state to enable auto-merge" >&2; exit 1; }
-      jq '.autoMerge=true' "$TEST_CTRL/pr.json" >"$TEST_CTRL/pr.json.tmp" && mv "$TEST_CTRL/pr.json.tmp" "$TEST_CTRL/pr.json"
-    elif [ "$3" = 7 ]; then jq '.state="MERGED"' "$TEST_CTRL/pr.json" >"$TEST_CTRL/pr.json.tmp" && mv "$TEST_CTRL/pr.json.tmp" "$TEST_CTRL/pr.json"
+    if [ "$3" = 7 ]; then jq '.state="MERGED"' "$TEST_CTRL/pr.json" >"$TEST_CTRL/pr.json.tmp" && mv "$TEST_CTRL/pr.json.tmp" "$TEST_CTRL/pr.json"
     else echo "$3" >>"$TEST_CTRL/merged-extra"; fi ;;
   update-branch) jq '.mergeStateStatus="CLEAN"' "$TEST_CTRL/pr.json" >"$TEST_CTRL/pr.json.tmp" && mv "$TEST_CTRL/pr.json.tmp" "$TEST_CTRL/pr.json" ;;
   *) echo "stub gh: unknown pr $2" >&2; exit 2 ;;

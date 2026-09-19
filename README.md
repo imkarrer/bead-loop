@@ -33,7 +33,7 @@ flowchart TD
   V -.- CPU[(acbox/coder<br/>Qwen3-Coder-Next 80B Q8<br/>hp 840z, 256 GB RAM, CPU)]
 
   PR --> CI[Buildkite, queue self on ac-box]
-  CI -- all checks green<br/>next tick, or GitHub auto-merge<br/>with merge = github --> M[squash-merge · delete branch<br/>bd close ID]
+  CI -- all checks green<br/>next tick, or the pipeline itself<br/>on the automerge label --> M[squash-merge · delete branch<br/>bd close ID]
   CI -- red --> N[note on bead<br/>PR stays open for you]
   CI -- no checks --> N
 
@@ -86,12 +86,12 @@ house style, vocabulary) stay in each repo under `.agents/skills/` or
    (`merge = "auto"`) the supervisor never asks GitHub to auto-merge: a later tick merges
    once every reported check is green, and refuses while none is reported. Branch
    protection, where the plan allows it, is a second lock.
-5. Optional, `merge = "github"`: the PR is armed with GitHub's auto-merge as soon as it
-   opens, so it lands the moment the required checks pass, up to ten minutes sooner. That
-   trusts GitHub's rule instead of the tick's: the repo needs auto-merge enabled and a
-   branch rule with required checks, or GitHub refuses (noted on the bead, and the tick
-   merges on green as under `auto`). On a branch with *no* rule, auto-merge would merge at
-   once, which is why the loop only arms it on PRs it opened, never on adopted ones.
+5. Optional, `merge = "pipeline"`: the loop puts a label on each PR it opens or adopts
+   (`merge_label`, default `automerge`) and merging is the pipeline's job — it merges
+   the moment its own run is green, no tick in between, and the loop never calls
+   `gh pr merge`. The next tick sees `MERGED` and closes the bead. The label must exist in
+   the repo; if GitHub refuses it, that is noted on the bead and the PR waits for you.
+   (GitHub's own auto-merge is not used: private repos need a paid plan for it.)
 
 ## Watching it
 
