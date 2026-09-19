@@ -5,57 +5,102 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>bead-loop</title>
 <style>
+  /* Solarized dark (Ethan Schoonover), the whole page. The 16 names are kept so a
+     colour choice reads as the palette's own: base03 canvas, base02 panels, base01
+     for what can be dim, base0 for text, base1 for what must be read first. */
   :root {
-    --bg: #f6f6f4; --panel: #ffffff; --ink: #1c1c1a; --muted: #6b6b66; --line: #e3e3df;
-    --accent: #3b6ea5; --ok: #2f8f5b; --warn: #b7791f; --bad: #c2413b; --busy: #3b6ea5;
-    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  }
-  @media (prefers-color-scheme: dark) {
-    :root { --bg: #151614; --panel: #1e1f1c; --ink: #ecebe6; --muted: #9a9a92; --line: #2e2f2b;
-            --accent: #7fb0e6; --ok: #5cc48a; --warn: #e0a84a; --bad: #ef6b63; --busy: #7fb0e6; }
+    --base03: #002b36; --base02: #073642; --base01: #586e75; --base00: #657b83;
+    --base0: #839496; --base1: #93a1a1; --base2: #eee8d5; --base3: #fdf6e3;
+    --yellow: #b58900; --orange: #cb4b16; --red: #dc322f; --magenta: #d33682;
+    --violet: #6c71c4; --blue: #268bd2; --cyan: #2aa198; --green: #859900;
+    --bg: var(--base03); --panel: var(--base02); --ink: var(--base0); --bright: var(--base1); --muted: var(--base01);
+    --line: rgba(147, 161, 161, .14); --line-strong: rgba(147, 161, 161, .28);
+    --accent: var(--blue); --ok: var(--green); --warn: var(--yellow); --bad: var(--red); --busy: var(--cyan);
+    --worker: var(--cyan); --reviewer: var(--violet);
+    --mono: ui-monospace, "JetBrains Mono", SFMono-Regular, Menlo, Consolas, monospace;
   }
   * { box-sizing: border-box; }
-  body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.45 system-ui, -apple-system, Segoe UI, sans-serif; }
+  html { color-scheme: dark; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 14.5px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
   a { color: var(--accent); text-decoration: none; } a:hover { text-decoration: underline; }
-  header { position: sticky; top: 0; z-index: 2; background: var(--panel); border-bottom: 1px solid var(--line);
-           padding: 10px 16px; display: flex; flex-wrap: wrap; gap: 10px 24px; align-items: center; }
-  header h1 { font-size: 16px; margin: 0; letter-spacing: .02em; }
-  .unit { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); display: inline-block; }
-  .dot.on { background: var(--ok); } .dot.warn { background: var(--warn); }
-  .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
-  .seg button { border: 0; border-radius: 0; } .seg button + button { border-left: 1px solid var(--line); }
-  .seg button.cur { background: var(--accent); color: var(--panel); } .dot.busy { background: var(--busy); animation: pulse 1.6s infinite; } .dot.bad { background: var(--bad); }
-  @keyframes pulse { 50% { opacity: .35; } }
-  button { font: inherit; font-size: 13px; padding: 4px 10px; border-radius: 6px; border: 1px solid var(--line);
-           background: var(--panel); color: var(--ink); cursor: pointer; }
+  b, strong { color: var(--bright); font-weight: 600; }
+
+  /* header: one bar, the units separated by rules */
+  header { position: sticky; top: 0; z-index: 2; background: var(--panel); border-bottom: 1px solid var(--line-strong);
+           padding: 10px 20px; display: flex; flex-wrap: wrap; gap: 8px 0; align-items: center; }
+  header h1 { font-size: 15px; margin: 0 20px 0 0; letter-spacing: .04em; color: var(--base2); font-weight: 600; }
+  .unit { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 0 18px; border-left: 1px solid var(--line-strong); color: var(--bright); }
+  .unit:empty { display: none; }
+  .unit .muted { color: var(--muted); }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--base01); display: inline-block; flex: none; }
+  .dot.on { background: var(--ok); } .dot.warn { background: var(--orange); } .dot.bad { background: var(--bad); }
+  .dot.busy { background: var(--busy); animation: pulse 1.6s infinite; }
+  @keyframes pulse { 50% { opacity: .3; } }
+
+  button { font: inherit; font-size: 13px; padding: 4px 11px; border-radius: 5px; border: 1px solid var(--line-strong);
+           background: transparent; color: var(--bright); cursor: pointer; line-height: 1.3; }
   button:hover { border-color: var(--accent); color: var(--accent); }
   button.danger:hover { border-color: var(--bad); color: var(--bad); }
-  button:disabled { opacity: .5; cursor: default; }
-  main { padding: 16px; max-width: 1400px; margin: 0 auto; display: grid; gap: 16px; }
-  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; }
-  .card h2 { margin: 0 0 4px; font-size: 15px; display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
-  .card h3 { margin: 14px 0 6px; font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
-  .cfg { color: var(--muted); font-size: 12.5px; }
-  .chip { display: inline-block; padding: 1px 7px; border-radius: 999px; font-size: 11.5px; border: 1px solid var(--line); color: var(--muted); }
-  .chip.ok { color: var(--ok); border-color: var(--ok); } .chip.warn { color: var(--warn); border-color: var(--warn); }
-  .chip.bad { color: var(--bad); border-color: var(--bad); } .chip.busy { color: var(--busy); border-color: var(--busy); }
+  button:disabled { opacity: .45; cursor: default; }
+  .seg { display: inline-flex; border: 1px solid var(--line-strong); border-radius: 5px; overflow: hidden; }
+  .seg button { border: 0; border-radius: 0; } .seg button + button { border-left: 1px solid var(--line-strong); }
+  .seg button.cur, .seg button.cur:hover { background: var(--accent); color: var(--base03); }
+  .seg button.cur.game { background: var(--orange); }
+
+  main { padding: 20px; max-width: 1400px; margin: 0 auto; display: grid; gap: 18px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px 20px; }
+  .card h2 { margin: 0; font-size: 17px; color: var(--base2); font-weight: 600; display: flex; gap: 12px; align-items: baseline; flex-wrap: wrap; }
+  .card h3 { margin: 18px 0 8px; font-size: 11.5px; text-transform: uppercase; letter-spacing: .1em; color: var(--muted); font-weight: 600; }
+  .card h3:first-child { margin-top: 0; }
+  .card h3 .n { color: var(--bright); margin-left: 4px; }
+  .card h3 .note { text-transform: none; letter-spacing: 0; font-weight: 400; margin-left: 8px; }
+  .cfg { color: var(--muted); font-size: 13px; font-weight: 400; }
+  .cfg .mono { color: var(--base00); }
+
+  .chip { display: inline-block; padding: 0 7px; border-radius: 4px; font-size: 11.5px; line-height: 18px; font-weight: 600;
+          letter-spacing: .02em; color: var(--base1); background: rgba(147, 161, 161, .12); vertical-align: 1px; white-space: nowrap; }
+  .chip.ok { color: var(--base03); background: var(--ok); } .chip.warn { color: var(--base03); background: var(--warn); }
+  .chip.bad { color: var(--base3); background: var(--bad); } .chip.busy { color: var(--base03); background: var(--busy); }
+  .chip.worker { color: var(--worker); background: rgba(42, 161, 152, .14); }
+  .chip.reviewer { color: var(--reviewer); background: rgba(108, 113, 196, .18); }
+  .chip.n { min-width: 22px; text-align: center; color: var(--bright); }
+
   table { border-collapse: collapse; width: 100%; }
-  td, th { text-align: left; padding: 4px 8px 4px 0; vertical-align: top; border-top: 1px solid var(--line); }
-  th { border-top: 0; font-size: 11.5px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); font-weight: 500; }
-  .overview td { padding-top: 7px; padding-bottom: 7px; }
+  td, th { text-align: left; padding: 7px 12px 7px 0; vertical-align: top; border-top: 1px solid var(--line); }
+  td:last-child, th:last-child { padding-right: 0; }
   tr:first-child td { border-top: 0; }
-  td.id, .mono { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
-  td.muted, .muted { color: var(--muted); }
+  th { border-top: 0; padding-top: 0; font-size: 11.5px; text-transform: uppercase; letter-spacing: .1em; color: var(--muted); font-weight: 600; }
+  .id, .mono { font-family: var(--mono); font-size: 13px; }
+  td.id { color: var(--accent); white-space: nowrap; }
+  .muted { color: var(--muted); }
   td.act { text-align: right; white-space: nowrap; }
-  .wt { margin: 6px 0 2px; font-family: var(--mono); font-size: 12.5px; color: var(--muted); }
-  .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 0 24px; }
-  @media (max-width: 800px) { .cols { grid-template-columns: 1fr; } }
-  .working { padding: 8px 10px; border-left: 3px solid var(--busy); background: color-mix(in srgb, var(--busy) 8%, transparent); border-radius: 4px; margin-top: 8px; }
-  pre.log { margin: 0; font: 12px/1.5 var(--mono); white-space: pre-wrap; max-height: 40vh; overflow: auto; color: var(--ink); }
+  td.title { color: var(--ink); max-width: 0; width: 100%; }
+  td.title .t { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  td.fit { white-space: nowrap; }
+
+  /* overview: the hero table; counts are big so a glance answers "anything waiting?" */
+  .overview td { padding-top: 12px; padding-bottom: 12px; }
+  .overview td.id { font-size: 14.5px; }
+  .count { font: 600 22px/1 var(--mono); color: var(--bright); }
+  .count.zero { color: var(--muted); font-weight: 400; }
+  .count small { display: block; font: 11px/1.4 system-ui, sans-serif; color: var(--muted); text-transform: uppercase; letter-spacing: .08em; margin-top: 4px; }
+  .now .bead { font-family: var(--mono); font-size: 13.5px; color: var(--accent); font-weight: 600; }
+  .now .t { color: var(--bright); }
+  .now .stage { margin-top: 4px; color: var(--muted); display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .now .idle { color: var(--muted); font-style: italic; }
+
+  .wt { margin: 10px 0 4px; font-family: var(--mono); font-size: 12.5px; color: var(--muted); }
+  .wt b { color: var(--base00); font-weight: 600; }
+  .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 0 32px; }
+  @media (max-width: 900px) { .cols { grid-template-columns: 1fr; } }
+  .working { padding: 10px 14px; border-left: 3px solid var(--busy); background: rgba(42, 161, 152, .08); border-radius: 4px; margin: 12px 0 0; color: var(--bright); }
+
+  pre.log { margin: 0; font: 12.5px/1.6 var(--mono); white-space: pre-wrap; max-height: 44vh; overflow: auto; color: var(--ink); }
   pre.log .t { color: var(--muted); }
-  .banner { background: color-mix(in srgb, var(--bad) 12%, transparent); border: 1px solid var(--bad); color: var(--ink); padding: 8px 12px; border-radius: 8px; }
-  footer { color: var(--muted); font-size: 12px; text-align: right; }
+  pre.log .good { color: var(--green); } pre.log .warn { color: var(--yellow); } pre.log .bad { color: var(--orange); }
+  pre.log .pick { color: var(--blue); } pre.log .rev { color: var(--violet); } pre.log .sys { color: var(--muted); }
+  .banner { background: rgba(220, 50, 47, .12); border: 1px solid var(--bad); color: var(--bright); padding: 10px 14px; border-radius: 8px; }
+  footer { color: var(--muted); font-size: 12px; text-align: right; padding: 0 20px 20px; }
   .empty { color: var(--muted); font-style: italic; }
 </style>
 </head>
@@ -98,7 +143,7 @@ function gpu(s) {
   // game: the loop and the model server are stopped for the GPU; work: running, and the
   // guard may flip to game by itself when it sees one (then `by` says auto).
   $('gpu').innerHTML = `<span class="dot ${g.mode === 'game' ? 'warn' : 'on'}"></span>GPU ${esc(g.mode)}<span class="muted"> (${esc(g.by)})</span>
-    <span class="seg"><button class="${g.mode === 'work' ? 'cur' : ''}" ${dis} onclick="act('gpu',{mode:'work'})">Work</button><button class="${g.mode === 'game' ? 'cur' : ''}" ${dis} onclick="act('gpu',{mode:'game'},'Game mode: stop the loop (aborting its session) and the local model server?')">Game</button></span>`;
+    <span class="seg"><button class="${g.mode === 'work' ? 'cur' : ''}" ${dis} onclick="act('gpu',{mode:'work'})">Work</button><button class="${g.mode === 'game' ? 'cur game' : ''}" ${dis} onclick="act('gpu',{mode:'game'},'Game mode: stop the loop (aborting its session) and the local model server?')">Game</button></span>`;
 }
 function header(s) {
   gpu(s);
@@ -117,7 +162,11 @@ function header(s) {
 }
 
 const stateChip = (st) => st === 'busy' ? '<span class="chip busy">busy</span>' : st === 'orphan' ? '<span class="chip bad">orphan</span>' : '<span class="chip">idle</span>';
-const beadRow = (b, extra = '') => `<tr><td class="id">${esc(b.id)}</td><td>${esc(b.title || '')}</td><td class="muted">${b.attempts ? `${b.attempts} attempt${b.attempts > 1 ? 's' : ''}` : ''}</td>${extra}</tr>`;
+// The agent as its role: the worker implements, the reviewer judges; colour tells them apart.
+const roleChip = (agent) => `<span class="chip ${/review/.test(agent) ? 'reviewer' : 'worker'}">${esc((agent || '?').replace(/^bead-/, ''))}</span>`;
+const attempts = (n) => n ? `<span class="chip n" title="attempts so far">${n}×</span>` : '';
+const beadRow = (b, extra = '') => `<tr><td class="id">${esc(b.id)}</td><td class="title"><span class="t" title="${esc(b.title || '')}">${esc(b.title || '')}</span></td><td class="fit">${attempts(b.attempts)}</td>${extra}</tr>`;
+const count = (n, label, cls = '') => `<div class="count ${n ? '' : 'zero'}">${n}<small>${label}${cls}</small></div>`;
 
 // What the workers are on right now, per repo: the bead the supervisor claimed and the
 // session the server calls busy under its worktree (that is the stage: worker or reviewer).
@@ -126,59 +175,71 @@ function nowLine(r, now) {
   const wt = w && r.worktrees.find((x) => x.id === w.id);
   const live = wt && wt.sessions.find((s) => s.state === 'busy');
   const anyBusy = r.worktrees.flatMap((x) => x.sessions.filter((s) => s.state !== 'idle').map((s) => ({ ...s, wt: x.id })));
-  if (w) return `<b class="mono">${esc(w.id)}</b> ${esc(w.title || '')}${live ? `<div class="muted">${esc(live.agent)} · ${esc(live.model)} · last output ${ago(live.updated, now)} ago · <a href="${esc(live.url)}" target="_blank" rel="noopener">open ↗</a></div>` : wt ? '<div class="muted">between stages (setup, gate, or the push)</div>' : ''}`;
-  if (anyBusy.length) return anyBusy.map((s) => `<span class="chip ${s.state === 'orphan' ? 'bad' : 'busy'}">${s.state}</span> <span class="mono">${esc(s.agent)}</span> on ${esc(s.wt)} <span class="muted">(no claim recorded: an older supervisor, or a hand-run work)</span>`).join('<br>');
-  return '<span class="muted">idle</span>';
+  if (w) return `<div class="now"><span class="bead">${esc(w.id)}</span> <span class="t">${esc(w.title || '')}</span>
+    <div class="stage">${live ? `${roleChip(live.agent)} <span class="mono">${esc(live.model)}</span> <span>last output ${ago(live.updated, now)} ago</span> <a href="${esc(live.url)}" target="_blank" rel="noopener">open session ↗</a>`
+      : wt ? '<span>between stages — setup, gate, or the push</span>' : '<span>claimed, worktree not up yet</span>'}</div></div>`;
+  if (anyBusy.length) return `<div class="now">${anyBusy.map((s) => `<div class="stage">${stateChip(s.state)} ${roleChip(s.agent)} on <span class="mono">${esc(s.wt)}</span> <span>no claim recorded — an older supervisor, or a hand-run <span class="mono">work</span></span></div>`).join('')}</div>`;
+  return '<div class="now"><span class="idle">idle — waiting for the next tick</span></div>';
 }
 function overview(s) {
   if (s.repos.length === 0) return '<section class="card"><div class="empty">no repos: set <span class="mono">repos</span> in ~/.config/bead-loop/config.toml</div></section>';
-  return `<section class="card"><h3 style="margin-top:0">Repos (${s.repos.length})</h3><table class="overview">
-    <tr><th>repo</th><th>now</th><th>ready</th><th>in flight</th><th>parked</th><th>label · base · merge</th></tr>
+  return `<section class="card"><h3>Repos<span class="n">${s.repos.length}</span></h3><table class="overview">
+    <tr><th>repo</th><th>now</th><th></th><th></th><th></th></tr>
     ${s.repos.map((r) => `<tr>
-      <td class="id"><a href="#repo-${esc(r.slug)}">${esc(r.slug)}</a></td>
-      <td>${nowLine(r, s.now)}</td>
-      <td>${r.ready.length}</td>
-      <td>${r.inflight.length}/${r.max_inflight}${r.inflight.some((p) => p.red) ? ' <span class="chip bad">CI red</span>' : ''}</td>
-      <td>${r.parked.length}</td>
-      <td class="muted">${esc(r.label)} · ${esc(r.base)} · ${esc(r.merge)}</td></tr>`).join('')}
+      <td class="id"><a href="#repo-${esc(r.slug)}">${esc(r.slug)}</a><div class="cfg" style="margin-top:4px">${esc(r.label)}<br>${esc(r.base)} · ${esc(r.merge)}</div></td>
+      <td class="title">${nowLine(r, s.now)}</td>
+      <td class="fit">${count(r.ready.length, 'ready')}</td>
+      <td class="fit">${count(r.inflight.length, `in flight · max ${r.max_inflight}`)}${r.inflight.some((p) => p.red) ? '<div style="margin-top:6px"><span class="chip bad">CI red</span></div>' : ''}</td>
+      <td class="fit">${count(r.parked.length, 'parked')}</td></tr>`).join('')}
   </table></section>`;
 }
 
 function repo(r, now) {
-  const stages = r.stages.map((s) => `${esc(s.worker)}${s.reviewer ? ` ⇢ ${esc(s.reviewer)}` : ''} ×${s.attempts}`).join(' → ');
-  const sessions = r.worktrees.length === 0 ? '<div class="empty">no worktrees</div>' : r.worktrees.map((w) => `
-    <div class="wt">wt/${esc(w.id)} · attempt ${w.attempts}</div>
+  const stages = r.stages.map((s) => `<span class="mono">${esc(s.worker)}</span>${s.reviewer ? ` ⇢ <span class="mono">${esc(s.reviewer)}</span>` : ''} ×${s.attempts}`).join(' &nbsp;→&nbsp; ');
+  const sessions = r.worktrees.length === 0 ? '<div class="empty">no worktrees — nothing has been picked up</div>' : r.worktrees.map((w) => `
+    <div class="wt"><b>wt/${esc(w.id)}</b> · attempt ${w.attempts}</div>
     ${w.sessions.length === 0 ? '<div class="empty">no sessions on the server</div>' : `<table>${w.sessions.map((s) => `
-      <tr><td>${stateChip(s.state)}</td><td class="mono">${esc(s.agent)}</td><td class="mono muted">${esc(s.model)}</td>
-          <td class="muted" title="last activity">${ago(s.updated, now)} ago</td>
-          <td><a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.title || s.id)} ↗</a></td>
+      <tr><td class="fit">${stateChip(s.state)}</td><td class="fit">${roleChip(s.agent)}</td><td class="mono muted fit">${esc(s.model)}</td>
+          <td class="muted fit" title="last activity">${ago(s.updated, now)} ago</td>
+          <td class="title"><span class="t"><a href="${esc(s.url)}" target="_blank" rel="noopener" title="${esc(s.title || s.id)}">${esc(s.title || s.id)} ↗</a></span></td>
           <td class="act">${s.state !== 'idle' ? `<button class="danger" ${busyAction ? 'disabled' : ''} onclick="act('abort',{attach:${JSON.stringify(r.attach)},session:${JSON.stringify(s.id)}},'Abort ${esc(s.agent)} on ${esc(w.id)}?')">Abort</button>` : ''}</td></tr>`).join('')}</table>`}`).join('');
   const inflight = r.inflight.length === 0 ? '<div class="empty">none</div>' : `<table>${r.inflight.map((p) => `
-    <tr><td class="id">${esc(p.id)}</td><td><a href="${esc(p.url)}" target="_blank" rel="noopener">${esc(p.url.replace(/^https?:\/\/github\.com\//, ''))} ↗</a></td>
-        <td>${p.red ? '<span class="chip bad">CI red</span>' : '<span class="chip ok">waiting on CI</span>'} ${p.adopted ? '<span class="chip warn">adopted</span>' : ''}</td></tr>`).join('')}</table>`;
+    <tr><td class="id">${esc(p.id)}</td><td class="title"><span class="t"><a href="${esc(p.url)}" target="_blank" rel="noopener">${esc(p.url.replace(/^https?:\/\/github\.com\//, ''))} ↗</a></span></td>
+        <td class="fit">${p.red ? '<span class="chip bad">CI red</span>' : '<span class="chip ok">waiting on CI</span>'} ${p.adopted ? '<span class="chip warn">adopted</span>' : ''}</td></tr>`).join('')}</table>`;
   const ready = r.ready.length === 0 ? '<div class="empty">nothing ready</div>' : `<table>${r.ready.map((b) => beadRow(b)).join('')}</table>`;
   const parked = r.parked.length === 0 ? '<div class="empty">none</div>' : `<table>${r.parked.map((b) => beadRow(b,
     `<td class="act"><button ${busyAction ? 'disabled' : ''} onclick="act('reopen',{repo:${JSON.stringify(r.repo)},id:${JSON.stringify(b.id)}})">Reopen</button></td>`)).join('')}</table>`;
   return `<section class="card" id="repo-${esc(r.slug)}">
-    <h2>${esc(r.slug)} <span class="cfg">${esc(r.label)} · ${esc(r.base)} · merge ${esc(r.merge)} · ${stages}${r.attach ? '' : ' · <b>no attach</b>: sessions not visible'}</span></h2>
+    <h2>${esc(r.slug)} <span class="cfg">${esc(r.label)} · ${esc(r.base)} · merge ${esc(r.merge)}${r.attach ? '' : ' · <b>no attach</b>: sessions not visible'}</span></h2>
+    <div class="cfg" style="margin-top:4px">stages: ${stages}</div>
     ${r.working ? `<div class="working">working on <b class="mono">${esc(r.working.id)}</b> ${esc(r.working.title || '')}</div>` : ''}
     <h3>Sessions</h3>${sessions}
-    <h3>In flight (${r.inflight.length}/${r.max_inflight})</h3>${inflight}
     <div class="cols">
-      <div><h3>Ready (${r.ready.length})</h3>${ready}</div>
-      <div><h3>Parked (${r.parked.length}) <span class="muted" style="text-transform:none;letter-spacing:0">— in_progress, waiting for you</span></h3>${parked}</div>
+      <div><h3>Ready<span class="n">${r.ready.length}</span></h3>${ready}</div>
+      <div><h3>Parked<span class="n">${r.parked.length}</span><span class="note">in_progress, waiting for you</span></h3>${parked}</div>
     </div>
+    <h3>In flight<span class="n">${r.inflight.length}/${r.max_inflight}</span></h3>${inflight}
   </section>`;
+}
+
+// One class per kind of line, so the eye can skim the log for the red and the green.
+function logClass(m) {
+  if (/stopped:|failed|BLOCKED|red\b|rejected/.test(m)) return 'bad';
+  if (/approved|opened https|closed \(|merged/.test(m)) return 'good';
+  if (/review by|revision round/.test(m)) return 'rev';
+  if (/: bead \S+ —|back in the queue/.test(m)) return 'pick';
+  if (/^(Starting|Finished|Stopped|Started) |\.service:/.test(m)) return 'sys';
+  return '';
 }
 
 function render() {
   if (!last) return;
   header(last);
   const log = last.log.length === 0 ? '<div class="empty">no journal (not running under systemd?)</div>'
-    : `<pre class="log" id="log">${last.log.map((l) => `<span class="t">${clock(l.t)}</span>  ${esc(l.msg.replace(/^\d\d:\d\d:\d\d /, ''))}`).join('\n')}</pre>`;
+    : `<pre class="log" id="log">${last.log.map((l) => { const m = l.msg.replace(/^\d\d:\d\d:\d\d /, ""); return `<span class="t">${clock(l.t)}</span>  <span class="${logClass(m)}">${esc(m)}</span>`; }).join("\n")}</pre>`;
   $('main').innerHTML = (last.error ? `<div class="banner">status failed: ${esc(last.error)}</div>` : '')
     + overview(last) + last.repos.map((r) => repo(r, last.now)).join("")
-    + `<section class="card"><h3 style="margin-top:0">Supervisor log</h3>${log}</section>`;
+    + `<section class="card"><h3>Supervisor log</h3>${log}</section>`;
   const el = $('log'); if (el) el.scrollTop = el.scrollHeight;
   $('foot').textContent = `state as of ${clock(last.now)} · pushed on every change`;
 }
