@@ -33,11 +33,11 @@ model = "devbox/coder"           # worker, when no stages table is set
 worker_timeout = 3600            # seconds per model session
 max_inflight = 1                 # open PRs per repo before the loop waits for CI
 on_exhaust = "park"              # after the last stage: park (for you) | repeat (around again)
-
+# Escalation, in order; each send-back to dev is a failure, a stage takes the next N.
 # Escalation, in order; a failed attempt requeues the bead for the next one.
 # [[stages]]
 # worker = "devbox/coder"
-# reviewer = "acbox/coder"
+# failures = 3
 # attempts = 3
 CFG
   echo "config ~/.config/bead-loop/config.toml (set repos)"

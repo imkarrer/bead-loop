@@ -78,22 +78,29 @@
   td.title .t { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   td.fit { white-space: nowrap; }
 
-  /* the hero: which bead this tick is on, readable from across the room */
-  .hero { margin: 14px 0 0; padding: 16px 20px; border-radius: 8px; background: var(--base03); border-left: 4px solid var(--busy); }
-  .hero.idle { border-left-color: var(--base01); }
-  .hero .label { font-size: 11.5px; text-transform: uppercase; letter-spacing: .12em; color: var(--muted); font-weight: 600; }
-  .hero .label .muted { text-transform: none; letter-spacing: 0; font-weight: 400; }
-  .hero .bead { font: 600 30px/1.15 var(--mono); color: var(--accent); margin-top: 6px; }
-  .hero .what { font-size: 16px; color: var(--base2); margin-top: 4px; line-height: 1.4; }
-  .hero.idle .what { color: var(--muted); font-style: italic; font-size: 15px; }
-  .hero .stage { margin-top: 12px; color: var(--muted); display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
-  .counts { display: flex; gap: 36px; align-items: flex-start; margin: 16px 0 4px; }
-  .count { font: 600 24px/1 var(--mono); color: var(--bright); }
-  .count.zero { color: var(--muted); font-weight: 400; }
-  .count small { display: block; font: 11px/1.4 system-ui, sans-serif; color: var(--muted); text-transform: uppercase; letter-spacing: .08em; margin-top: 5px; }
+  /* the two lanes: what each is on right now, readable from across the room */
+  .lanes { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 14px; }
+  @media (max-width: 800px) { .lanes { grid-template-columns: 1fr; } }
+  .lane { padding: 14px 18px; border-radius: 8px; background: var(--base03); border-left: 4px solid var(--worker); min-height: 96px; }
+  .lane.review { border-left-color: var(--reviewer); }
+  .lane.idle { border-left-color: var(--base01); }
+  .lane .label { font-size: 11.5px; text-transform: uppercase; letter-spacing: .12em; color: var(--muted); font-weight: 600; }
+  .lane .label .muted { text-transform: none; letter-spacing: 0; font-weight: 400; }
+  .lane .label { display: flex; align-items: center; gap: 8px; } .lane .label .act { margin-left: auto; }
+  .lane.paused { border-left-style: dashed; }
+  .lane .bead { font: 600 26px/1.15 var(--mono); color: var(--accent); margin-top: 6px; }
+  .lane .what { font-size: 15px; color: var(--base2); margin-top: 3px; line-height: 1.4; }
+  .lane.idle .what { color: var(--muted); font-style: italic; margin-top: 10px; }
+  .lane .stage { margin-top: 10px; color: var(--muted); display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  /* the three queues, in the order the lanes take them */
+  .queues { display: grid; grid-template-columns: 1.3fr 1fr 1fr; gap: 0 28px; margin-top: 6px; }
+  @media (max-width: 1000px) { .queues { grid-template-columns: 1fr; } }
+  .q h3 { margin-bottom: 2px; } .q .sub { color: var(--muted); font-size: 12px; margin-bottom: 8px; }
+  .q.dev h3 { color: var(--worker); } .q.review h3 { color: var(--reviewer); } .q.merge h3 { color: var(--green); }
+  .q td.pos { color: var(--muted); font: 500 12px var(--mono); width: 22px; padding-right: 6px; text-align: right; }
+  .q tr:first-child td.pos, .q tr:first-child td.id { color: var(--bright); }
+  .q tr.sub td { border-top: 0; padding-top: 0; font-size: 12.5px; }
 
-  .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 0 32px; }
-  @media (max-width: 900px) { .cols { grid-template-columns: 1fr; } }
 
   pre.log { margin: 0; font: 12.5px/1.6 var(--mono); white-space: pre-wrap; max-height: 44vh; overflow: auto; color: var(--ink); }
   pre.log .t { color: var(--muted); }
@@ -155,7 +162,7 @@ function header(s) {
   $('timer').innerHTML = !t.available ? `<span class="dot"></span><span class="muted">no systemd timer here</span>` : t.active === 'active'
     ? `<span class="dot on"></span>timer running${when ? ` · ${when}` : ''} <button ${dis} onclick="act('timer',{on:false})">Pause timer</button>`
     : `<span class="dot"></span>timer paused <button ${dis} onclick="act('timer',{on:true})">Resume timer</button>`;
-  const working = s.repos.map((r) => r.working && `${r.slug}: ${r.working.id}`).filter(Boolean).join(', ');
+  const working = s.repos.flatMap((r) => Object.entries(r.lanes).map(([k, l]) => `${k} ${l.id}`)).join(' · ');
   $('tick').innerHTML = !v.available ? '' : ticking
     ? `<span class="dot busy"></span>tick running${since ? ` ${ago(since, s.now)}` : ''}${working ? ` — ${esc(working)}` : ''} <button class="danger" ${dis} onclick="act('stop',{},'Stop the running tick? The supervisor aborts the model session it is on and the attempt is not recorded.')">Stop tick</button>`
     : `<span class="dot ${v.result && v.result !== 'success' ? 'bad' : ''}"></span>tick idle${v.result && v.result !== 'success' ? ` (last: ${esc(v.result)})` : ''} <button ${dis} onclick="act('tick')">Tick now</button>`;
@@ -166,17 +173,23 @@ const stateChip = (st) => st === 'busy' ? '<span class="chip busy">busy</span>' 
 const roleChip = (agent) => `<span class="chip ${/review/.test(agent) ? 'reviewer' : 'worker'}">${esc((agent || '?').replace(/^bead-/, ''))}</span>`;
 // A session's name: opencode's, unless it is the "????" a busy model has answered with.
 const titleOf = (s, w) => (s.title && !/^[\s?.…]*$/.test(s.title)) ? s.title : `${w.id} · ${(s.agent || '').replace(/^bead-/, '')}`;
-const attempts = (n) => n ? `<span class="chip n" title="attempts so far">${n}×</span>` : '';
-const beadRow = (b, extra = '') => `<tr><td class="id">${esc(b.id)}</td><td class="title"><span class="t" title="${esc(b.title || '')}">${esc(b.title || '')}</span></td><td class="fit">${attempts(b.attempts)}</td>${extra}</tr>`;
-// A PR in flight: what GitHub says now (p.pr, a minute old at most), then the loop's own
-// markers. Merged or closed on GitHub means the next tick's reconcile finishes the bead.
+// How often the bead has been sent back to dev, and the stage that count puts it on:
+// stage 1 is the fast local pair; a later stage is a stronger model, the last one Opus.
+const failChip = (n) => n ? `<span class="chip n" title="sent back to dev ${n} time${n > 1 ? 's' : ''}">${n}×</span>` : '';
+const stageChip = (st) => !st ? '<span class="chip bad" title="stages exhausted">exhausted</span>'
+  : `<span class="chip ${st.index > 1 ? 'warn' : ''}" title="stage ${st.index}: worker ${esc(st.worker)}${st.reviewer ? ', reviewer ' + esc(st.reviewer) : ''}">${st.index > 1 ? `S${st.index} · ` : ''}${esc(st.worker)}</span>`;
+const count = (n, label) => `<div class="count ${n ? '' : 'zero'}">${n}<small>${label}</small></div>`;
+const abortBtn = (r, sess, label) => `<button class="danger" ${busyAction ? 'disabled' : ''} onclick="act('abort',{attach:${JSON.stringify(r.attach)},session:${JSON.stringify(sess.id)}},'Abort ${esc(label)}?')">Abort</button>`;
+
+// A PR in the merge queue: what GitHub says now (p.pr, a minute old at most), then the
+// loop's own markers. Merged or closed on GitHub means the next reconcile finishes it.
 function prChips(p, now) {
   const g = p.pr, out = [];
   if (g && g.state === 'MERGED') out.push(`<span class="chip ok">merged${g.mergedAt ? ` ${ago(g.mergedAt, now)} ago` : ''}</span> <span class="muted">bead closes on the next tick</span>`);
-  else if (g && g.state === 'CLOSED') out.push('<span class="chip warn">closed unmerged</span> <span class="muted">noted on the next tick</span>');
+  else if (g && g.state === 'CLOSED') out.push('<span class="chip warn">closed unmerged</span> <span class="muted">parked on the next tick</span>');
   else if (g) {
     const bad = g.checks.filter((c) => /FAIL|ERROR|CANCEL/i.test(c.state)), pending = g.checks.filter((c) => /PENDING|IN_PROGRESS|QUEUED|EXPECTED/i.test(c.state));
-    out.push(bad.length ? `<span class="chip bad">CI red</span> <span class="muted">${esc(bad.map((c) => c.name).join(', '))}</span>`
+    out.push(bad.length ? `<span class="chip bad">CI red</span> <span class="muted">${esc(bad.map((c) => c.name).join(', '))} · back to dev on the next tick</span>`
       : g.checks.length === 0 ? '<span class="chip">no checks yet</span>'
       : pending.length ? `<span class="chip busy">CI running</span> <span class="muted">${pending.length}/${g.checks.length} pending</span>`
       : '<span class="chip ok">CI green</span> <span class="muted">merges on the next tick</span>');
@@ -184,80 +197,75 @@ function prChips(p, now) {
   if (p.adopted) out.push('<span class="chip warn" title="opened by someone else, adopted by the loop">adopted</span>');
   return out.join(' ');
 }
-const count = (n, label, cls = '') => `<div class="count ${n ? '' : 'zero'}">${n}<small>${label}${cls}</small></div>`;
 
-// What the workers are on right now, per repo: the bead the supervisor claimed and the
-// session the server calls busy under its worktree (that is the stage: worker or reviewer).
-// The one thing that matters per repo: the bead the supervisor is on, and the session
-// that is live for it — that is the stage (worker or reviewer), with the lever to stop it.
-// Idle sessions are history and are not shown; the opencode link has them.
-const abortBtn = (r, sess, label) => `<button class="danger" ${busyAction ? 'disabled' : ''} onclick="act('abort',{attach:${JSON.stringify(r.attach)},session:${JSON.stringify(sess.id)}},'Abort ${esc(label)}?')">Abort</button>`;
-// The hero: which bead this tick is on. The supervisor's own record (.working, written
-// at claim) first; failing that, the one worktree with a busy session while a tick is
-// running — the pre-record case, and a hand-run `work` — said as such.
-function workingOf(r, ticking) {
-  if (r.working) return { ...r.working, inferred: false };
-  if (!ticking) return null;
-  const busy = r.worktrees.filter((x) => x.sessions.some((s) => s.state === 'busy'));
-  if (busy.length !== 1) return null;
-  const b = r.parked.find((p) => p.id === busy[0].id) || r.ready.find((p) => p.id === busy[0].id);
-  return { id: busy[0].id, title: b ? b.title : '', inferred: true };
-}
-function hero(r, now, ticking) {
-  const w = workingOf(r, ticking);
-  if (!w) return `<div class="hero idle"><div class="label">this tick</div><div class="what">${ticking ? 'tick running — reconciling, or picking a bead' : 'nothing — waiting for the next tick'}</div></div>`;
-  const wt = r.worktrees.find((x) => x.id === w.id);
+// The two lanes, side by side: what each is on right now, with the session that is live
+// for it and the lever to stop it. This is the page's answer to "what is being worked".
+function lanePanel(r, name, now, ticking) {
+  const l = r.lanes[name];
+  const role = name === 'dev' ? 'worker' : 'reviewer';
+  const paused = r.paused && r.paused[name];
+  const pauseBtn = `<button ${busyAction ? 'disabled' : ''} onclick="act('lane',{name:'${name}',paused:${!paused}})">${paused ? 'Resume lane' : 'Pause lane'}</button>`;
+  if (!l) {
+    const why = name === 'dev'
+      ? (r.queues.dev.length === 0 ? 'dev queue empty' : r.queues.merge.filter((p) => !p.adopted).length >= r.max_inflight ? `waiting on CI (${r.max_inflight} in flight is the limit)` : ticking ? 'starting…' : 'until the next tick')
+      : (r.queues.review.length === 0 ? 'review queue empty' : ticking ? 'starting…' : 'until the next tick');
+    return `<div class="lane idle ${name}${paused ? ' paused' : ''}"><div class="label">${name} lane ${paused ? '<span class="chip warn">paused</span>' : ''}<span class="act">${pauseBtn}</span></div><div class="what">${paused ? 'paused — starts no new round until resumed' : `idle — ${esc(why)}`}</div></div>`;
+  }
+  const wt = r.worktrees.find((x) => x.id === l.id);
   const live = wt && wt.sessions.find((s) => s.state === 'busy');
-  return `<div class="hero">
-    <div class="label">this tick${w.inferred ? ' <span class="muted">(read from the running session; the supervisor left no claim record)</span>' : ''}</div>
-    <div class="bead">${esc(w.id)}</div>
-    <div class="what">${esc(w.title || '')}</div>
-    <div class="stage">${wt ? `<span>attempt ${wt.attempts + 1}</span>` : ''}
-      ${live ? `${roleChip(live.agent)} <span class="mono">${esc(live.model)}</span> <span>last output ${ago(live.updated, now)} ago</span> <a href="${esc(live.url)}" target="_blank" rel="noopener">open session ↗</a> ${abortBtn(r, live, `${live.agent} on ${w.id}`)}`
-        : wt ? '<span>between stages — setup, gate, or the push</span>' : '<span>claimed, worktree not up yet</span>'}</div>
+  return `<div class="lane ${name}">
+    <div class="label">${name} lane <span class="muted">· ${role} · ${ago(l.since, now)}</span> ${paused ? '<span class="chip warn" title="finishes this round, then starts no new one">pausing</span>' : ''}<span class="act">${pauseBtn}</span></div>
+    <div class="bead">${esc(l.id)}</div>
+    <div class="what">${esc(l.title || '')}</div>
+    <div class="stage">${failChip(l.failures)}${stageChip(l.stage)}
+      ${live ? `${roleChip(live.agent)} <span class="mono">${esc(live.model)}</span> <span>last output ${ago(live.updated, now)} ago</span> <a href="${esc(live.url)}" target="_blank" rel="noopener">open session ↗</a> ${abortBtn(r, live, `${live.agent} on ${l.id}`)}`
+        : `<span>${name === 'dev' ? 'setup, or the gate' : 'pushing the PR'}</span>`}</div>
   </div>`;
 }
-// Sessions the server is still running that are not the working bead's: an orphan of a
-// killed attempt, or a hand-run `work`. Nothing here is the common case, so the block
-// only appears when there is something to stop.
+// Sessions the server is still running that are on no lane: an orphan of a killed round,
+// or a hand-run `work`. Only appears when there is something to stop.
 function strays(r, now) {
-  const wid = r.__working && r.__working.id;
-  const rows = r.worktrees.filter((x) => x.id !== wid).flatMap((x) => x.sessions.filter((s) => s.state !== 'idle').map((s) => ({ ...s, wt: x })));
+  const on = Object.values(r.lanes).map((l) => l.id);
+  const rows = r.worktrees.filter((x) => !on.includes(x.id)).flatMap((x) => x.sessions.filter((s) => s.state !== 'idle').map((s) => ({ ...s, wt: x })));
   if (rows.length === 0) return '';
-  return `<h3>Also running<span class="n">${rows.length}</span><span class="note">not the bead being worked — an older attempt, or a hand-run work</span></h3><table>${rows.map((s) => `
+  return `<h3>Also running<span class="n">${rows.length}</span><span class="note">on no lane — an older round, or a hand-run work</span></h3><table>${rows.map((s) => `
     <tr><td class="fit">${stateChip(s.state)}</td><td class="fit">${roleChip(s.agent)}</td><td class="id">${esc(s.wt.id)}</td><td class="mono muted fit">${esc(s.model)}</td>
         <td class="muted fit">${ago(s.updated, now)} ago</td>
         <td class="title"><span class="t"><a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(titleOf(s, s.wt))} ↗</a></span></td>
         <td class="act">${abortBtn(r, s, `${s.agent} on ${s.wt.id}`)}</td></tr>`).join('')}</table>`;
 }
+
+// The queues, in the order the lanes take them. Position is the information: #1 is next.
+const qRow = (i, b, extra) => `<tr><td class="pos">${i + 1}</td><td class="id">${esc(b.id)}</td><td class="title"><span class="t" title="${esc(b.title || '')}">${esc(b.title || '')}</span></td><td class="fit">${failChip(b.failures)}${extra || ''}</td></tr>`;
+function queueCol(name, rows, r, now) {
+  const empty = { dev: 'nothing ready', review: 'nothing waiting for review', merge: 'no PRs in flight' }[name];
+  const sub = { dev: 'fewest failures first, then bd’s order', review: 'gate passed; the reviewer next', merge: `PRs in CI · dev pauses at ${r.max_inflight}` }[name];
+  let body;
+  if (rows.length === 0) body = `<div class="empty">${empty}</div>`;
+  else if (name === 'merge') body = `<table>${rows.map((p) => `<tr><td class="id">${esc(p.id)}</td><td class="title"><span class="t"><a href="${esc(p.url)}" target="_blank" rel="noopener">${esc(p.url.replace(/^https?:\/\/github\.com\/[^/]+\//, ''))} ↗</a></span></td></tr><tr class="sub"><td></td><td>${prChips(p, now)}</td></tr>`).join('')}</table>`;
+  else body = `<table>${rows.map((b, i) => qRow(i, b, name === 'dev' ? ` ${stageChip(b.stage)}` : ` <span class="muted">${ago(b.since, now)}</span>`)).join('')}</table>`;
+  return `<div class="q ${name}"><h3>${name} queue<span class="n">${rows.length}</span></h3><div class="sub">${sub}</div>${body}</div>`;
+}
+
 function repo(r, now, ticking) {
-  r.__working = workingOf(r, ticking);
-  const stages = r.stages.map((s) => `<span class="mono">${esc(s.worker)}</span>${s.reviewer ? ` ⇢ <span class="mono">${esc(s.reviewer)}</span>` : ''} ×${s.attempts}`).join(' &nbsp;→&nbsp; ');
-  const inflight = r.inflight.length === 0 ? '<div class="empty">none</div>' : `<table>${r.inflight.map((p) => `
-    <tr><td class="id">${esc(p.id)}</td><td class="title"><span class="t"><a href="${esc(p.url)}" target="_blank" rel="noopener">${esc(p.url.replace(/^https?:\/\/github\.com\//, ''))} ↗</a></span></td>
-        <td class="fit">${prChips(p, now)}</td></tr>`).join('')}</table>`;
-  const ready = r.ready.length === 0 ? '<div class="empty">nothing ready</div>' : `<table>${r.ready.map((b) => beadRow(b)).join('')}</table>`;
-  const parked = r.parked.length === 0 ? '<div class="empty">none</div>' : `<table>${r.parked.map((b) => beadRow(b,
-    `<td class="act"><button ${busyAction ? 'disabled' : ''} onclick="act('reopen',{repo:${JSON.stringify(r.repo)},id:${JSON.stringify(b.id)}})">Reopen</button></td>`)).join('')}</table>`;
+  const stages = r.stages.map((s, i) => `<span title="stage ${i + 1}: takes the next ${s.failures} failure${s.failures > 1 ? 's' : ''}"><span class="mono">${esc(s.worker)}</span>${s.reviewer ? ` ⇢ <span class="mono">${esc(s.reviewer)}</span>` : ''} ×${s.failures}</span>`).join(' &nbsp;→&nbsp; ');
+  const parked = r.parked.length === 0 ? '<div class="empty">none</div>' : `<table>${r.parked.map((b) => `<tr><td class="id">${esc(b.id)}</td><td class="title"><span class="t" title="${esc(b.title || '')}">${esc(b.title || '')}</span></td><td class="fit">${failChip(b.failures)}${b.stage ? '' : ' <span class="chip bad">exhausted</span>'}</td>
+    <td class="act"><button ${busyAction ? 'disabled' : ''} onclick="act('reopen',{repo:${JSON.stringify(r.repo)},id:${JSON.stringify(b.id)}})">Reopen</button></td></tr>`).join('')}</table>`;
   return `<section class="card" id="repo-${esc(r.slug)}">
-    <h2>${esc(r.slug)} <span class="cfg">${esc(r.label)} · ${esc(r.base)} · merge ${esc(r.merge)} · stages: ${stages}${r.attach ? '' : ' · <b>no attach</b>: sessions not visible'}</span></h2>
-    ${hero(r, now, ticking)}
-    <div class="counts">${count(r.ready.length, 'ready')}${count(r.inflight.length, `in flight · max ${r.max_inflight}`)}${r.inflight.some((p) => p.red) ? '<span class="chip bad">CI red</span>' : ''}${count(r.parked.length, 'parked')}</div>
+    <h2>${esc(r.slug)} <span class="cfg">${esc(r.label)} · ${esc(r.base)} · merge ${esc(r.merge)} · stages: ${stages} · then ${esc(r.on_exhaust)}${r.attach ? '' : ' · <b>no attach</b>: sessions not visible'}</span></h2>
+    <div class="lanes">${lanePanel(r, 'dev', now, ticking)}${lanePanel(r, 'review', now, ticking)}</div>
+    <div class="queues">${queueCol('dev', r.queues.dev, r, now)}${queueCol('review', r.queues.review, r, now)}${queueCol('merge', r.queues.merge, r, now)}</div>
     ${strays(r, now)}
-    <div class="cols">
-      <div><h3>Ready<span class="n">${r.ready.length}</span></h3>${ready}</div>
-      <div><h3>Parked<span class="n">${r.parked.length}</span><span class="note">in_progress, waiting for you</span></h3>${parked}</div>
-    </div>
-    <h3>In flight<span class="n">${r.inflight.length}/${r.max_inflight}</span></h3>${inflight}
+    <h3>Parked<span class="n">${r.parked.length}</span><span class="note">in_progress, waiting for you — stages exhausted, BLOCKED at the last stage, or a PR closed unmerged</span></h3>${parked}
   </section>`;
 }
 
 // One class per kind of line, so the eye can skim the log for the red and the green.
 function logClass(m) {
-  if (/stopped:|failed|BLOCKED|red\b|rejected/.test(m)) return 'bad';
-  if (/approved|opened https|closed \(|merged/.test(m)) return 'good';
-  if (/review by|revision round/.test(m)) return 'rev';
-  if (/: bead \S+ —|back in the queue/.test(m)) return 'pick';
+  if (/stopped:|failed|BLOCKED|CI red|rejected|exhausted|parked/.test(m)) return 'bad';
+  if (/approved|opened https|pushed a new round|closed \(|merged/.test(m)) return 'good';
+  if (/review: |→ review queue/.test(m)) return 'rev';
+  if (/dev: bead |→ dev queue/.test(m)) return 'pick';
   if (/^(Starting|Finished|Stopped|Started) |\.service:/.test(m)) return 'sys';
   return '';
 }

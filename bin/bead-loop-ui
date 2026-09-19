@@ -8,7 +8,7 @@
 // Levers, each one command the operator would otherwise type:
 //   abort a session on the opencode server, run a tick now, stop the running tick
 //   (the supervisor's TERM handler aborts its session), pause/resume the timer,
-//   reopen a parked bead, gpu-mode game/work where the box has that command.
+//   reopen a parked bead, pause/resume one lane, gpu-mode game/work where the box has it.
 // The page holds an EventSource on /api/events and is pushed every change; nobody
 // presses refresh. No dependencies beyond node; the page is ui/index.html.
 'use strict';
@@ -88,7 +88,7 @@ async function fetchPr(repo, url) {
 }
 function withPrs(repos) {
   const seen = new Set();
-  for (const r of repos) for (const p of r.inflight) {
+  for (const r of repos) for (const p of r.queues.merge) {
     seen.add(p.url);
     if (!prCache.has(p.url)) prCache.set(p.url, { at: 0, pr: undefined, repo: r.repo });
     p.pr = prCache.get(p.url).pr ?? null;
@@ -136,8 +136,11 @@ async function broadcast() {
     lastState = s;
     const body = JSON.stringify(s);
     // `now` alone changes every time; compare the rest.
-    if (body.replace(/"now":\d+/, '') !== lastSent) {
-      lastSent = body.replace(/"now":\d+/, '');
+    // `now` is the first key and changes every time; the rest is what is compared, and
+    // what a new page is replayed (with a fresh `now` put back in front).
+    const rest = body.replace(/^\{"now":\d+,/, '{');
+    if (rest !== lastSent) {
+      lastSent = rest;
       for (const res of clients) res.write(`data: ${body}\n\n`);
     }
     return s;
@@ -146,11 +149,12 @@ async function broadcast() {
 }
 setInterval(() => { if (clients.size) broadcast(); }, POLL_MS);
 setInterval(() => { for (const res of clients) res.write(': keepalive\n\n'); }, 20000);
+const withNow = (rest) => rest.replace(/^\{/, `{"now":${Math.floor(Date.now() / 1000)},`);
 function subscribe(res) {
   res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store', connection: 'keep-alive' });
   clients.add(res);
   res.on('close', () => clients.delete(res));
-  if (lastSent) res.write(`data: ${lastSent.replace(/^\{/, `{"now":${Math.floor(Date.now() / 1000)},`)}\n\n`);
+  if (lastSent) res.write(`data: ${withNow(lastSent)}\n\n`);
   broadcast();
 }
 // Nudge from the opencode server: every event on its stream (a token, a tool call, a
@@ -192,6 +196,13 @@ const actions = {
     return { aborted: session };
   },
   async tick() { return systemctl('start', '--no-block', `${UNIT}.service`); },
+  // lane {name, paused}: the lane starts no new round until resumed; the other goes on.
+  async lane({ name, paused }) {
+    if (name !== 'dev' && name !== 'review') throw new Error('lane is dev or review');
+    const r = await run(SUPERVISOR, [paused ? 'pause' : 'resume', name]);
+    if (!r.ok) throw new Error(r.stderr.trim() || `supervisor exited ${r.code}`);
+    return { lane: name, paused: !!paused };
+  },
   async stop() { return systemctl('stop', `${UNIT}.service`); },
   async timer({ on }) { return systemctl(on ? 'start' : 'stop', `${UNIT}.timer`); },
   // gpu {mode}: game | work. `sudo -n`: no password prompt, a clear error instead.

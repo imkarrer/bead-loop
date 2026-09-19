@@ -1,46 +1,58 @@
 # bead-loop
 
 Work [beads](https://github.com/steveyegge/beads) with local models in any repo: a
-supervisor script picks a labelled bead, an implementor model works it in a fresh
-worktree, a gate proves it, a reviewer model judges the diff, a PR goes up, CI runs,
-green merges, the bead closes. No model runs the loop; models do the two jobs that
-need judgement.
+supervisor script runs two lanes side by side — a **dev lane** where the implementor
+model works a bead in its own worktree and a gate proves it, and a **review lane** where
+the reviewer model judges the diff and pushes the PR — over three queues: **dev**,
+**review**, **merge** (CI on GitHub). Green merges, the bead closes. A bead sent back
+from review or from CI returns to the dev queue with a note and one more **failure**;
+enough failures move it to a stronger stage, the last one Opus. No model runs the
+loop; models do the two jobs that need judgement, and neither waits for the other.
 
 ```mermaid
-flowchart TD
+flowchart LR
   T([systemd user timer<br/>3 min after the last tick ended]) --> R
 
-  subgraph tick [bead-supervisor tick — bash, deterministic; a pass per repo, again while there is work]
-    direction TB
-    R[reconcile: read every open bead PR] --> P{bd ready -l LABEL}
-    P -- nothing --> Z([done])
-    P -- top bead --> C[bd claim<br/>git worktree add bead/ID off origin/BASE]
-    C --> U[setup<br/>npm ci]
-    U --> W[implementor session<br/>bead-worker agent]
-    W -- DONE + commit --> G[gate<br/>typecheck · lint · test]
-    W -- BLOCKED --> F
-    G -- fail, first time --> W
-    G -- fail, second time --> F
-    G -- pass --> V[review session<br/>bead-reviewer agent, read-only]
-    V -- REJECT, first time --> W
-    V -- REJECT, second time --> F[attempt failed: note on the bead<br/>worktree removed]
-    F -- next stage, or repeat --> Q[back in the queue<br/>fewest attempts first]
+  subgraph tick [bead-supervisor tick — bash, deterministic; two lanes side by side until both queues drain]
+    direction LR
+    R[reconcile the merge queue] --> DQ
+
+    subgraph devlane [dev lane — GPU, the fast model]
+      direction TB
+      DQ[[dev queue<br/>bd ready -l LABEL<br/>fewest failures first]] --> C[claim · worktree<br/>fresh, or the branch sent back]
+      C --> W[worker<br/>implements, commits]
+      W -- DONE + commit --> G[gate<br/>typecheck · lint · test]
+      G -- fail, once --> W
+    end
+
+    subgraph reviewlane [review lane — CPU, the strong model]
+      direction TB
+      RQ[[review queue<br/>gate passed]] --> V[reviewer, read-only<br/>judges the diff]
+      V -- APPROVE --> PR[push · PR<br/>or the same PR, updated]
+    end
+
+    G -- pass --> RQ
+    W -- BLOCKED / no commit --> F
+    G -- fail twice --> F
+    V -- REJECT --> F
+    F[failure +1<br/>note on the bead] -- stages left --> DQ
     F -- exhausted, or BLOCKED at the last stage --> H[parked in_progress<br/>for you]
-    V -- APPROVE --> PR[git push · gh pr create<br/>inflight/ID = PR url]
   end
 
-  W -.- GPU[(devbox/coder<br/>Qwen3-Coder-30B-A3B<br/>RTX 4080, this box)]
-  V -.- CPU[(acbox/coder<br/>Qwen3-Coder-Next 80B Q8<br/>hp 840z, 256 GB RAM, CPU)]
+  W -.- GPU[(devbox/coder<br/>Qwen3-Coder-30B<br/>RTX 4080, this box)]
+  V -.- CPU[(acbox/coder<br/>Qwen3-Coder-Next 80B<br/>ac-box, CPU)]
 
-  PR --> CI[Buildkite, queue self on ac-box]
-  CI -- all checks green<br/>next tick, or the pipeline itself<br/>on the automerge label --> M[squash-merge · delete branch<br/>bd close ID]
-  CI -- red --> N[note on bead<br/>PR stays open for you]
-  CI -- no checks --> N
+  PR --> MQ[[merge queue<br/>PRs in CI on GitHub]]
+  MQ -- green: the tick merges,<br/>or the pipeline on the label --> M[squash-merge<br/>bd close ID]
+  MQ -- red --> F
+  MQ -- closed unmerged --> H
 
   classDef model fill:#f3f0ff,stroke:#7c5cff,color:#222
   classDef stop fill:#fff3f0,stroke:#e0503c,color:#222
+  classDef queue fill:#eef7f7,stroke:#2aa198,color:#222
   class GPU,CPU model
-  class H,N stop
+  class H stop
+  class DQ,RQ,MQ queue
 ```
 
 | Role | What | Where it runs here |
@@ -55,18 +67,28 @@ model gets one call per PR, where it pays.
 
 ## What a tick is
 
-A **tick** is one run of `bead-supervisor tick`: a systemd oneshot, no daemon. It makes
-**passes** over the repos — reconcile the open PRs, then attempt one bead — and goes
-round again as long as a pass attempted something, so bead follows bead with the model
-never idle. The pass that finds nothing to attempt ends the tick: nothing ready, or
-`max_inflight` PRs waiting on CI. That wait is the only reason a timer exists: it fires
-a new tick 3 minutes after the last one ended (`OnUnitInactiveSec`), and each such tick
-is one `gh pr view` per PR in flight, a second of work. Nothing in the loop waits on a
-clock while there is work to do. `--once` makes a single pass, for a hand-run check.
+A **tick** is one run of `bead-supervisor tick`: a systemd oneshot, no daemon. It
+reconciles the merge queue (merge green PRs, close their beads, send red ones back to
+dev), then starts the two **lanes** as parallel processes:
 
-A oneshot rather than a daemon because the state is on disk and in `bd`, so a crash
-or a `systemctl stop` (which aborts the model session the tick is on) loses nothing
-but the attempt in progress, and the next tick reads the world afresh. It also gives
+- the **dev lane** takes the top of the dev queue, claims it, runs the worker and the
+  gate, and puts the bead in the review queue — then takes the next one, as long as the
+  dev queue has beads and the merge queue is below `max_inflight`;
+- the **review lane** takes the top of the review queue, runs the reviewer, and on
+  APPROVE pushes the PR into the merge queue — then takes the next one.
+
+Each lane goes on while its queue has work *or the other lane is busy* (review may send
+a bead back to dev; dev is filling review), so the GPU works the next bead while the CPU
+reviews the last, and the tick ends only when both queues are drained and both lanes
+idle. Then it reconciles once more and exits. The only wait left is CI, and that is why
+a timer exists: it fires a new tick 3 minutes after the last one ended
+(`OnUnitInactiveSec`), one `gh pr view` per PR in flight. Nothing waits on a clock while
+there is work to do. `--once` makes one pass of each lane in turn; `--serial` runs the
+lanes one after the other; `lane dev` or `lane review` runs one lane by itself.
+
+A oneshot rather than a daemon because the state is on disk and in `bd`, so a crash or
+a `systemctl stop` (which aborts the model sessions the lanes are on) loses nothing but
+the rounds in progress, and the next tick reads the world afresh. It also gives
 `gpu-mode` one unit to stop and start.
 
 ## Layout
@@ -126,16 +148,16 @@ the global one; the global one wins over the default. Anything may go in either.
 | `repos` | `[]` | global only: the repos a `tick` walks, `~` allowed |
 | `label` | `"delegate:local"` | `bd ready -l LABEL` picks the work; the loop claims, notes and closes beads as this actor, not as you (`BEADS_ACTOR` in its environment overrides) |
 | `base` | origin's HEAD | branch to fork from and PR into |
-| `setup` | none | runs in the fresh worktree before the worker (`npm ci`) |
-| `gate` | none (CI is the gate) | runs after the worker, before any push; one revision round on failure |
-| `model` | none | the worker when no `[[stages]]` table applies |
-| `review_model` | none (no review) | the senior model that judges the diff before the push |
-| `[[stages]]` | one attempt with `model`/`review_model` | `worker`, `reviewer`, `attempts` (1), `timeout` (`worker_timeout`), in order |
+| `setup` | none | runs in a fresh worktree before the worker (`npm ci`); not again on a branch sent back |
+| `gate` | none (CI is the gate) | runs after the worker, before the review queue; one fix round on failure |
+| `model` | none | the dev lane's worker when no `[[stages]]` table applies |
+| `review_model` | none (no review) | the review lane's model when no `[[stages]]` table applies; none: straight to PR |
+| `[[stages]]` | one stage of `model`/`review_model`, `failures = 3` | `worker`, `reviewer`, `failures` (1: how many send-backs this stage absorbs before the next takes over; `attempts` still reads), `timeout` (`worker_timeout`), in order |
 | `on_exhaust` | `"park"` | after the last stage: `park` for you, or `repeat` the stages |
 | `merge` | `"auto"` | `auto`: the tick merges on green · `pipeline`: the loop labels, CI merges · `manual`: PR only |
 | `merge_label` | `"automerge"` | the label `pipeline` puts on each PR |
 | `adopt` | `true` | open `bead/*` PRs from anyone join the loop |
-| `max_inflight` | `1` | open PRs per repo before the loop waits for CI |
+| `max_inflight` | `1` | PRs in the merge queue before the dev lane pauses; the review lane never waits |
 | `worker_timeout` | `3600` | seconds per model session |
 | `attach` | none | an opencode server url; sessions run there and stream in its web UI |
 
@@ -148,20 +170,23 @@ silently running with defaults.
 **<http://127.0.0.1:4097>** — `bead-loop-ui.service`, one page, pushed every change (an
 event stream; nobody presses refresh):
 
-- **Per repo, first and large**: **which bead this tick is on** — id, title, attempt, the stage
-  running as a role chip (worker or reviewer) with its model, when it last produced output,
-  a link into the live session, Abort. Under it the counts: beads ready, PRs in
-  flight and whether CI is red, how many are parked. A PR's state is GitHub's, asked once
-  a minute — "merged · bead closes on the next tick" the moment it merges, even while a
-  long attempt keeps the loop from reconciling.
-- **Per repo**: the ready queue with each bead's attempt count, the parked beads, the PRs in
-  flight — and, only when there is one, a session the server is still running that is *not*
-  the bead being worked (an orphan of a killed attempt, a hand-run `work`), with its Abort.
+- **Per repo, first and large, the two lanes**: what the **dev lane** is on and what the
+  **review lane** is on — id, title, its failure count and stage, the live session's model,
+  when it last produced output, a link into it, Abort — or why a lane is idle (queue
+  empty; waiting on CI).
+- **The three queues in their order**: **dev** (#1 is next; each bead's failures and the
+  stage that puts it on), **review** (how long each has waited), **merge** (each PR with
+  GitHub's word on it — CI running m/n, red with the failing check, green, merged — asked
+  once a minute, so "merged · bead closes on the next tick" shows the moment it merges).
+  Then the parked beads, with Reopen. Only when there is one, a session the server is still
+  running that is on no lane (an orphan of a killed round, a hand-run `work`), with Abort.
   Idle sessions are history and are not shown; the session link has them.
 - **The supervisor's log**, live, and the timer: running or paused, when the next tick is.
 
 The levers, each one command you would otherwise type: **Tick now**, **Stop tick**
-(the supervisor aborts its model session first), **Pause / Resume timer**, **Abort** on
+(each lane aborts its model session first), **Pause / Resume timer**, **Pause / Resume lane**
+(that lane starts no new round; the other goes on — drain review, or hold the CPU box),
+**Abort** on
 any busy or orphan session, **Reopen** on a parked bead, and — where the box has a
 `gpu-mode` command (this workstation does: `game` stops the loop and the local model
 server to free the GPU, `work` starts them again) — a **Work / Game** switch, run as
@@ -178,24 +203,33 @@ bead-supervisor --json status                             # one JSON object per 
 ```
 
 ```
-03:23:33   bead-supervisor watch (every 5s, ctrl-c to stop)
+05:41:12   bead-supervisor watch (every 5s, ctrl-c to stop)
 
-03:02:00 inquire-platform: inq-c0t.23: review by acbox/coder
-03:16:22 inquire-platform: inq-c0t.23: review rejected, revision round
-03:19:21 inquire-platform: inq-c0t.23 attempt 2 stopped: gate failed after revision: npm run typecheck && ...
+05:39:22 inquire-platform: dev: bead inq-ufz.13 — grading.dlq: 30-day retention (0 failures, worker devbox/coder, reviewer acbox/coder)
+05:39:32 inquire-platform: review: inq-85h.5 by acbox/coder (1 failures)
+05:40:01 inquire-platform: inq-85h.5: review approved
+05:40:03 inquire-platform: opened https://github.com/imkarrer/inquire-platform/pull/44
 
-inquire-platform  label=delegate:local base=master merge=pipeline stages=3  first: worker=devbox/coder reviewer=acbox/coder
-  ready: inq-c0t.29 inq-c0t.28 inq-c0t.23
-  wt/inq-c0t.25  attempt 1
-    ORPHAN  bead-reviewer  acbox/coder         78s ago  Grader version implementation from model server   http://127.0.0.1:4096/L2hvbWUv…/session/ses_f487b4f08ffe…
-            no client on this box; stop it:  curl -X POST http://127.0.0.1:4096/session/ses_f487b4f08ffe…/abort
-    idle    bead-worker    devbox/coder        48m ago  Services/grader stamps graderVersion from model   http://127.0.0.1:4096/L2hvbWUv…/session/ses_f4887c37dffe…
+inquire-platform  label=delegate:local base=master merge=pipeline stages=devbox/coder⇢acbox/coder×3 → acbox/coder⇢acbox/instruct×2 → claude/opus⇢claude/opus×1
+  dev lane:    inq-ufz.13 grading.dlq: 30-day retention as a per-topic config (2m)
+  review lane: idle
+  dev queue (4):
+    1   inq-5rm.11     0× devbox/coder   scripts/*.mjs: replace the never-firing process.on('exit') pg cleanup
+    2   inq-8gg.10     1× devbox/coder   packages/domain bands: BAND_CUTS keyed by (rubricVersion, graderModel)
+    3   inq-h2i.8      1× devbox/coder   Gate a Claimed Session to its owner
+    4   inq-c0t.23     4× acbox/coder    scripts/lib/gate.mjs: Composite spread ratio, tail rank correlation
+  review queue (1):
+    1   inq-c0t.28     0× devbox/coder   ladderVersion: blind ratings are evidence for the ladder text
+  merge queue (1):
+    inq-85h.5      https://github.com/imkarrer/inquire-platform/pull/44
+  parked: inq-8gg.8
 ```
 
-The last supervisor log lines, then per repo: PRs in flight, ready beads, parked beads, and every
-worktree under `wt/` with what the attached opencode server has for it — newest sessions
-first, each with its state, agent, model, when it last produced anything, and the web UI
-url that opens it. Click the url; no need to know how the UI names things (it files
+The last supervisor log lines, then per repo: what each lane is on, the three queues in
+the order the lanes take them (position, id, failures, the stage's worker, title), the
+merge queue's PRs, the parked beads — and any session the attached opencode server is
+still running that is on no lane, with its state, agent, model, when it last produced
+anything, and the web UI url that opens it. Click the url; no need to know how the UI names things (it files
 sessions under the worktree's path, base64url-encoded — not under the repo, which is why
 the repo's project view looks idle while the loop is busy).
 
@@ -220,25 +254,37 @@ runs inside that server and streams there live, titled by bead, with the diff.
 
 State lives in `~/.local/state/bead-loop/<repo>/`: `inflight/<id>` (the PR url),
 `logs/<id>.<stamp>.*` (setup, worker, gate, reviewer output per attempt), `wt/<id>`
-(the worktree while a bead is in progress), `attempts/<id>`.
+(the worktree while a bead is on a lane or waiting for review), `review/<id>` (the review
+queue: the worker's last words), `failures/<id>` (+ `.notes`, the history), `lane.dev` /
+`lane.review` (the bead each lane is on).
 
 ## Run
 
 ```bash
-bead-supervisor --dry-run work ~/src/repo               # the bead and prompt it would use
+bead-supervisor --dry-run work ~/src/repo               # the bead the dev lane would take, and its prompt
 bead-supervisor --local work ~/src/repo inq-abc.1       # implement, gate, review; no push
-bead-supervisor work ~/src/repo                         # one bead through to a PR
-bead-supervisor tick                                    # what the timer does
+bead-supervisor work ~/src/repo                         # one bead through both lanes, to a PR
+bead-supervisor lane dev                                # one lane by itself, until its queue is empty
+bead-supervisor pause review                            # that lane starts no new round until resume
+bead-supervisor tick                                    # what the timer does: both lanes, side by side
 systemctl --user enable --now opencode-web.service bead-loop-ui.service bead-supervisor.timer
 sudo loginctl enable-linger $USER                       # timers survive logout
 ```
 
 ## Lifecycle of one bead
 
-An **attempt** is worker → gate (one fix round on failure) → reviewer (one fix round on
-REJECT). It ends in a PR, or in a note on the bead saying exactly where it stopped.
+A **round** is one pass through the two lanes: worker → gate (one fix round on failure)
+→ reviewer → PR. Three things end a round early and send the bead **back to the dev
+queue**, each with a note on the bead saying exactly what happened and **one more
+failure** on its count:
 
-What happens after a failed attempt is the **escalation path**, the `[[stages]]` tables in the config:
+- the dev lane itself: the worker says `BLOCKED:`, makes no commit, or the gate fails
+  twice — the branch is removed and the next round starts fresh;
+- the review lane: `REJECT:` — the branch and its worktree are *kept*; the next round's
+  worker is told to fix its commit in place, and the reviewer sees the fix on top;
+- the merge queue: CI red — same branch, kept; the next round's push updates the same PR.
+
+The failure count is what chooses the **stage**, the `[[stages]]` tables in the config:
 
 ```toml
 on_exhaust = "repeat"
@@ -246,28 +292,38 @@ on_exhaust = "repeat"
 [[stages]]
 worker = "devbox/coder"
 reviewer = "acbox/coder"
-attempts = 3
+failures = 3
 
 [[stages]]
 worker = "acbox/coder"
 reviewer = "acbox/instruct"
-attempts = 2
+failures = 2
 timeout = 14400
+
+[[stages]]
+worker = "claude/opus"
+reviewer = "claude/opus"
+failures = 1
 ```
 
-Read: three attempts with the fast GPU worker reviewed by the 80B; then two with the 80B
-implementing and the *other* 80B reviewing (four-hour timeout); then, with `repeat`,
-around again until it lands. A stage may name `claude/<alias>` (`claude/opus`,
-`claude/sonnet`): that attempt runs in Claude Code (`claude -p`) instead of opencode, the
-agent file's body as its system prompt, tools by role — the frontier model gets only
-what the local ones could not land. It needs `claude` on PATH and logged in once
-(`claude`, then `/login`); the skills are linked into `~/.claude/skills` by `install.sh`. A failed attempt puts the bead back in the queue with its
-note; the next attempt reads the notes of the earlier ones. Among ready beads the one
-with the fewest attempts goes first, so a stubborn bead never starves the rest.
+Read: a bead starts on the fast GPU worker reviewed by the 80B and stays there for its
+first three failures; the fourth and fifth send it to the 80B implementing with the
+*other* 80B reviewing (four-hour timeout); the sixth to Opus; then, with `repeat`,
+around again until it lands. So "when does something get evicted to Opus" is one
+number: the sum of `failures` above the Opus stage. A stage may name `claude/<alias>`
+(`claude/opus`, `claude/sonnet`): that round runs in Claude Code (`claude -p`) instead
+of opencode, the agent file's body as its system prompt, tools by role — the frontier
+model gets only what the local ones could not land. It needs `claude` on PATH and logged
+in once (`claude`, then `/login`); the skills are linked into `~/.claude/skills` by
+`install.sh`. (`attempts` is the older name for `failures` and still reads.)
 
-Two things park a bead (`in_progress`, no more attempts) for a human: the stages are
+Both queues are ordered **fewest failures first**, then bd's own order: everything is
+tried once before anything is tried twice, and a bead that keeps failing gets out of the
+way of the ones that do not. The next round's worker reads the notes of the earlier ones.
+
+Two things park a bead (`in_progress`, no more rounds) for a human: the stages are
 exhausted with `on_exhaust = "park"`, or the *last* stage says `BLOCKED:` — a claim in the
-bead is false, and no model fixes that.
+bead is false, and no model fixes that. A PR closed unmerged parks it too.
 
 ## PRs from anyone
 
@@ -280,20 +336,24 @@ labelled for the pipeline under `pipeline`, and the bead the branch names closes
 
 | Outcome | Bead | Branch / PR |
 | --- | --- | --- |
-| Worker `BLOCKED:` | note with the worker's line; back in the queue for the next stage, parked if this was the last | removed |
-| Setup fails, or no commit | note with the tail of the log; next attempt | removed |
-| Gate fails twice (one revision round with its output) | note with the errors; next attempt | removed |
-| Reviewer `REJECT:` twice | note with the last rejection; next attempt | removed |
-| Attempts exhausted (`on_exhaust = "park"`) | in_progress, for you | — |
-| PR opened | in_progress, comment with the url | pushed |
+| Worker `BLOCKED:` | note with the worker's line, +1 failure; dev queue, parked if this was the last stage | removed |
+| Setup fails, or no commit | note with the tail of the log, +1 failure; dev queue | removed |
+| Gate fails twice (one fix round with its output) | note with the errors, +1 failure; dev queue | removed |
+| Gate passes | in_progress; review queue | kept, in its worktree |
+| Reviewer `REJECT:` | note with the rejection, +1 failure; dev queue — the worker fixes in place | kept |
+| Reviewer `APPROVE:` | in_progress, comment with the url; merge queue | pushed; PR opened, or the existing one updated |
 | CI green, `merge = "auto"` | closed with the PR url | squash-merged by the tick, branch deleted |
 | CI green, `merge = "pipeline"` | closed once the pipeline has merged | labelled `automerge` at open; the pipeline merges |
 | CI green, `merge = "manual"` | in_progress | PR left open for you |
-| CI red | in_progress, one note | PR left open for you |
+| CI red | note with the failing checks, +1 failure; dev queue | kept; the next round's push updates the PR |
+| CI red on an adopted PR | in_progress, one note | left open for whoever opened it |
+| Failures exhausted (`on_exhaust = "park"`) | in_progress, for you | removed |
 | PR closed unmerged | in_progress, note | gone |
 
-`in_progress` is the parking state: `bd ready` never hands it out again, and `bd show`
-says why. Reopen with `bd update <id> --status open` once the bead or the code is fixed.
+`in_progress` covers every state past the dev queue — on a lane, waiting for review, in
+CI, parked — and `bd ready` never hands it out again; `bd show` says why. Reopen a parked
+bead with `bd update <id> --status open` (or the UI's Reopen) once the bead or the code
+is fixed.
 
 The worker never runs `bd`; the bead's text is in its prompt and the supervisor
 records every state change in the operator's checkout. `.beads/issues.jsonl` changes
@@ -309,11 +369,14 @@ check green.
 
 ## Why this shape
 
-- One model server per box, so one bead in flight per box: `max_inflight` defaults to 1
-  and a lock keeps ticks from overlapping.
+- Two model servers on two boxes, so two lanes: the GPU implements the next bead while
+  the CPU reviews the last, and each lane has one bead at a time. One PR in CI at a time by
+  default (`max_inflight`), because CI on a shared queue is the other scarce thing.
 - The 80B at ~3 tok/s is too slow to sit in an agentic edit loop and too good to leave
-  out; one review call per PR is where it pays. First live result: it rejected a diff
+  out; one review call per round is where it pays. First live result: it rejected a diff
   the 30B had declared done, for duplicating entries that already existed.
+- A send-back is a failure, wherever it comes from — the gate, the reviewer, CI — and the
+  failure count alone picks the stage. One counter, one table, no special cases.
 - Every claim is checked by something that is not the model that made it: the gate,
   the reviewer, CI, and the merge check are independent refusals.
 - `run_agent` in `bin/bead-supervisor` is the one seam to the harness: opencode for local
