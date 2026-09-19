@@ -18,7 +18,7 @@ case $cmd in
   update)
     id=$1; shift
     case $1 in
-      --claim) save '(.[] | select(.id==$id)) |= (.status="in_progress")' "$id" ;;
+      --claim) save '(.[] | select(.id==$id)) |= (.status="in_progress" | .assignee=$t)' "$id" "${BEADS_ACTOR:-$USER}" ;;
       --append-notes) save '(.[] | select(.id==$id)) |= (.notes=((.notes // "") + "\n" + $t))' "$id" "$2" ;;
       --status) save '(.[] | select(.id==$id)) |= (.status=$t)' "$id" "$2" ;;
     esac ;;
