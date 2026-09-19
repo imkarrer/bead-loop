@@ -159,6 +159,25 @@ case_merge_manual() {
   assert_eq "$(jq -r .state "$TEST_CTRL/pr.json")" OPEN "manual: green stays open"
   assert_eq "$(bead .status)" in_progress "manual: bead waits for you"
 }
+case_merge_github() {
+  setup true github; sup work "$REPO"
+  assert_match "$(cat "$TEST_CTRL/gh.log")" "pr merge 7 --auto --squash --delete-branch" "auto-merge armed right after the PR"
+  assert_eq "$(jq -r .autoMerge "$TEST_CTRL/pr.json")" true "GitHub holds the merge"
+  assert_eq "$(jq -r .state "$TEST_CTRL/pr.json")" OPEN "nothing merged yet"
+  assert_eq "$(bead .status)" in_progress "bead waits on the PR"
+  jq '.state="MERGED"' "$TEST_CTRL/pr.json" >"$TEST_CTRL/pr.tmp" && mv "$TEST_CTRL/pr.tmp" "$TEST_CTRL/pr.json"  # GitHub merged it between ticks
+  sup reconcile "$REPO"
+  assert_eq "$(bead .status)" closed "the next tick sees MERGED and closes the bead"
+  assert_nofile "$BEAD_LOOP_STATE/repo/inflight/t-1" "no longer in flight"
+}
+case_merge_github_refused_falls_back() {
+  setup true github; touch "$TEST_CTRL/automerge-refused"; sup work "$REPO"
+  assert_match "$(bead .notes)" "refused auto-merge" "noted for you"
+  assert_eq "$(jq -r .state "$TEST_CTRL/pr.json")" OPEN "PR still open"
+  set_checks '[{"context":"ci","state":"SUCCESS"}]'; sup reconcile "$REPO"
+  assert_eq "$(jq -r .state "$TEST_CTRL/pr.json")" MERGED "the tick merges on green instead"
+  assert_eq "$(bead .status)" closed "and closes the bead"
+}
 case_behind_updates_branch() {
   setup; sup work "$REPO"
   jq '.mergeStateStatus="BEHIND"' "$TEST_CTRL/pr.json" >"$TEST_CTRL/pr.tmp" && mv "$TEST_CTRL/pr.tmp" "$TEST_CTRL/pr.json"

@@ -16,8 +16,9 @@
 #   ~/.config/bead-loop/config.toml   repos (list), model, review_model, stages, on_exhaust, adopt,
 #                                     max_inflight, worker_timeout, attach (an opencode server url:
 #                                     sessions run there and stream in its web UI)
-#   REPO/.bead-loop.toml              label, base, setup, gate, merge (auto|manual), plus any key above
-# Defaults: label=delegate:local  base=origin's HEAD  merge=auto  max_inflight=1  adopt=true
+#   REPO/.bead-loop.toml              label, base, setup, gate, merge (auto|github|manual), plus any key above
+# Defaults: label=delegate:local  base=origin's HEAD  max_inflight=1  adopt=true
+#           merge=auto (a tick merges on green; github: GitHub auto-merge, no tick between; manual: PR only)
 #           worker_timeout=3600 (seconds)  setup unset  gate unset (CI is the gate)
 #           review_model unset (no review). Set it and a second model judges the diff
 #           before the push; the worker gets one revision round on a REJECT.
@@ -63,7 +64,7 @@ while [ $# -gt 0 ]; do
     --dry-run) DRY=1 ;;
     --local) LOCAL=1 ;;
     --model) MODEL_FLAG=$2; shift ;;
-    -h|--help) sed -n '2,24p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,25p' "$0"; exit 0 ;;
     *) ARGS+=("$1") ;;
   esac
   shift
@@ -357,6 +358,17 @@ BODY
   printf '%s\n' "$url" >"$RS/inflight/$id"
   bdr comment "$id" "bead-loop: opened $url" >/dev/null
   log "$SLUG: opened $url"
+  # merge = "github": GitHub merges the moment its required checks pass, no tick in
+  # between. Refused when the repo has auto-merge off or the branch has no required
+  # checks; then the tick merges on green as under "auto".
+  if [ "$MERGE" = github ]; then
+    if ghr pr merge "$num" --auto --squash --delete-branch >/dev/null 2>&1; then
+      log "$SLUG: $id: GitHub auto-merge armed on $url"
+    else
+      bdr update "$id" --append-notes "bead-loop: GitHub refused auto-merge on $url (the repo needs auto-merge enabled and a branch rule with required checks); the loop merges it on green instead" >/dev/null
+      log "$SLUG: $id: auto-merge refused on $url; the tick merges on green"
+    fi
+  fi
   git -C "$REPO" worktree remove --force "$wt"
 }
 
@@ -458,7 +470,7 @@ reconcile() {
             else "pending" end')
         case $verdict in
           green)
-            if [ "$MERGE" = auto ]; then
+            if [ "$MERGE" = auto ] || [ "$MERGE" = github ]; then
               if [ "$(printf '%s' "$view" | jq -r .mergeStateStatus)" = BEHIND ]; then
                 ghr pr update-branch "$num" >/dev/null 2>&1 && log "$SLUG: $id: updated branch, CI reruns" || log "$SLUG: $id: update-branch failed"
               elif ghr pr merge "$num" --squash --delete-branch >/dev/null 2>&1; then
@@ -467,7 +479,7 @@ reconcile() {
                 log "$SLUG: $id: green but merge refused ($(printf '%s' "$view" | jq -r .mergeStateStatus))"
               fi
             else
-              log "$SLUG: $id: green, MERGE=manual, waiting for you: $url"
+              log "$SLUG: $id: green, merge is manual, waiting for you: $url"
             fi
             ;;
           red)
@@ -478,7 +490,7 @@ reconcile() {
             ;;
           nocheck)
             if [ ! -e "$(mark "$id" nocheck)" ]; then
-              bdr update "$id" --append-notes "bead-loop: $url reports no CI checks, so nothing proves it green; merge it yourself or set MERGE=manual" >/dev/null
+              bdr update "$id" --append-notes "bead-loop: $url reports no CI checks, so nothing proves it green; merge it yourself or set merge = \"manual\"" >/dev/null
               touch "$(mark "$id" nocheck)"; log "$SLUG: $id: no checks on $url"
             fi
             ;;

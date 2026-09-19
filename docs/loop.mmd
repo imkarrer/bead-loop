@@ -24,7 +24,7 @@ flowchart TD
   V -.- CPU[(acbox/coder<br/>Qwen3-Coder-Next 80B Q8<br/>hp 840z, 256 GB RAM, CPU)]
 
   PR --> CI[Buildkite, queue self on ac-box]
-  CI -- all checks green<br/>on a later tick --> M[squash-merge · delete branch<br/>bd close ID]
+  CI -- all checks green<br/>next tick, or GitHub auto-merge<br/>with merge = github --> M[squash-merge · delete branch<br/>bd close ID]
   CI -- red --> N[note on bead<br/>PR stays open for you]
   CI -- no checks --> N
 
