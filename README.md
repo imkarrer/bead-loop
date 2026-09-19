@@ -184,7 +184,9 @@ event stream; nobody presses refresh):
 - **The supervisor's log**, live, and the timer: running or paused, when the next tick is.
 
 The levers, each one command you would otherwise type: **Tick now**, **Stop tick**
-(the supervisor aborts its model session first), **Pause / Resume timer**, **Abort** on
+(each lane aborts its model session first), **Pause / Resume timer**, **Pause / Resume lane**
+(that lane starts no new round; the other goes on — drain review, or hold the CPU box),
+**Abort** on
 any busy or orphan session, **Reopen** on a parked bead, and — where the box has a
 `gpu-mode` command (this workstation does: `game` stops the loop and the local model
 server to free the GPU, `work` starts them again) — a **Work / Game** switch, run as
@@ -263,6 +265,7 @@ bead-supervisor --dry-run work ~/src/repo               # the bead the dev lane 
 bead-supervisor --local work ~/src/repo inq-abc.1       # implement, gate, review; no push
 bead-supervisor work ~/src/repo                         # one bead through both lanes, to a PR
 bead-supervisor lane dev                                # one lane by itself, until its queue is empty
+bead-supervisor pause review                            # that lane starts no new round until resume
 bead-supervisor tick                                    # what the timer does: both lanes, side by side
 systemctl --user enable --now opencode-web.service bead-loop-ui.service bead-supervisor.timer
 sudo loginctl enable-linger $USER                       # timers survive logout

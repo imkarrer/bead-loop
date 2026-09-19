@@ -444,6 +444,11 @@ case_status_json_and_ui() {
   assert_match "$("$REAL_CURL" -s -m 3 "http://127.0.0.1:$port/")" "<title>bead-loop</title>" "the page"
   assert_eq "$(jq -r '.gpu | "\(.available) \(.mode) \(.by)"' "$T/state.json")" "true game auto" "gpu-mode read from its state dir"
   assert_match "$(timeout 5 "$REAL_CURL" -sN -m 4 "http://127.0.0.1:$port/api/events" | head -1)" '^data: {"now":[0-9]*,"repos":\[{"slug":"repo"' "the event stream opens with the state"
+  # The second page gets the last state replayed at once, with a fresh now in front: still one JSON object.
+  assert_eq "$(timeout 5 "$REAL_CURL" -sN -m 4 "http://127.0.0.1:$port/api/events" | head -1 | sed 's/^data: //' | jq -r '.repos[0].slug, (.now | type)' | tr '\n' ' ')" "repo number " "the replayed state is valid JSON"
+  assert_match "$("$REAL_CURL" -s -m 3 -X POST -H 'content-type: application/json' -d '{"name":"review","paused":true}' "http://127.0.0.1:$port/api/lane")" '"paused":true' "pause a lane from the page"
+  assert_file "$BEAD_LOOP_STATE/pause.review" "the marker the lane checks"
+  assert_eq "$("$REAL_CURL" -sf -m 3 "http://127.0.0.1:$port/api/state" | jq -r '.repos[0].paused.review')" true "state says so"
   assert_match "$("$REAL_CURL" -s -m 3 -X POST -H 'sec-fetch-site: cross-site' "http://127.0.0.1:$port/api/tick")" "same-origin only" "cross-site lever refused"
   assert_match "$("$REAL_CURL" -s -m 3 -X POST -H 'content-type: application/json' -d '{"attach":"http://elsewhere","session":"s"}' "http://127.0.0.1:$port/api/abort")" "unknown server" "abort only against a configured server"
   assert_match "$("$REAL_CURL" -s -m 3 -X POST -H 'content-type: application/json' -d '{"repo":"/nope","id":"t-5"}' "http://127.0.0.1:$port/api/reopen")" "unknown repo" "reopen only in a configured repo"
@@ -483,6 +488,18 @@ case_lanes_run_side_by_side() {
   assert_nofile "$BEAD_LOOP_STATE/repo/lane.dev" "dev lane clear"; assert_nofile "$BEAD_LOOP_STATE/repo/lane.review" "review lane clear"
 }
 
+
+case_pause_one_lane() {
+  # A paused lane starts nothing; the other lane goes on. Resume, and the next tick picks it up.
+  setup; sup pause review; sup --serial tick
+  assert_eq "$(calls)" "bead-worker" "dev worked; review paused"
+  assert_file "$BEAD_LOOP_STATE/repo/review/t-1" "the bead waits in the review queue"
+  assert_match "$(cat "$T/sup.log")" "review lane paused; starting nothing" "said so"
+  assert_match "$(sup status "$REPO")" "review lane: idle  \[paused\]" "status shows it"
+  sup resume review; sup --serial tick
+  assert_eq "$(calls)" "bead-worker bead-reviewer" "resumed: reviewed on the next tick"
+  assert_branch bead/t-1 "and pushed"
+}
 
 # ---- main ----------------------------------------------------------------------------
 cases=$(declare -F | awk '{print $3}' | grep '^case_')
