@@ -3,6 +3,9 @@
 # the opencode stub; the role comes from the tools allowed (Edit = worker).
 set -euo pipefail
 prompt='' model='' tools='' sys=''
+# Interactive (no -p): `open` execs claude with the prompt as its only argument; the stub
+# records where it was opened and with what, and exits.
+if [ $# -eq 1 ]; then printf '%s\n' "$PWD" >"$TEST_CTRL/opened"; printf '%s' "$1" >"$TEST_CTRL/opened.prompt"; exit 0; fi
 while [ $# -gt 0 ]; do
   case $1 in
     -p) prompt=$2; shift;; --model) model=$2; shift;; --allowedTools) tools=$2; shift;;

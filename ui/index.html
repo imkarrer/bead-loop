@@ -102,6 +102,10 @@
   .q tr.sub td { border-top: 0; padding-top: 0; font-size: 12.5px; }
   tr.sub td.why { border-top: 0; padding-top: 0; padding-bottom: 10px; font-size: 13px; color: var(--ink); white-space: normal; line-height: 1.5; max-width: 900px; }
   tr.sub td.why code { font-size: 12px; }
+  h3.human { color: var(--yellow); }
+  .reply { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 8px; }
+  .reply textarea { flex: 1 1 360px; font: 13px/1.45 var(--sans); padding: 6px 8px; border: 1px solid var(--line-strong); border-radius: 5px; background: var(--base03); color: var(--bright); resize: vertical; }
+  .reply code.cmd { font: 12px var(--mono); color: var(--bright); background: var(--base03); padding: 3px 7px; border-radius: 4px; user-select: all; }
 
 
   pre.log { margin: 0; font: 12.5px/1.6 var(--mono); white-space: pre-wrap; max-height: 44vh; overflow: auto; color: var(--ink); }
@@ -279,17 +283,26 @@ function queueCol(name, rows, r, now) {
 
 function repo(r, now, ticking) {
   const stages = r.stages.map((s, i) => `<span title="stage ${i + 1}: takes the next ${s.failures} failure${s.failures > 1 ? 's' : ''}"><span class="mono">${esc(s.worker)}</span>${s.reviewer ? ` ⇢ <span class="mono">${esc(s.reviewer)}</span>` : ''} ×${s.failures}</span>`).join(' &nbsp;→&nbsp; ');
-  // Why each parked bead is parked: the loop's last note on it, in full — this is what the
-  // human decides on, so it is not truncated.
-  const parked = r.parked.length === 0 ? '<div class="empty">none</div>' : `<table>${r.parked.map((b) => `<tr><td class="id">${esc(b.id)}</td><td class="title"><span class="t" title="${esc(b.title || '')}">${esc(b.title || '')}</span></td><td class="fit">${failChip(b.failures)}${b.stage ? '' : ' <span class="chip bad">exhausted</span>'}</td>
-    <td class="act">${claudeBtn(r, b)} <button ${busyAction ? 'disabled' : ''} onclick="act('reopen',{repo:${JSON.stringify(r.repo)},id:${JSON.stringify(b.id)}})">Reopen</button></td></tr>
-    <tr class="sub"><td></td><td colspan="3" class="why">${b.why ? `${b.why.when ? `<span class="muted">${esc(b.why.when.replace('T', ' ').slice(0, 16))}${b.why.round ? ' ·' + esc(b.why.round) : ''} — </span>` : ''}${esc(b.why.what)}` : '<span class="muted">no note from the loop — parked by hand, or before the loop kept notes</span>'}</td></tr>`).join('')}</table>`;
+  // The human queue: each bead with the question it stopped on — the BLOCKED line, the
+  // last rejection, the failing check — in full, since it is what you decide on, and the
+  // ways out: an answer (noted on the bead, back to the dev queue at the same stage), a
+  // Claude Code session in its worktree with you, the last stage, or a plain reopen.
+  const human = r.parked.length === 0 ? '<div class="empty">nothing waiting on you</div>' : `<table>${r.parked.map((b) => `
+    <tr><td class="id">${esc(b.id)}</td><td class="title"><span class="t" title="${esc(b.title || '')}">${esc(b.title || '')}</span></td>
+        <td class="fit">${b.question ? '<span class="chip warn">question</span>' : b.stage ? '<span class="chip">stopped</span>' : '<span class="chip bad">exhausted</span>'} ${failChip(b.failures)}</td>
+        <td class="act">${claudeBtn(r, b)} <button ${busyAction ? 'disabled' : ''} onclick="act('reopen',{repo:${JSON.stringify(r.repo)},id:${JSON.stringify(b.id)}})" title="back in the dev queue as is">Reopen</button></td></tr>
+    <tr class="sub"><td></td><td colspan="3" class="why">${b.why ? `${b.why.when ? `<span class="muted">${esc(b.why.when.replace('T', ' ').slice(0, 16))}${b.why.round ? ' ·' + esc(b.why.round) : ''} — </span>` : ''}${esc(b.why.what)}` : '<span class="muted">no note from the loop — parked by hand, or before the loop kept notes</span>'}
+      <div class="reply">
+        <textarea id="ans-${esc(b.id)}" rows="2" placeholder="Your answer, or what to do differently — goes on the bead; the next round reads it"></textarea>
+        <button ${busyAction ? 'disabled' : ''} onclick="act('answer',{repo:${JSON.stringify(r.repo)},id:${JSON.stringify(b.id)},text:document.getElementById('ans-${esc(b.id)}').value})">Answer &amp; resume</button>
+        <span class="muted">or work it with Claude yourself, in its worktree:</span> <code class="cmd">${esc(b.open_cmd)}</code> <button onclick="navigator.clipboard.writeText(${JSON.stringify(b.open_cmd)})" title="copy">Copy</button>
+      </div></td></tr>`).join('')}</table>`;
   return `<section class="card" id="repo-${esc(r.slug)}">
     <h2>${esc(r.slug)} <span class="cfg">${esc(r.label)} · ${esc(r.base)} · merge ${esc(r.merge)} · stages: ${stages} · then ${esc(r.on_exhaust)}${r.attach ? '' : ' · <b>no attach</b>: sessions not visible'}</span></h2>
     <div class="lanes">${lanePanel(r, 'dev', now, ticking)}${lanePanel(r, 'review', now, ticking)}</div>
     <div class="queues">${queueCol('dev', r.queues.dev, r, now)}${queueCol('review', r.queues.review, r, now)}${queueCol('merge', r.queues.merge, r, now)}</div>
     ${strays(r, now)}
-    <h3>Parked<span class="n">${r.parked.length}</span><span class="note">in_progress, waiting for you — stages exhausted, BLOCKED at the last stage, or a PR closed unmerged</span></h3>${parked}
+    <h3 class="human">Needs you<span class="n">${r.parked.length}</span><span class="note">a question the last stage could not answer, stages exhausted, or a PR closed unmerged — the loop waits here until you act</span></h3>${human}
   </section>`;
 }
 
