@@ -89,11 +89,8 @@
   .now .stage { margin-top: 4px; color: var(--muted); display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
   .now .idle { color: var(--muted); font-style: italic; }
 
-  .wt { margin: 10px 0 4px; font-family: var(--mono); font-size: 12.5px; color: var(--muted); }
-  .wt b { color: var(--base00); font-weight: 600; }
   .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 0 32px; }
   @media (max-width: 900px) { .cols { grid-template-columns: 1fr; } }
-  .working { padding: 10px 14px; border-left: 3px solid var(--busy); background: rgba(42, 161, 152, .08); border-radius: 4px; margin: 12px 0 0; color: var(--bright); }
 
   pre.log { margin: 0; font: 12.5px/1.6 var(--mono); white-space: pre-wrap; max-height: 44vh; overflow: auto; color: var(--ink); }
   pre.log .t { color: var(--muted); }
@@ -188,16 +185,31 @@ const count = (n, label, cls = '') => `<div class="count ${n ? '' : 'zero'}">${n
 
 // What the workers are on right now, per repo: the bead the supervisor claimed and the
 // session the server calls busy under its worktree (that is the stage: worker or reviewer).
+// The one thing that matters per repo: the bead the supervisor is on, and the session
+// that is live for it — that is the stage (worker or reviewer), with the lever to stop it.
+// Idle sessions are history and are not shown; the opencode link has them.
+const abortBtn = (r, sess, label) => `<button class="danger" ${busyAction ? 'disabled' : ''} onclick="act('abort',{attach:${JSON.stringify(r.attach)},session:${JSON.stringify(sess.id)}},'Abort ${esc(label)}?')">Abort</button>`;
 function nowLine(r, now) {
   const w = r.working;
   const wt = w && r.worktrees.find((x) => x.id === w.id);
   const live = wt && wt.sessions.find((s) => s.state === 'busy');
-  const anyBusy = r.worktrees.flatMap((x) => x.sessions.filter((s) => s.state !== 'idle').map((s) => ({ ...s, wt: x.id })));
   if (w) return `<div class="now"><span class="bead">${esc(w.id)}</span> <span class="t">${esc(w.title || '')}</span>
-    <div class="stage">${live ? `${roleChip(live.agent)} <span class="mono">${esc(live.model)}</span> <span>last output ${ago(live.updated, now)} ago</span> <a href="${esc(live.url)}" target="_blank" rel="noopener">open session ↗</a>`
+    <div class="stage">${wt ? `<span>attempt ${wt.attempts + 1}</span>` : ''}${live ? `${roleChip(live.agent)} <span class="mono">${esc(live.model)}</span> <span>last output ${ago(live.updated, now)} ago</span> <a href="${esc(live.url)}" target="_blank" rel="noopener">open session ↗</a> ${abortBtn(r, live, `${live.agent} on ${w.id}`)}`
       : wt ? '<span>between stages — setup, gate, or the push</span>' : '<span>claimed, worktree not up yet</span>'}</div></div>`;
-  if (anyBusy.length) return `<div class="now">${anyBusy.map((s) => `<div class="stage">${stateChip(s.state)} ${roleChip(s.agent)} on <span class="mono">${esc(s.wt)}</span> <span>no claim recorded — an older supervisor, or a hand-run <span class="mono">work</span></span></div>`).join('')}</div>`;
   return '<div class="now"><span class="idle">idle — waiting for the next tick</span></div>';
+}
+// Sessions the server is still running that are not the working bead's: an orphan of a
+// killed attempt, or a hand-run `work`. Nothing here is the common case, so the block
+// only appears when there is something to stop.
+function strays(r, now) {
+  const wid = r.working && r.working.id;
+  const rows = r.worktrees.filter((x) => x.id !== wid).flatMap((x) => x.sessions.filter((s) => s.state !== 'idle').map((s) => ({ ...s, wt: x })));
+  if (rows.length === 0) return '';
+  return `<h3>Also running<span class="n">${rows.length}</span><span class="note">not the bead being worked — an older attempt, or a hand-run work</span></h3><table>${rows.map((s) => `
+    <tr><td class="fit">${stateChip(s.state)}</td><td class="fit">${roleChip(s.agent)}</td><td class="id">${esc(s.wt.id)}</td><td class="mono muted fit">${esc(s.model)}</td>
+        <td class="muted fit">${ago(s.updated, now)} ago</td>
+        <td class="title"><span class="t"><a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(titleOf(s, s.wt))} ↗</a></span></td>
+        <td class="act">${abortBtn(r, s, `${s.agent} on ${s.wt.id}`)}</td></tr>`).join('')}</table>`;
 }
 function overview(s) {
   if (s.repos.length === 0) return '<section class="card"><div class="empty">no repos: set <span class="mono">repos</span> in ~/.config/bead-loop/config.toml</div></section>';
@@ -214,13 +226,6 @@ function overview(s) {
 
 function repo(r, now) {
   const stages = r.stages.map((s) => `<span class="mono">${esc(s.worker)}</span>${s.reviewer ? ` ⇢ <span class="mono">${esc(s.reviewer)}</span>` : ''} ×${s.attempts}`).join(' &nbsp;→&nbsp; ');
-  const sessions = r.worktrees.length === 0 ? '<div class="empty">no worktrees — nothing has been picked up</div>' : r.worktrees.map((w) => `
-    <div class="wt"><b>wt/${esc(w.id)}</b> · attempt ${w.attempts}</div>
-    ${w.sessions.length === 0 ? '<div class="empty">no sessions on the server</div>' : `<table>${w.sessions.map((s) => `
-      <tr><td class="fit">${stateChip(s.state)}</td><td class="fit">${roleChip(s.agent)}</td><td class="mono muted fit">${esc(s.model)}</td>
-          <td class="muted fit" title="last activity">${ago(s.updated, now)} ago</td>
-          <td class="title"><span class="t"><a href="${esc(s.url)}" target="_blank" rel="noopener" title="${esc(titleOf(s, w))}">${esc(titleOf(s, w))} ↗</a></span></td>
-          <td class="act">${s.state !== 'idle' ? `<button class="danger" ${busyAction ? 'disabled' : ''} onclick="act('abort',{attach:${JSON.stringify(r.attach)},session:${JSON.stringify(s.id)}},'Abort ${esc(s.agent)} on ${esc(w.id)}?')">Abort</button>` : ''}</td></tr>`).join('')}</table>`}`).join('');
   const inflight = r.inflight.length === 0 ? '<div class="empty">none</div>' : `<table>${r.inflight.map((p) => `
     <tr><td class="id">${esc(p.id)}</td><td class="title"><span class="t"><a href="${esc(p.url)}" target="_blank" rel="noopener">${esc(p.url.replace(/^https?:\/\/github\.com\//, ''))} ↗</a></span></td>
         <td class="fit">${prChips(p, now)}</td></tr>`).join('')}</table>`;
@@ -230,8 +235,7 @@ function repo(r, now) {
   return `<section class="card" id="repo-${esc(r.slug)}">
     <h2>${esc(r.slug)} <span class="cfg">${esc(r.label)} · ${esc(r.base)} · merge ${esc(r.merge)}${r.attach ? '' : ' · <b>no attach</b>: sessions not visible'}</span></h2>
     <div class="cfg" style="margin-top:4px">stages: ${stages}</div>
-    ${r.working ? `<div class="working">working on <b class="mono">${esc(r.working.id)}</b> ${esc(r.working.title || '')}</div>` : ''}
-    <h3>Sessions</h3>${sessions}
+    ${strays(r, now)}
     <div class="cols">
       <div><h3>Ready<span class="n">${r.ready.length}</span></h3>${ready}</div>
       <div><h3>Parked<span class="n">${r.parked.length}</span><span class="note">in_progress, waiting for you</span></h3>${parked}</div>

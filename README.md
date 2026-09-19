@@ -138,8 +138,10 @@ event stream; nobody presses refresh):
   flight and whether CI is red, how many are parked. A PR's state is GitHub's, asked once
   a minute — "merged · bead closes on the next tick" the moment it merges, even while a
   long attempt keeps the loop from reconciling.
-- **Per repo**: the sessions under each worktree (`busy` / `idle` / `orphan`), the PRs
-  in flight, the ready queue with each bead's attempt count, the parked beads.
+- **Per repo**: the ready queue with each bead's attempt count, the parked beads, the PRs in
+  flight — and, only when there is one, a session the server is still running that is *not*
+  the bead being worked (an orphan of a killed attempt, a hand-run `work`), with its Abort.
+  Idle sessions are history and are not shown; the session link has them.
 - **The supervisor's log**, live, and the timer: running or paused, when the next tick is.
 
 The levers, each one command you would otherwise type: **Tick now**, **Stop tick**
