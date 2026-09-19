@@ -151,9 +151,11 @@ the repo's project view looks idle while the loop is busy).
 
 `busy` with a stale "ago" is the slow model thinking: the 80B takes minutes before its
 first token. **`ORPHAN`** is a session the server calls busy with no `opencode run` client
-left on this box: `worker_timeout` or a `systemctl restart` killed the client, and with
-`attach` the server keeps running the session for nobody — on a one-model box that
-starves the next review. The line under it is the command that stops it.
+left on this box: with `attach`, killing the client does not stop the server-side session,
+and on a one-model box it starves the next review. The loop aborts its own sessions
+on the server when the client dies — on `worker_timeout`, on `systemctl stop`/`restart`
+(the TERM handler), and before it recreates a worktree — so an orphan means something
+else killed the client (`kill -9`, a crash); the line under it is the command that stops it.
 
 Also:
 

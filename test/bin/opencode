@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Stub opencode for bead-loop tests. `run` only. Behaviour from $TEST_CTRL:
-#   worker      done | blocked | nocommit | uncommitted   (what the implementor leaves behind)
+#   worker      done | blocked | nocommit | uncommitted | hang   (what the implementor leaves behind)
 #   review      one line per round: approve | reject
 #   calls       appended: "<agent> <dir> <model> <attach>" per run, prompt saved to prompt.<n>
 set -euo pipefail
@@ -23,6 +23,7 @@ case $agent in
     case $mode in
       blocked) say "I looked."; say "BLOCKED: lib/x.ts:3 has no such flag" ;;
       nocommit) say "DONE: nothing to do" ;;
+      hang) sleep 30 ;;
       uncommitted) echo "work" >"$dir/work.txt"; say "DONE: wrote work.txt (forgot to commit)" ;;
       done)
         round=$(grep -c '^bead-worker' "$TEST_CTRL/calls")

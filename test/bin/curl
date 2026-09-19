@@ -14,6 +14,7 @@ while [ $# -gt 0 ]; do
 done
 echo "$url $dir" >>"$TEST_CTRL/curl.log"
 case $url in
+  */abort)          : ;;
   */session/status) cat "$TEST_CTRL/session-status.json" 2>/dev/null || echo '{}' ;;
   */session)        cat "$TEST_CTRL/sessions.json" 2>/dev/null || echo '[]' ;;
   *) echo "stub curl: $url" >&2; exit 22 ;;

@@ -346,6 +346,37 @@ case_status_lists_worktree_sessions() {
   sed -i '/^attach/d' "$REPO/.bead-loop.toml"
   assert_match "$(sup status "$REPO")" "wt/t-1  attempt 2  (no attach: logs/t-1\.\*)" "no attach: no server to ask"
 }
+case_timeout_aborts_server_session() {
+  setup true auto '' "$(echo 'attach = "http://oc.test:4096"'; stages stub/fast::1:1)"; echo hang >"$TEST_CTRL/worker"
+  wt=$BEAD_LOOP_STATE/repo/wt/t-1
+  echo '{"ses_hang":{"type":"busy"}}' >"$TEST_CTRL/session-status.json"
+  sup tick
+  assert_eq "$(bead .status)" in_progress "timed out: parked (one stage)"
+  assert_match "$(bead .notes)" "worker exited 124 (timeout=1 s)" "note says timeout"
+  assert_match "$(cat "$TEST_CTRL/curl.log")" "session/status $wt" "asked the server what runs in the worktree"
+  assert_match "$(cat "$TEST_CTRL/curl.log")" "http://oc.test:4096/session/ses_hang/abort" "and aborted it"
+  assert_match "$(cat "$T/sup.log")" "aborting session ses_hang" "logged"
+}
+case_sigterm_aborts_server_session() {
+  # systemctl stop signals the whole cgroup at once: the client dies with the supervisor.
+  # setsid + kill of the process group is the closest a test gets.
+  setup true auto '' 'attach = "http://oc.test:4096"'; echo hang >"$TEST_CTRL/worker"
+  echo '{"ses_hang":{"type":"busy"}}' >"$TEST_CTRL/session-status.json"
+  setsid "$SUP" tick 2>>"$T/sup.log" & pid=$!
+  until grep -q '^bead-worker' "$TEST_CTRL/calls" 2>/dev/null; do sleep 0.1; done; sleep 0.3
+  kill -TERM -- -"$pid"
+  rc=0; wait "$pid" || rc=$?
+  assert_eq "$rc" 143 "exits 143 on TERM"
+  assert_match "$(cat "$TEST_CTRL/curl.log")" "http://oc.test:4096/session/ses_hang/abort" "the session on the server was aborted"
+  assert_match "$(cat "$T/sup.log")" "aborting session ses_hang" "logged"
+}
+case_new_attempt_aborts_leftover_session() {
+  setup true auto '' 'attach = "http://oc.test:4096"'
+  echo '{"ses_old":{"type":"busy"}}' >"$TEST_CTRL/session-status.json"
+  sup work "$REPO"
+  assert_match "$(head -2 "$TEST_CTRL/curl.log" | tr '\n' ' ')" "session/status .*wt/t-1 .*/session/ses_old/abort" "before the worktree is recreated, what ran there is stopped"
+}
+
 # ---- main ----------------------------------------------------------------------------
 cases=$(declare -F | awk '{print $3}' | grep '^case_')
 [ $# -gt 0 ] && cases=$(printf 'case_%s\n' "$@")

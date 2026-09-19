@@ -1,0 +1,41 @@
+   worker      done | blocked | nocommit | uncommitted   (what the implementor leaves behind)$#!/usr/bin/env bash
+   worker      done | blocked | nocommit | uncommitted   (what the implementor leaves behind)$# Stub opencode for bead-loop tests. `run` only. Behaviour from $TEST_CTRL:
+   worker      done | blocked | nocommit | uncommitted   (what the implementor leaves behind)$#   worker      done | blocked | nocommit | uncommitted   (what the implementor leaves behind)
+   worker      done | blocked | nocommit | uncommitted   (what the implementor leaves behind)$#   review      one line per round: approve | reject
+   worker      done | blocked | nocommit | uncommitted   (what the implementor leaves behind)$#   calls       appended: "<agent> <dir> <model> <attach>" per run, prompt saved to prompt.<n>
+   worker      done | blocked | nocommit | uncommitted   (what the implementor leaves behind)$set -euo pipefail
+   worker      done | blocked | nocommit | uncommitted   (what the implementor leaves behind)$[ "$1" = run ] || { echo "stub opencode: only run" >&2; exit 2; }
+   worker      done | blocked | nocommit | uncommitted   (what the implementor leaves behind)$shift
+   worker      done | blocked | nocommit | uncommitted   (what the implementor leaves behind)$dir=. agent='' model='' attach='' prompt=''
+   worker      done | blocked | nocommit | uncommitted   (what the implementor leaves behind)$while [ $# -gt 0 ]; do
+   worker      done | blocked | nocommit | uncommitted   (what the implementor leaves behind)$  case $1 in
+   worker      done | blocked | nocommit | uncommitted   (what the implementor leaves behind)$    --dir) dir=$2; shift;; --agent) agent=$2; shift;; -m) model=$2; shift;; --attach) attach=$2; shift;;
+   worker      done | blocked | nocommit | uncommitted   (what the implementor leaves behind)$    --format|--title) shift;; *) prompt=$1;;
+   worker      done | blocked | nocommit | uncommitted   (what the implementor leaves behind)$  esac; shift
+   worker      done | blocked | nocommit | uncommitted   (what the implementor leaves behind)$done
+   worker      done | blocked | nocommit | uncommitted   (what the implementor leaves behind)$n=$(( $(wc -l <"$TEST_CTRL/calls" 2>/dev/null || echo 0) + 1 ))
+   worker      done | blocked | nocommit | uncommitted   (what the implementor leaves behind)$printf '%s %s %s %s\n' "$agent" "$dir" "${model:-none}" "${attach:-none}" >>"$TEST_CTRL/calls"
+   worker      done | blocked | nocommit | uncommitted   (what the implementor leaves behind)$printf '%s' "$prompt" >"$TEST_CTRL/prompt.$n"
+   worker      done | blocked | nocommit | uncommitted   (what the implementor leaves behind)$say() { jq -cn --arg t "$1" '{type:"text", part:{text:$t}}'; }
+   worker      done | blocked | nocommit | uncommitted   (what the implementor leaves behind)$case $agent in
+   worker      done | blocked | nocommit | uncommitted   (what the implementor leaves behind)$  bead-worker)
+   worker      done | blocked | nocommit | uncommitted   (what the implementor leaves behind)$    mode=$(cat "$TEST_CTRL/worker")
+   worker      done | blocked | nocommit | uncommitted   (what the implementor leaves behind)$    case $mode in
+   worker      done | blocked | nocommit | uncommitted   (what the implementor leaves behind)$      blocked) say "I looked."; say "BLOCKED: lib/x.ts:3 has no such flag" ;;
+   worker      done | blocked | nocommit | uncommitted   (what the implementor leaves behind)$      nocommit) say "DONE: nothing to do" ;;
+      hang) sleep 30 ;;
+   worker      done | blocked | nocommit | uncommitted   (what the implementor leaves behind)$      uncommitted) echo "work" >"$dir/work.txt"; say "DONE: wrote work.txt (forgot to commit)" ;;
+   worker      done | blocked | nocommit | uncommitted   (what the implementor leaves behind)$      done)
+   worker      done | blocked | nocommit | uncommitted   (what the implementor leaves behind)$        round=$(grep -c '^bead-worker' "$TEST_CTRL/calls")
+   worker      done | blocked | nocommit | uncommitted   (what the implementor leaves behind)$        echo "work round $round" >>"$dir/work.txt"
+   worker      done | blocked | nocommit | uncommitted   (what the implementor leaves behind)$        git -C "$dir" add -A && git -C "$dir" commit -qm "work: round $round"
+   worker      done | blocked | nocommit | uncommitted   (what the implementor leaves behind)$        say "DONE: acceptance check printed ok" ;;
+   worker      done | blocked | nocommit | uncommitted   (what the implementor leaves behind)$    esac ;;
+   worker      done | blocked | nocommit | uncommitted   (what the implementor leaves behind)$  bead-reviewer)
+   worker      done | blocked | nocommit | uncommitted   (what the implementor leaves behind)$    round=$(grep -c '^bead-reviewer' "$TEST_CTRL/calls")
+   worker      done | blocked | nocommit | uncommitted   (what the implementor leaves behind)$    v=$(sed -n "${round}p" "$TEST_CTRL/review")
+   worker      done | blocked | nocommit | uncommitted   (what the implementor leaves behind)$    case $v in
+   worker      done | blocked | nocommit | uncommitted   (what the implementor leaves behind)$      approve) say "APPROVE: checked every criterion" ;;
+   worker      done | blocked | nocommit | uncommitted   (what the implementor leaves behind)$      *) say "REJECT: work.txt:1 wrong, fix it" ;;
+   worker      done | blocked | nocommit | uncommitted   (what the implementor leaves behind)$    esac ;;
+   worker      done | blocked | nocommit | uncommitted   (what the implementor leaves behind)$esac

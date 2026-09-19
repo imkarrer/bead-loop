@@ -150,11 +150,31 @@ run_agent() {
       OPENCODE_DISABLE_CLAUDE_CODE_SKILLS=1 \
       timeout --foreground "$WORKER_TIMEOUT" opencode run --dir "$dir" --agent "$agent" \
           ${ATTACH:+--attach "$ATTACH"} ${model:+-m "$model"} --format json "$prompt" >"$logf" 2>"$logf.err" || rc=$?
+      # The client is gone (timeout, a kill); with attach the server would keep working
+      # the session for nobody. Its log may still be empty, so ask the server by directory.
+      [ $rc -eq 0 ] || abort_sessions "$dir"
       jq -r 'select(.type=="text") | .part.text' "$logf" 2>/dev/null | tail -20
       ;;
   esac
   return $rc
 }
+
+# abort_sessions DIR: stop every session the attached server is still running under DIR.
+# One attempt owns a worktree, so anything busy there is this attempt's, or an orphan of
+# an earlier one; either way nothing is waiting for it.
+abort_sessions() {
+  local sid
+  [ -n "${ATTACH:-}" ] && command -v curl >/dev/null || return 0
+  for sid in $(curl -sfG -m 5 "$ATTACH/session/status" --data-urlencode "directory=$1" 2>/dev/null | jq -r 'keys[]' 2>/dev/null); do
+    log "${SLUG:-}: aborting session $sid on $ATTACH"
+    curl -sf -m 5 -X POST "$ATTACH/session/$sid/abort" >/dev/null 2>&1 || true
+  done
+}
+# systemd stops the unit by signalling the whole cgroup: the client dies with us, the
+# server-side session would not. CUR_WT is the worktree an attempt is working.
+CUR_WT=
+on_signal() { [ -n "$CUR_WT" ] && abort_sessions "$CUR_WT"; exit 143; }
+trap on_signal TERM INT
 
 render_bead() {
   jq -r '.[0] | "id: \(.id)\ntitle: \(.title)\ntype: \(.issue_type // "task")   priority: P\(.priority)\n\nDESCRIPTION:\n\(.description // "")\n\nACCEPTANCE CRITERIA:\n\(.acceptance_criteria // "(none given: the description is the criterion)")" + (if (.design // "") != "" then "\n\nDESIGN:\n\(.design)" else "" end) + (if (.notes // "") != "" then "\n\nNOTES:\n\(.notes)" else "" end)'
@@ -262,9 +282,11 @@ PROMPT
 
   bdr update "$id" --claim >/dev/null
   git -C "$REPO" fetch -q origin "$BASE"
+  abort_sessions "$wt"  # a killed earlier attempt may have left one running here
   if [ -e "$wt" ]; then git -C "$REPO" worktree remove --force "$wt" 2>/dev/null || rm -rf "$wt"; fi
   git -C "$REPO" branch -D "$branch" >/dev/null 2>&1 || true
   git -C "$REPO" worktree add -q -b "$branch" "$wt" "origin/$BASE"
+  CUR_WT=$wt
 
   if [ -n "$SETUP" ]; then
     log "$SLUG: setup: $SETUP"
@@ -363,6 +385,7 @@ BODY
   log "$SLUG: opened $url"
   if [ "$MERGE" = pipeline ]; then hand_to_pipeline "$id" "$num" "$url"; fi
   git -C "$REPO" worktree remove --force "$wt"
+  CUR_WT=
 }
 
 # review ID WT BEAD_JSON WORKER_FINAL LOG: prints the reviewer's last words.
@@ -398,6 +421,7 @@ fail() {
   printf '%s\n' "$n" >"$RS/attempts/$id"
   printf 'attempt %s (%s): %s\n' "$n" "$MODEL" "$(printf '%s' "$note" | tr '\n' ' ' | cut -c1-600)" >>"$RS/attempts/$id.notes"
   git -C "$REPO" worktree remove --force "$wt" 2>/dev/null || true
+  CUR_WT=
   git -C "$REPO" branch -D "bead/$id" >/dev/null 2>&1 || true
   if [ "$S_LAST" = 1 ] && printf '%s' "$note" | grep -q 'BLOCKED:'; then
     log "$SLUG: $id: BLOCKED at the last stage, parked for you"; return 0
