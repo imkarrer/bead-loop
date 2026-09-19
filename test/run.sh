@@ -116,6 +116,7 @@ case_reject_then_approve() {
   setup; printf 'reject\napprove\n' >"$TEST_CTRL/review"; sup work "$REPO"
   assert_eq "$(calls)" "bead-worker bead-reviewer bead-worker bead-reviewer" "one revision round"
   assert_match "$(cat "$TEST_CTRL/prompt.3")" "REJECT: work.txt:1" "rejection fed back verbatim"
+  assert_eq "$(tr '\n' '|' <"$TEST_CTRL/titles")" "t-1 · worker · attempt 1|t-1 · reviewer · round 1|t-1 · worker · after review 1|t-1 · reviewer · round 2|" "every session titled by bead, role and round"
   assert_branch bead/t-1 "pushed after approval"
   assert_eq "$(git -C "$T/origin.git" rev-list --count main..bead/t-1)" 2 "both rounds' commits on the branch"
 }

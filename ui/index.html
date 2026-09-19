@@ -164,8 +164,26 @@ function header(s) {
 const stateChip = (st) => st === 'busy' ? '<span class="chip busy">busy</span>' : st === 'orphan' ? '<span class="chip bad">orphan</span>' : '<span class="chip">idle</span>';
 // The agent as its role: the worker implements, the reviewer judges; colour tells them apart.
 const roleChip = (agent) => `<span class="chip ${/review/.test(agent) ? 'reviewer' : 'worker'}">${esc((agent || '?').replace(/^bead-/, ''))}</span>`;
+// A session's name: opencode's, unless it is the "????" a busy model has answered with.
+const titleOf = (s, w) => (s.title && !/^[\s?.…]*$/.test(s.title)) ? s.title : `${w.id} · ${(s.agent || '').replace(/^bead-/, '')}`;
 const attempts = (n) => n ? `<span class="chip n" title="attempts so far">${n}×</span>` : '';
 const beadRow = (b, extra = '') => `<tr><td class="id">${esc(b.id)}</td><td class="title"><span class="t" title="${esc(b.title || '')}">${esc(b.title || '')}</span></td><td class="fit">${attempts(b.attempts)}</td>${extra}</tr>`;
+// A PR in flight: what GitHub says now (p.pr, a minute old at most), then the loop's own
+// markers. Merged or closed on GitHub means the next tick's reconcile finishes the bead.
+function prChips(p, now) {
+  const g = p.pr, out = [];
+  if (g && g.state === 'MERGED') out.push(`<span class="chip ok">merged${g.mergedAt ? ` ${ago(g.mergedAt, now)} ago` : ''}</span> <span class="muted">bead closes on the next tick</span>`);
+  else if (g && g.state === 'CLOSED') out.push('<span class="chip warn">closed unmerged</span> <span class="muted">noted on the next tick</span>');
+  else if (g) {
+    const bad = g.checks.filter((c) => /FAIL|ERROR|CANCEL/i.test(c.state)), pending = g.checks.filter((c) => /PENDING|IN_PROGRESS|QUEUED|EXPECTED/i.test(c.state));
+    out.push(bad.length ? `<span class="chip bad">CI red</span> <span class="muted">${esc(bad.map((c) => c.name).join(', '))}</span>`
+      : g.checks.length === 0 ? '<span class="chip">no checks yet</span>'
+      : pending.length ? `<span class="chip busy">CI running</span> <span class="muted">${pending.length}/${g.checks.length} pending</span>`
+      : '<span class="chip ok">CI green</span> <span class="muted">merges on the next tick</span>');
+  } else out.push(p.red ? '<span class="chip bad">CI red</span>' : '<span class="chip">waiting on CI</span>');
+  if (p.adopted) out.push('<span class="chip warn" title="opened by someone else, adopted by the loop">adopted</span>');
+  return out.join(' ');
+}
 const count = (n, label, cls = '') => `<div class="count ${n ? '' : 'zero'}">${n}<small>${label}${cls}</small></div>`;
 
 // What the workers are on right now, per repo: the bead the supervisor claimed and the
@@ -201,11 +219,11 @@ function repo(r, now) {
     ${w.sessions.length === 0 ? '<div class="empty">no sessions on the server</div>' : `<table>${w.sessions.map((s) => `
       <tr><td class="fit">${stateChip(s.state)}</td><td class="fit">${roleChip(s.agent)}</td><td class="mono muted fit">${esc(s.model)}</td>
           <td class="muted fit" title="last activity">${ago(s.updated, now)} ago</td>
-          <td class="title"><span class="t"><a href="${esc(s.url)}" target="_blank" rel="noopener" title="${esc(s.title || s.id)}">${esc(s.title || s.id)} ↗</a></span></td>
+          <td class="title"><span class="t"><a href="${esc(s.url)}" target="_blank" rel="noopener" title="${esc(titleOf(s, w))}">${esc(titleOf(s, w))} ↗</a></span></td>
           <td class="act">${s.state !== 'idle' ? `<button class="danger" ${busyAction ? 'disabled' : ''} onclick="act('abort',{attach:${JSON.stringify(r.attach)},session:${JSON.stringify(s.id)}},'Abort ${esc(s.agent)} on ${esc(w.id)}?')">Abort</button>` : ''}</td></tr>`).join('')}</table>`}`).join('');
   const inflight = r.inflight.length === 0 ? '<div class="empty">none</div>' : `<table>${r.inflight.map((p) => `
     <tr><td class="id">${esc(p.id)}</td><td class="title"><span class="t"><a href="${esc(p.url)}" target="_blank" rel="noopener">${esc(p.url.replace(/^https?:\/\/github\.com\//, ''))} ↗</a></span></td>
-        <td class="fit">${p.red ? '<span class="chip bad">CI red</span>' : '<span class="chip ok">waiting on CI</span>'} ${p.adopted ? '<span class="chip warn">adopted</span>' : ''}</td></tr>`).join('')}</table>`;
+        <td class="fit">${prChips(p, now)}</td></tr>`).join('')}</table>`;
   const ready = r.ready.length === 0 ? '<div class="empty">nothing ready</div>' : `<table>${r.ready.map((b) => beadRow(b)).join('')}</table>`;
   const parked = r.parked.length === 0 ? '<div class="empty">none</div>' : `<table>${r.parked.map((b) => beadRow(b,
     `<td class="act"><button ${busyAction ? 'disabled' : ''} onclick="act('reopen',{repo:${JSON.stringify(r.repo)},id:${JSON.stringify(b.id)}})">Reopen</button></td>`)).join('')}</table>`;
