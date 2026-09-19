@@ -65,11 +65,16 @@ bin/bead-loop-ui          the web UI server (node)         -> ~/.local/bin/
 ui/index.html             the page it serves
 systemd/                  supervisor oneshot + 10 min timer, opencode-web and bead-loop-ui services
 bead-loop.example.toml    per-repo config                  -> <repo>/.bead-loop.toml
+.flox/env/manifest.toml   flox: every tool above, pinned; bin/ on PATH; services for a box without systemd
 docs/loop.mmd             the diagram above
 ```
 
 `./install.sh` makes the links (re-runnable). The supervisor needs `bd`, `git`, `jq`, `gh`,
-`opencode` and `yq` (mikefarah, v4: it reads the TOML). Repo-specific skills (how to verify,
+`opencode`, `curl` and `yq` (mikefarah, v4: it reads the TOML); the UI needs `node`.
+**`flox activate`** in this checkout provides all of them, pinned, plus `bin/` on PATH
+(`.flox/env/manifest.toml`), so `bead-supervisor` and `bead-loop-ui` resolve without the
+`~/.local/bin` link; on a machine without the systemd units, `flox services start` runs
+the same three things (`opencode-web`, `ui`, `loop`). Repo-specific skills (how to verify,
 house style, vocabulary) stay in each repo under `.agents/skills/` or
 `.opencode/skills/`; the workflow skill tells the worker to look for them.
 
