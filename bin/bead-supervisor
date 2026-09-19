@@ -122,15 +122,26 @@ load_repo() {
   [ -n "$BASE" ] || die "$SLUG: cannot tell the base branch; set base in .bead-loop.toml"
   RS=$STATE_DIR/$SLUG
   mkdir -p "$RS/inflight" "$RS/logs" "$RS/wt" "$RS/review"
-  # attempts/ was the older name for failures/: same counter, carried over once.
-  if [ -d "$RS/attempts" ] && [ ! -d "$RS/failures" ]; then mv "$RS/attempts" "$RS/failures"; fi
+  # attempts/ was the older name for failures/: same counter, carried over file by file
+  # (a status run may have made failures/ first), then the old directory goes.
   mkdir -p "$RS/failures"
+  if [ -d "$RS/attempts" ]; then
+    local old
+    for old in "$RS"/attempts/*; do [ -e "$old" ] && [ ! -e "$RS/failures/$(basename "$old")" ] && mv "$old" "$RS/failures/"; done
+    rm -rf "$RS/attempts"
+  fi
 }
 
 # Every bd call the loop makes acts as the label, not as the git user, so the
 # assignee and the audit trail say the model did it; a BEADS_ACTOR in the
 # environment still wins (bd's own contract).
 bdr() { (cd "$REPO" && BEADS_ACTOR=${BEADS_ACTOR:-$LABEL} bd "$@"); }
+# claim ID: the bead is ours now. A bead in the dev queue is open, so an assignee left
+# on it — a hand claim, a round under another actor name — is stale, and bd's --claim
+# refusing it ("already claimed by X") is not a reason to fail the tick.
+claim() {
+  bdr update "$1" --claim >/dev/null 2>&1 || bdr update "$1" --status in_progress --assignee "${BEADS_ACTOR:-$LABEL}" >/dev/null
+}
 ghr() { (cd "$REPO" && gh "$@"); }
 # Markers beside an inflight file are hidden (.ID.red, .ID.nocheck, .ID.adopted);
 # bead ids carry dots themselves, so the marker is what starts with one.
@@ -326,7 +337,7 @@ PROMPT
   LAST_ID=$id
   if [ "$LOCAL" = 0 ]; then need gh; fi
 
-  bdr update "$id" --claim >/dev/null
+  claim "$id"
   lane_set dev "$id"
   git -C "$REPO" fetch -q origin "$BASE"
   abort_sessions "$wt"  # a killed earlier round may have left one running here
