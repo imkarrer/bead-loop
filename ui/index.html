@@ -263,12 +263,22 @@ function render() {
 }
 // Pushed, not polled: the server sends the whole state whenever anything in it changes.
 // EventSource reconnects by itself; the dot says which.
-let live = false;
-function setLive(on) { live = on; $('live').innerHTML = on ? '<span class="dot on"></span><span class="muted">live</span>' : '<span class="dot bad"></span><span class="muted">reconnecting…</span>'; }
-const es = new EventSource('/api/events');
-es.onopen = () => setLive(true);
-es.onerror = () => setLive(false);
-es.onmessage = (m) => { last = JSON.parse(m.data); render(); };
+// A hidden tab drops its stream and picks it up again when shown: a browser allows six
+// connections to one host, and a forgotten tab holding one is how the seventh "hangs".
+// It also means an unwatched page costs the server nothing.
+let live = false, es = null;
+function setLive(on, text) { live = on; $('live').innerHTML = on ? '<span class="dot on"></span><span class="muted">live</span>' : `<span class="dot ${text === 'paused' ? '' : 'bad'}"></span><span class="muted">${text || 'reconnecting…'}</span>`; }
+function connect() {
+  if (es) return;
+  setLive(false, 'connecting…');
+  es = new EventSource('/api/events');
+  es.onopen = () => setLive(true);
+  es.onerror = () => setLive(false);
+  es.onmessage = (m) => { last = JSON.parse(m.data); render(); };
+}
+function disconnect() { if (es) { es.close(); es = null; } setLive(false, 'paused'); }
+document.addEventListener('visibilitychange', () => (document.hidden ? disconnect() : connect()));
+connect();
 // Between pushes the clock still moves: re-render the ages every 10 s from the last state.
 setInterval(() => { if (last && live) { last.now = Math.floor(Date.now() / 1000); render(); } }, 10000);
 </script>
