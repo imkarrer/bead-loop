@@ -132,9 +132,9 @@ silently running with defaults.
 **<http://127.0.0.1:4097>** — `bead-loop-ui.service`, one page, pushed every change (an
 event stream; nobody presses refresh):
 
-- **Repos**: every repo the loop watches, and for each: what the workers are on *right
-  now* (the claimed bead, the stage running — worker or reviewer, which model, when it
-  last produced output, a link into its live session), how many beads are ready, PRs in
+- **Per repo, first and large**: **which bead this tick is on** — id, title, attempt, the stage
+  running as a role chip (worker or reviewer) with its model, when it last produced output,
+  a link into the live session, Abort. Under it the counts: beads ready, PRs in
   flight and whether CI is red, how many are parked. A PR's state is GitHub's, asked once
   a minute — "merged · bead closes on the next tick" the moment it merges, even while a
   long attempt keeps the loop from reconciling.
