@@ -109,6 +109,9 @@
   pre.log .good { color: var(--green); } pre.log .warn { color: var(--yellow); } pre.log .bad { color: var(--orange); }
   pre.log .pick { color: var(--blue); } pre.log .rev { color: var(--violet); } pre.log .sys { color: var(--muted); }
   .banner { background: rgba(220, 50, 47, .12); border: 1px solid var(--bad); color: var(--bright); padding: 10px 14px; border-radius: 8px; }
+  .banner.signin { margin: 16px 20px 0; background: rgba(181, 137, 0, .12); border-color: var(--warn); }
+  .banner.signin ol { margin: 6px 0 0; padding-left: 22px; } .banner.signin li { margin: 4px 0; }
+  .banner.signin input { font: 13px var(--mono); padding: 4px 8px; border: 1px solid var(--line-strong); border-radius: 5px; background: var(--base03); color: var(--bright); }
   footer { color: var(--muted); font-size: 12px; text-align: right; padding: 0 20px 20px; }
   .empty { color: var(--muted); font-style: italic; }
 </style>
@@ -119,8 +122,10 @@
   <div class="unit" id="timer"></div>
   <div class="unit" id="tick"></div>
   <div class="unit" id="gpu"></div>
+  <div class="unit" id="claude"></div>
   <div class="unit" id="live" style="margin-left:auto"></div>
 </header>
+<div id="signin" class="banner signin" hidden></div>
 <main id="main"><div class="empty">loading…</div></main>
 <footer id="foot"></footer>
 <script>
@@ -140,6 +145,7 @@ async function act(name, body, confirmText) {
     const r = await fetch(`/api/${name}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body || {}) });
     const j = await r.json();
     if (!r.ok) alert(j.error || r.statusText);
+    else if (name === 'claude_login' && j.url) { if (last) { last.login = { url: j.url }; render(); } }
   } catch (e) { alert(e.message); }
   busyAction = false; render();
 }
@@ -154,8 +160,25 @@ function gpu(s) {
   $('gpu').innerHTML = `<span class="dot ${g.mode === 'game' ? 'warn' : 'on'}"></span>GPU ${esc(g.mode)}<span class="muted"> (${esc(g.by)})</span>
     <span class="seg"><button class="${g.mode === 'work' ? 'cur' : ''}" ${dis} onclick="act('gpu',{mode:'work'})">Work</button><button class="${g.mode === 'game' ? 'cur game' : ''}" ${dis} onclick="act('gpu',{mode:'game'},'Game mode: stop the loop (aborting its session) and the local model server?')">Game</button></span>`;
 }
+// The last stage is Claude on this box; say when it cannot run, because a round there
+// would otherwise fail on the spot and the bead loop back to stage 1 unexplained.
+function claude(s) {
+  const c = s.claude, dis = busyAction ? 'disabled' : '';
+  $('claude').innerHTML = !c ? '' : c.loggedIn ? `<span class="dot on"></span>Claude <span class="muted">signed in${c.method ? ' · ' + esc(c.method) : ''}</span>`
+    : `<span class="dot bad"></span>Claude <span class="chip bad">signed out</span> <button ${dis} onclick="act('claude_login')">Sign in</button>`;
+  // The sign-in in progress, as a banner: the link to open, the box for the code.
+  const b = $('signin');
+  if (!s.login) { b.hidden = true; return; }
+  b.hidden = false;
+  if (b.dataset.url !== s.login.url) {
+    b.dataset.url = s.login.url;
+    b.innerHTML = `<b>Sign Claude in</b> — the claude/* stage fails until this is done.
+      <ol><li><a href="${esc(s.login.url)}" target="_blank" rel="noopener">Open the sign-in page ↗</a> and sign in with the account that has the subscription.</li>
+      <li>Paste the code it shows: <input id="code" class="mono" size="44" placeholder="code" autocomplete="off"> <button onclick="act('claude_code',{code:document.getElementById('code').value})">Finish sign-in</button> <button class="danger" onclick="act('claude_cancel')">Cancel</button></li></ol>`;
+  }
+}
 function header(s) {
-  gpu(s);
+  gpu(s); claude(s);
   const t = s.timer, v = s.service, dis = busyAction ? 'disabled' : '';
   const ticking = v.available && (v.active === 'active' || v.active === 'activating');
   const next = systemdTime(t.next), since = systemdTime(v.since);
@@ -181,6 +204,11 @@ const failChip = (n) => n ? `<span class="chip n" title="sent back to dev ${n} t
 const stageChip = (st) => !st ? '<span class="chip bad" title="stages exhausted">exhausted</span>'
   : `<span class="chip ${st.index > 1 ? 'warn' : ''}" title="stage ${st.index}: worker ${esc(st.worker)}${st.reviewer ? ', reviewer ' + esc(st.reviewer) : ''}">${st.index > 1 ? `S${st.index} · ` : ''}${esc(st.worker)}</span>`;
 const count = (n, label) => `<div class="count ${n ? '' : 'zero'}">${n}<small>${label}</small></div>`;
+// "Work with Claude": the bead to the last stage and back in the dev queue, now. Shown
+// wherever a bead is not already on that stage.
+const lastStage = (r) => r.stages[r.stages.length - 1];
+const claudeBtn = (r, b) => (!lastStage(r) || (b.stage && b.stage.index === r.stages.length)) ? '' :
+  `<button ${busyAction ? 'disabled' : ''} title="to the last stage (${esc(lastStage(r).worker)}) and back into the dev queue now" onclick="act('escalate',{repo:${JSON.stringify(r.repo)},id:${JSON.stringify(b.id)}},'Work ${esc(b.id)} with ${esc(lastStage(r).worker)} now? It goes to the last stage and back into the dev queue, ahead of its failure count.')">Work with ${esc(lastStage(r).worker.replace(/^claude\//, 'Claude '))}</button>`;
 const abortBtn = (r, sess, label) => `<button class="danger" ${busyAction ? 'disabled' : ''} onclick="act('abort',{attach:${JSON.stringify(r.attach)},session:${JSON.stringify(sess.id)}},'Abort ${esc(label)}?')">Abort</button>`;
 
 // A PR in the merge queue: what GitHub says now (p.pr, a minute old at most), then the
@@ -245,7 +273,7 @@ function queueCol(name, rows, r, now) {
   let body;
   if (rows.length === 0) body = `<div class="empty">${empty}</div>`;
   else if (name === 'merge') body = `<table>${rows.map((p) => `<tr><td class="id">${esc(p.id)}</td><td class="title"><span class="t"><a href="${esc(p.url)}" target="_blank" rel="noopener">${esc(p.url.replace(/^https?:\/\/github\.com\/[^/]+\//, ''))} ↗</a></span></td></tr><tr class="sub"><td></td><td>${prChips(p, now)}</td></tr>`).join('')}</table>`;
-  else body = `<table>${rows.map((b, i) => qRow(i, b, name === 'dev' ? ` ${stageChip(b.stage)}` : ` <span class="muted">${ago(b.since, now)}</span>`)).join('')}</table>`;
+  else body = `<table>${rows.map((b, i) => qRow(i, b, (name === 'dev' ? ` ${stageChip(b.stage)}` : ` <span class="muted">${ago(b.since, now)}</span>`) + `</td><td class="act">${claudeBtn(r, b)}`)).join('')}</table>`;
   return `<div class="q ${name}"><h3>${name} queue<span class="n">${rows.length}</span></h3><div class="sub">${sub}</div>${body}</div>`;
 }
 
@@ -254,7 +282,7 @@ function repo(r, now, ticking) {
   // Why each parked bead is parked: the loop's last note on it, in full — this is what the
   // human decides on, so it is not truncated.
   const parked = r.parked.length === 0 ? '<div class="empty">none</div>' : `<table>${r.parked.map((b) => `<tr><td class="id">${esc(b.id)}</td><td class="title"><span class="t" title="${esc(b.title || '')}">${esc(b.title || '')}</span></td><td class="fit">${failChip(b.failures)}${b.stage ? '' : ' <span class="chip bad">exhausted</span>'}</td>
-    <td class="act"><button ${busyAction ? 'disabled' : ''} onclick="act('reopen',{repo:${JSON.stringify(r.repo)},id:${JSON.stringify(b.id)}})">Reopen</button></td></tr>
+    <td class="act">${claudeBtn(r, b)} <button ${busyAction ? 'disabled' : ''} onclick="act('reopen',{repo:${JSON.stringify(r.repo)},id:${JSON.stringify(b.id)}})">Reopen</button></td></tr>
     <tr class="sub"><td></td><td colspan="3" class="why">${b.why ? `${b.why.when ? `<span class="muted">${esc(b.why.when.replace('T', ' ').slice(0, 16))}${b.why.round ? ' ·' + esc(b.why.round) : ''} — </span>` : ''}${esc(b.why.what)}` : '<span class="muted">no note from the loop — parked by hand, or before the loop kept notes</span>'}</td></tr>`).join('')}</table>`;
   return `<section class="card" id="repo-${esc(r.slug)}">
     <h2>${esc(r.slug)} <span class="cfg">${esc(r.label)} · ${esc(r.base)} · merge ${esc(r.merge)} · stages: ${stages} · then ${esc(r.on_exhaust)}${r.attach ? '' : ' · <b>no attach</b>: sessions not visible'}</span></h2>

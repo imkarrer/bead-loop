@@ -187,6 +187,11 @@ event stream; nobody presses refresh):
 The levers, each one command you would otherwise type: **Tick now**, **Stop tick**
 (each lane aborts its model session first), **Pause / Resume timer**, **Pause / Resume lane**
 (that lane starts no new round; the other goes on — drain review, or hold the CPU box),
+**Work with Claude** on any bead (to the last stage and back into the dev queue now, ahead
+of its failure count; `bead-supervisor escalate REPO ID`), and **Sign in** in the header when
+`claude` is signed out (a `claude/*` round would fail on the spot): it runs `claude auth login`
+for you — open the link it shows, sign in, paste the code back into the page — so the
+command centre never needs a terminal for it,
 **Abort** on
 any busy or orphan session, **Reopen** on a parked bead, and — where the box has a
 `gpu-mode` command (this workstation does: `game` stops the loop and the local model

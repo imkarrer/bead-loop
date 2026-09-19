@@ -453,6 +453,8 @@ case_status_json_and_ui() {
   assert_match "$("$REAL_CURL" -s -m 3 -X POST -H 'sec-fetch-site: cross-site' "http://127.0.0.1:$port/api/tick")" "same-origin only" "cross-site lever refused"
   assert_match "$("$REAL_CURL" -s -m 3 -X POST -H 'content-type: application/json' -d '{"attach":"http://elsewhere","session":"s"}' "http://127.0.0.1:$port/api/abort")" "unknown server" "abort only against a configured server"
   assert_match "$("$REAL_CURL" -s -m 3 -X POST -H 'content-type: application/json' -d '{"repo":"/nope","id":"t-5"}' "http://127.0.0.1:$port/api/reopen")" "unknown repo" "reopen only in a configured repo"
+  assert_match "$("$REAL_CURL" -s -m 3 -X POST -H 'content-type: application/json' -d "{\"repo\":\"$REPO\",\"id\":\"t-5\"}" "http://127.0.0.1:$port/api/escalate")" '"escalated":"t-5"' "work with Claude from the page"
+  assert_eq "$(cat "$BEAD_LOOP_STATE/repo/failures/t-5")" 2 "on the last stage"
   assert_match "$("$REAL_CURL" -s -m 3 -X POST -H 'content-type: application/json' -d "{\"repo\":\"$REPO\",\"id\":\"t-5\"}" "http://127.0.0.1:$port/api/reopen")" '"reopened":"t-5"' "reopen runs bd"
   assert_eq "$(jq -r '.[]|select(.id=="t-5")|.status' "$BD_STATE/issues.json")" open "the bead is open again"
   kill $upid
@@ -536,6 +538,25 @@ case_review_lane_waits_for_dev_to_claim() {
   assert_eq "$(calls)" "bead-worker bead-reviewer" "reviewed within the same tick"
   assert_match "$(cat "$T/sup.log")" "lanes done but work is queued; going round again" "the tick went round again"
   assert_branch bead/t-1 "and pushed"
+}
+
+case_escalate_to_the_last_stage() {
+  # "Work with Claude": a parked bead goes to the last stage and back into the dev queue,
+  # ahead of its failure count; the next round runs there.
+  setup true auto '' "$(stages stub/fast::2 stub/slow::2 claude/opus:claude/opus:1)"; echo nocommit >"$TEST_CTRL/worker"
+  sup --once tick; sup --once tick   # two failures: stage 1 spent, stage 2 next
+  assert_eq "$(cat "$BEAD_LOOP_STATE/repo/failures/t-1")" 2 "two failures"
+  sup escalate "$REPO" t-1
+  assert_eq "$(cat "$BEAD_LOOP_STATE/repo/failures/t-1")" 4 "failure count set to the last stage's first value"
+  assert_eq "$(bead .status)" open "back in the dev queue"
+  assert_match "$(bead .notes)" "escalated by hand to the last stage (worker claude/opus, reviewer claude/opus)" "noted on the bead"
+  assert_eq "$(sup --json status "$REPO" | jq -r '.queues.dev[0] | "\(.id) \(.failures) \(.stage.worker) \(.stage.index)"')" "t-1 4 claude/opus 3" "status shows it on the last stage"
+  echo "done" >"$TEST_CTRL/worker"; sup --once tick
+  assert_eq "$(cut -d' ' -f3,4 "$TEST_CTRL/calls" | tail -1)" "claude/opus claude" "the next round runs in Claude Code"
+  # A parked bead: escalate reopens it.
+  setup true auto '' "$(stages stub/fast::1 claude/opus::1)"; echo nocommit >"$TEST_CTRL/worker"
+  sup --once tick; sup --once tick; assert_eq "$(bead .status)" in_progress "parked after the stages"
+  sup escalate "$REPO" t-1; assert_eq "$(bead .status)" open "escalate reopens a parked bead"
 }
 
 # ---- main ----------------------------------------------------------------------------

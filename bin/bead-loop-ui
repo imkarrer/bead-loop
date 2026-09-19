@@ -15,7 +15,7 @@
 const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
-const { execFile } = require('node:child_process');
+const { execFile, spawn } = require('node:child_process');
 
 const HOME = path.resolve(__dirname, '..');
 const SUPERVISOR = path.join(HOME, 'bin', 'bead-supervisor');
@@ -98,6 +98,21 @@ function withPrs(repos) {
   return repos;
 }
 const timed = (label, p, into) => { const t0 = Date.now(); return p.finally(() => { into[label] = Date.now() - t0; }); };
+// Whether headless Claude Code can run: a claude/* stage fails on the spot when the
+// login has lapsed, and nothing else on the page would say so. `claude auth status` is
+// local and instant; asked once a minute, and only when a stage names claude/*.
+let claudeAuth = { at: 0, v: null };
+let login = null;  // the claude auth login in progress, if any
+async function claudeStatus(repos) {
+  if (!repos.some((r) => r.stages.some((st) => /^claude\//.test(st.worker) || /^claude\//.test(st.reviewer || '')))) return null;
+  if (Date.now() - claudeAuth.at < 60000) return claudeAuth.v;
+  const r = await run('claude', ['auth', 'status'], { timeout: 10000 });
+  let v;
+  if (!r.ok) v = { available: false, loggedIn: false, error: r.stderr.trim().split('\n').pop() || 'claude not on PATH' };
+  else { try { const j = JSON.parse(r.stdout); v = { available: true, loggedIn: !!j.loggedIn, method: j.authMethod || null }; } catch { v = { available: true, loggedIn: false, error: 'unreadable auth status' }; } }
+  claudeAuth = { at: Date.now(), v };
+  return v;
+}
 async function state() {
   const t = {}, t0 = Date.now();
   const [status, timer, service, log, gpu] = await Promise.all([
@@ -105,9 +120,11 @@ async function state() {
     timed('service', unitState(`${UNIT}.service`), t), timed('journal', journal(80), t), timed('gpu', gpuMode(), t),
   ]);
   if (Date.now() - t0 > 3000) console.error(`slow state: ${Date.now() - t0}ms`, JSON.stringify(t));
+  const repos = withPrs(jsonLines(status.stdout));
   return {
     now: Math.floor(Date.now() / 1000),
-    repos: withPrs(jsonLines(status.stdout)),
+    repos, claude: await claudeStatus(repos),
+    login: login && !login.done ? { url: login.url, started: Math.floor(login.at / 1000) } : null,
     error: status.ok ? null : status.stderr.trim().split('\n').pop(),
     timer, service, log, gpu,
   };
@@ -212,6 +229,42 @@ const actions = {
     if (!r.ok) throw new Error((r.stderr.trim() || `gpu-mode exited ${r.code}`) + ' — allow it in sudoers: NOPASSWD for gpu-mode');
     return { mode };
   },
+  // escalate {repo, id}: work this with Claude — the bead goes to the last stage and back
+  // into the dev queue, and a tick starts so it is picked up now.
+  async escalate({ repo, id }) {
+    if (!ID.test(String(id || ''))) throw new Error('bad bead id');
+    const repos = await knownRepos();
+    if (!repos.some((r) => r.repo === repo)) throw new Error('unknown repo');
+    const r = await run(SUPERVISOR, ['escalate', repo, id]);
+    if (!r.ok) throw new Error(r.stderr.trim().split('\n').pop() || `supervisor exited ${r.code}`);
+    await systemctl('start', '--no-block', `${UNIT}.service`).catch(() => {});
+    return { escalated: id };
+  },
+  // Signing Claude in from the page. `claude auth login` prints a sign-in url and waits
+  // on stdin for the code the browser shows at the end; the page shows the url, takes
+  // the code, and hands it over. One login at a time; a stale one is dropped after 10 min.
+  async claude_login() {
+    if (login && !login.done) return { url: login.url, started: login.at };
+    const child = spawn('claude', ['auth', 'login'], { stdio: ['pipe', 'pipe', 'pipe'] });
+    login = { child, url: null, at: Date.now(), done: false, result: null, out: '' };
+    const onData = (c) => { login.out += String(c); const m = login.out.replace(/\x1b\[[0-9;?]*[a-zA-Z]|\x1b\]8;;[^\x07\x1b]*\x07/g, '').match(/https:\/\/\S+/); if (m && !login.url) login.url = m[0]; };
+    child.stdout.on('data', onData); child.stderr.on('data', onData);
+    child.on('exit', (code) => { login.done = true; login.result = code === 0 ? 'ok' : (login.out.trim().split('\n').pop() || `exited ${code}`); claudeAuth.at = 0; });
+    setTimeout(() => { if (login && !login.done && login.child === child) child.kill(); }, 600000).unref();
+    await new Promise((r) => { const t = setInterval(() => { if (login.url || login.done) { clearInterval(t); r(); } }, 100); setTimeout(() => { clearInterval(t); r(); }, 8000); });
+    if (!login.url) throw new Error(login.done ? `claude auth login: ${login.result}` : 'no sign-in url from claude auth login yet');
+    return { url: login.url, started: login.at };
+  },
+  async claude_code({ code }) {
+    if (!login || login.done) throw new Error('no sign-in in progress — start one first');
+    if (!/^[A-Za-z0-9#_.-]{6,}$/.test(String(code || '').trim())) throw new Error('that does not look like the code');
+    login.child.stdin.write(String(code).trim() + '\n');
+    await new Promise((r) => { const t = setInterval(() => { if (login.done) { clearInterval(t); r(); } }, 200); setTimeout(() => { clearInterval(t); r(); }, 20000); });
+    if (!login.done) throw new Error('claude did not finish signing in; try the code again or start over');
+    if (login.result !== 'ok') throw new Error(login.result);
+    return { loggedIn: true };
+  },
+  async claude_cancel() { if (login && !login.done) login.child.kill(); login = null; return { cancelled: true }; },
   // reopen {repo, id}: a parked bead back in the queue, `bd update ID --status open`.
   async reopen({ repo, id }) {
     if (!ID.test(String(id || ''))) throw new Error('bad bead id');
