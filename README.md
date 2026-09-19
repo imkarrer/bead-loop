@@ -122,24 +122,55 @@ silently running with defaults.
 
 ## Watching it
 
-Interactive: `opencode-web.service` serves opencode's web UI at
-<http://127.0.0.1:4096>. With `attach = "http://127.0.0.1:4096"` in the global config
-every worker and reviewer session runs inside that server, so it streams there live,
-titled by bead, with the diff. No terminal needed. The UI starts empty per browser: **Add
-project** → select the repo (e.g. `~/src/inquire-platform`); its bead sessions, run in
-worktrees, file under it. Once per browser per repo.
+```bash
+bead-supervisor watch                                     # the screen below, every 5 s (BEAD_LOOP_WATCH=N)
+bead-supervisor status                                    # the same, once
+```
 
-From a terminal:
+```
+03:23:33   bead-supervisor watch (every 5s, ctrl-c to stop)
+
+03:02:00 inquire-platform: inq-c0t.23: review by acbox/coder
+03:16:22 inquire-platform: inq-c0t.23: review rejected, revision round
+03:19:21 inquire-platform: inq-c0t.23 attempt 2 stopped: gate failed after revision: npm run typecheck && ...
+
+inquire-platform  label=delegate:local base=master merge=pipeline stages=3  first: worker=devbox/coder reviewer=acbox/coder
+  ready: inq-c0t.29 inq-c0t.28 inq-c0t.23
+  wt/inq-c0t.25  attempt 1
+    ORPHAN  bead-reviewer  acbox/coder         78s ago  Grader version implementation from model server   http://127.0.0.1:4096/L2hvbWUv…/session/ses_f487b4f08ffe…
+            no client on this box; stop it:  curl -X POST http://127.0.0.1:4096/session/ses_f487b4f08ffe…/abort
+    idle    bead-worker    devbox/coder        48m ago  Services/grader stamps graderVersion from model   http://127.0.0.1:4096/L2hvbWUv…/session/ses_f4887c37dffe…
+```
+
+The last supervisor log lines, then per repo: PRs in flight, ready beads, and every
+worktree under `wt/` with what the attached opencode server has for it — newest sessions
+first, each with its state, agent, model, when it last produced anything, and the web UI
+url that opens it. Click the url; no need to know how the UI names things (it files
+sessions under the worktree's path, base64url-encoded — not under the repo, which is why
+the repo's project view looks idle while the loop is busy).
+
+`busy` with a stale "ago" is the slow model thinking: the 80B takes minutes before its
+first token. **`ORPHAN`** is a session the server calls busy with no `opencode run` client
+left on this box: with `attach`, killing the client does not stop the server-side session,
+and on a one-model box it starves the next review. The loop aborts its own sessions
+on the server when the client dies — on `worker_timeout`, on `systemctl stop`/`restart`
+(the TERM handler), and before it recreates a worktree — so an orphan means something
+else killed the client (`kill -9`, a crash); the line under it is the command that stops it.
+
+Also:
 
 ```bash
-journalctl --user -u bead-supervisor.service -f -o cat    # stage transitions, one line each
-bead-supervisor status                                    # ready beads, PRs in flight, CI red
-bead-supervisor log ~/src/repo [bead-id]                  # the newest session, one line per tool call
+journalctl --user -u bead-supervisor.service -f -o cat    # stage transitions, one line each, live
+bead-supervisor log ~/src/repo [bead-id]                  # the newest session's log, one line per tool call
 ```
+
+The web UI itself, <http://127.0.0.1:4096> (`opencode-web.service`): with
+`attach = "http://127.0.0.1:4096"` in the global config every worker and reviewer session
+runs inside that server and streams there live, titled by bead, with the diff.
 
 State lives in `~/.local/state/bead-loop/<repo>/`: `inflight/<id>` (the PR url),
 `logs/<id>.<stamp>.*` (setup, worker, gate, reviewer output per attempt), `wt/<id>`
-(the worktree while a bead is in progress).
+(the worktree while a bead is in progress), `attempts/<id>`.
 
 ## Run
 

@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# Stub curl for bead-loop tests: the attached opencode server's two session endpoints.
+# $TEST_CTRL/sessions.json is what GET /session returns, $TEST_CTRL/session-status.json
+# what GET /session/status returns; the directory asked for is logged to curl.log.
+set -euo pipefail
+url=; dir=
+while [ $# -gt 0 ]; do
+  case $1 in
+    --data-urlencode) dir=${2#directory=}; shift ;;
+    -*) ;;
+    *) url=$1 ;;
+  esac
+  shift
+done
+echo "$url $dir" >>"$TEST_CTRL/curl.log"
+case $url in
+  */abort)          : ;;
+  */session/status) cat "$TEST_CTRL/session-status.json" 2>/dev/null || echo '{}' ;;
+  */session)        cat "$TEST_CTRL/sessions.json" 2>/dev/null || echo '[]' ;;
+  *) echo "stub curl: $url" >&2; exit 22 ;;
+esac
