@@ -151,7 +151,7 @@ function header(s) {
   const ticking = v.available && (v.active === 'active' || v.active === 'activating');
   const next = systemdTime(t.next), since = systemdTime(v.since);
   // OnUnitInactiveSec: the next elapse is only known once the tick has finished.
-  const when = next ? `next tick ${clock(next)} (in ${ago(s.now, next)})` : ticking ? 'next tick 10 min after this one ends' : '';
+  const when = next ? `next tick ${clock(next)} (in ${ago(s.now, next)})` : ticking ? `next tick ${t.gap ? t.gap + ' ' : ''}after this one ends` : '';
   $('timer').innerHTML = !t.available ? `<span class="dot"></span><span class="muted">no systemd timer here</span>` : t.active === 'active'
     ? `<span class="dot on"></span>timer running${when ? ` · ${when}` : ''} <button ${dis} onclick="act('timer',{on:false})">Pause timer</button>`
     : `<span class="dot"></span>timer paused <button ${dis} onclick="act('timer',{on:true})">Resume timer</button>`;

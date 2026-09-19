@@ -8,9 +8,9 @@ need judgement.
 
 ```mermaid
 flowchart TD
-  T([systemd user timer<br/>every 10 min, one tick]) --> R
+  T([systemd user timer<br/>3 min after the last tick ended]) --> R
 
-  subgraph tick [bead-supervisor tick — bash, deterministic, one bead per repo]
+  subgraph tick [bead-supervisor tick — bash, deterministic; a pass per repo, again while there is work]
     direction TB
     R[reconcile: read every open bead PR] --> P{bd ready -l LABEL}
     P -- nothing --> Z([done])
@@ -53,6 +53,22 @@ Both models are opencode providers in `~/.config/opencode/opencode.json`; any
 `provider/model` works in their place. The fast model implements; the slow, stronger
 model gets one call per PR, where it pays.
 
+## What a tick is
+
+A **tick** is one run of `bead-supervisor tick`: a systemd oneshot, no daemon. It makes
+**passes** over the repos — reconcile the open PRs, then attempt one bead — and goes
+round again as long as a pass attempted something, so bead follows bead with the model
+never idle. The pass that finds nothing to attempt ends the tick: nothing ready, or
+`max_inflight` PRs waiting on CI. That wait is the only reason a timer exists: it fires
+a new tick 3 minutes after the last one ended (`OnUnitInactiveSec`), and each such tick
+is one `gh pr view` per PR in flight, a second of work. Nothing in the loop waits on a
+clock while there is work to do. `--once` makes a single pass, for a hand-run check.
+
+A oneshot rather than a daemon because the state is on disk and in `bd`, so a crash
+or a `systemctl stop` (which aborts the model session the tick is on) loses nothing
+but the attempt in progress, and the next tick reads the world afresh. It also gives
+`gpu-mode` one unit to stop and start.
+
 ## Layout
 
 ```
@@ -63,7 +79,7 @@ agents/bead-reviewer.md   reviewer agent                   -> ~/.config/opencode
 bin/bead-supervisor       the loop                         -> ~/.local/bin/
 bin/bead-loop-ui          the web UI server (node)         -> ~/.local/bin/
 ui/index.html             the page it serves
-systemd/                  supervisor oneshot + 10 min timer, opencode-web and bead-loop-ui services
+systemd/                  supervisor oneshot + its timer, opencode-web and bead-loop-ui services
 bead-loop.example.toml    per-repo config                  -> <repo>/.bead-loop.toml
 .flox/env/manifest.toml   flox: every tool above, pinned; bin/ on PATH; services for a box without systemd
 docs/loop.mmd             the diagram above
@@ -294,7 +310,7 @@ check green.
 ## Why this shape
 
 - One model server per box, so one bead in flight per box: `max_inflight` defaults to 1
-  and the timer serialises ticks with a lock.
+  and a lock keeps ticks from overlapping.
 - The 80B at ~3 tok/s is too slow to sit in an agentic edit loop and too good to leave
   out; one review call per PR is where it pays. First live result: it rejected a diff
   the 30B had declared done, for duplicating entries that already existed.

@@ -32,11 +32,13 @@ const jsonLines = (s) => s.split('\n').filter(Boolean).map((l) => { try { return
 
 // ---- what the page reads -------------------------------------------------------------
 async function unitState(name) {
-  const r = await run('systemctl', ['--user', 'show', name, '-p', 'ActiveState,SubState,ExecMainStartTimestamp,LastTriggerUSec,NextElapseUSecRealtime,Result']);
+  const r = await run('systemctl', ['--user', 'show', name, '-p', 'ActiveState,SubState,ExecMainStartTimestamp,LastTriggerUSec,NextElapseUSecRealtime,Result,TimersMonotonic']);
   if (!r.ok) return { available: false };
   const p = Object.fromEntries(r.stdout.split('\n').filter(Boolean).map((l) => l.split(/=(.*)/s).slice(0, 2)));
+  // TimersMonotonic={ OnUnitInactiveUSec=3min ; next_elapse=... }: the gap after a tick ends.
+  const gap = (r.stdout.match(/OnUnitInactiveUSec=([^ ;]+)/) || [])[1] || null;
   return { available: true, active: p.ActiveState, sub: p.SubState, next: p.NextElapseUSecRealtime || null,
-           since: p.ExecMainStartTimestamp || p.LastTriggerUSec || null, result: p.Result || null };
+           since: p.ExecMainStartTimestamp || p.LastTriggerUSec || null, result: p.Result || null, gap };
 }
 async function journal(n) {
   const r = await run('journalctl', ['--user', '-u', `${UNIT}.service`, '-o', 'json', '-n', String(n), '--no-pager']);

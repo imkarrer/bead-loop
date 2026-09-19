@@ -1,9 +1,12 @@
 [Unit]
-Description=bead-loop tick every 10 minutes
+Description=bead-loop: a tick 3 minutes after the last one ended
 
+# A tick keeps going by itself while there is work (bead after bead); it ends when
+# a pass finds nothing to attempt — nothing ready, or waiting on CI. So this gap is
+# only how often that wait is checked: one `gh pr view` per PR in flight.
 [Timer]
 OnBootSec=5min
-OnUnitInactiveSec=10min
+OnUnitInactiveSec=3min
 
 [Install]
 WantedBy=timers.target
