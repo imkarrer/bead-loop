@@ -8,6 +8,8 @@
 #   bead-supervisor lane dev|review       one lane by itself, until its queue is empty
 #   bead-supervisor pause dev|review      the lane starts no new round until `resume` (the other lane goes on)
 #   bead-supervisor resume dev|review
+#   bead-supervisor escalate REPO ID      put the bead on the last stage (Claude, usually) and back in the dev
+#                                         queue now, ahead of its failure count; the next tick works it there
 #   bead-supervisor reconcile [REPO...]   only the merge queue: merge green, close beads, send red back to dev
 #   bead-supervisor status [REPO...]      what is in flight: PRs, ready beads, worktrees and their sessions
 #   bead-supervisor watch [REPO...]       status every 5 s (BEAD_LOOP_WATCH=N), the last log lines above it
@@ -257,6 +259,29 @@ stage_for() {
       return 0
     fi
   done
+}
+
+# last_stage_start: the lowest failure count that lands on the last stage.
+last_stage_start() {
+  local total=0 s a n=0
+  set -- $STAGES
+  for s in "$@"; do IFS=: read -r _ _ a _ <<<"$s"; total=$((total + ${a:-1})); done
+  IFS=: read -r _ _ a _ <<<"${*: -1}"
+  echo $((total - ${a:-1}))
+}
+# escalate ID: "work this with Claude" — the failure count set to the first value that
+# lands on the last stage, and the bead reopened so the dev queue hands it out there. A
+# bead on a lane or waiting for review keeps its place; its next round is the escalated
+# one. Noted on the bead, like every other change the loop makes.
+escalate() {
+  local id=$1 n
+  n=$(last_stage_start); stage_for "$n" || die "$SLUG: no stage to escalate to"
+  printf '%s\n' "$n" >"$RS/failures/$id"
+  bdr update "$id" --append-notes "bead-loop $(date -Iminutes): escalated by hand to the last stage (worker $S_MODEL, reviewer ${S_REVIEW:-none})" >/dev/null
+  if [ ! -e "$RS/review/$id" ] && [ "$(cat "$RS/lane.dev" 2>/dev/null)" != "$id" ] && [ "$(cat "$RS/lane.review" 2>/dev/null)" != "$id" ]; then
+    bdr update "$id" --status open >/dev/null
+  fi
+  log "$SLUG: $id: escalated to the last stage — worker $S_MODEL, reviewer ${S_REVIEW:-none} — from its next round"
 }
 
 # ---- the three queues ---------------------------------------------------------
@@ -826,7 +851,7 @@ watch_loop() {
 
 # ---- main --------------------------------------------------------------------
 exec 9>"$STATE_DIR/lock"
-case $CMD in status|log|watch|lane|pause|resume) ;; *)
+case $CMD in status|log|watch|lane|pause|resume|escalate) ;; *)
   flock -n 9 || { log "another bead-supervisor holds $STATE_DIR/lock; skipping this tick"; exit 0; } ;;
 esac
 case $CMD in
@@ -837,6 +862,7 @@ case $CMD in
              if dev_one "${REPOS[1]:-}" && [ -e "$RS/review/$LAST_ID" ]; then review_one "$LAST_ID"; fi ;;
   lane)      case ${LANE_NAME:-} in dev|review) lane "$LANE_NAME" ;; *) die "lane dev or lane review" ;; esac ;;
   pause)     case ${LANE_NAME:-} in dev|review) touch "$STATE_DIR/pause.$LANE_NAME"; log "$LANE_NAME lane paused: it starts no new round until resume" ;; *) die "pause dev or pause review" ;; esac ;;
+  escalate)  load_repo "${REPOS[0]}"; [ -n "${REPOS[1]:-}" ] || die "escalate REPO ID"; escalate "${REPOS[1]}" ;;
   resume)    case ${LANE_NAME:-} in dev|review) rm -f "$STATE_DIR/pause.$LANE_NAME"; log "$LANE_NAME lane resumed; the next tick picks it up" ;; *) die "resume dev or resume review" ;; esac ;;
   reconcile) for r in "${REPOS[@]}"; do load_repo "$r"; reconcile; done ;;
   status)    for r in "${REPOS[@]}"; do load_repo "$r"; if [ "$JSON" = 1 ]; then status_json; else status_one; fi; done ;;
