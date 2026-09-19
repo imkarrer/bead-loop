@@ -12,15 +12,16 @@
 #   --local      implement, gate and review; keep the branch here, no push, no PR
 #   --model M    opencode provider/model for the worker this run
 #
-# Config, all optional, KEY=VALUE lines (no shell):
-#   ~/.config/bead-loop/config   MODEL, REVIEW_MODEL, REPOS (space separated), WORKER_TIMEOUT, MAX_INFLIGHT,
-#                                ATTACH (an opencode server url: sessions run there and stream in its web UI)
-#   REPO/.bead-loop              LABEL, BASE, SETUP, GATE, REVIEW_MODEL, MERGE (auto|manual), MODEL, MAX_INFLIGHT,
-#                                ADOPT (1: open bead/* PRs from anyone join the loop; default 1)
-# Defaults: LABEL=delegate:local  BASE=origin's HEAD  MERGE=auto  MAX_INFLIGHT=1
-#           WORKER_TIMEOUT=3600 (seconds)  SETUP unset  GATE unset (CI is the gate)
-#           REVIEW_MODEL unset (no review). Set it and a second model judges the diff
+# Config, TOML, every key optional. A key in the repo file wins over the global one:
+#   ~/.config/bead-loop/config.toml   repos (list), model, review_model, stages, on_exhaust, adopt,
+#                                     max_inflight, worker_timeout, attach (an opencode server url:
+#                                     sessions run there and stream in its web UI)
+#   REPO/.bead-loop.toml              label, base, setup, gate, merge (auto|manual), plus any key above
+# Defaults: label=delegate:local  base=origin's HEAD  merge=auto  max_inflight=1  adopt=true
+#           worker_timeout=3600 (seconds)  setup unset  gate unset (CI is the gate)
+#           review_model unset (no review). Set it and a second model judges the diff
 #           before the push; the worker gets one revision round on a REJECT.
+#           stages unset = one attempt with model/review_model, then park.
 set -euo pipefail
 
 BEAD_LOOP_HOME=$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)
@@ -31,11 +32,28 @@ mkdir -p "$STATE_DIR"
 log() { printf '%s %s\n' "$(date +%H:%M:%S)" "$*" >&2; }
 die() { log "error: $*"; exit 1; }
 
-# cfg KEY FILE [DEFAULT]: first KEY=VALUE line; trailing comment and quotes stripped.
+need() { command -v "$1" >/dev/null || die "$1 is not installed"; }
+need bd; need jq; need git; need opencode; need yq
+
+# toml_json FILE: the file as one JSON object ({} when absent or empty).
+toml_json() {
+  [ -f "$1" ] || { printf '{}'; return; }
+  yq -p toml -o json '. // {}' "$1" || die "cannot parse $1"
+}
+# cfg KEY [DEFAULT]: the repo file, then the global one, then DEFAULT. Scalars come
+# back as text (booleans as true/false); arrays joined by spaces.
 cfg() {
   local v
-  v=$( [ -f "$2" ] && grep -E "^$1=" "$2" | head -1 | cut -d= -f2- | sed -E "s/[[:space:]]+#.*\$//; s/^[\"']//; s/[\"']\$//" || true)
-  printf '%s' "${v:-${3-}}"
+  v=$(jq -rn --argjson r "${R_JSON:-{\}}" --argjson g "$G_JSON" --arg k "$1" \
+    '($r[$k] // $g[$k] // empty) | if type == "array" then map(tostring) | join(" ") else tostring end')
+  printf '%s' "${v:-${2-}}"
+}
+# stages_words: the stages table as "worker:reviewer:attempts:timeout" words, the
+# form stage_for walks; empty when no file sets one.
+stages_words() {
+  jq -rn --argjson r "${R_JSON:-{\}}" --argjson g "$G_JSON" '($r.stages // $g.stages // [])
+    | map(if .worker == null then error("a stage needs a worker") else . end)
+    | map([.worker, (.reviewer // ""), (.attempts // 1), (.timeout // "")] | map(tostring) | join(":")) | join(" ")'
 }
 
 DRY=0 LOCAL=0 MODEL_FLAG=
@@ -45,47 +63,46 @@ while [ $# -gt 0 ]; do
     --dry-run) DRY=1 ;;
     --local) LOCAL=1 ;;
     --model) MODEL_FLAG=$2; shift ;;
-    -h|--help) sed -n '2,21p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,24p' "$0"; exit 0 ;;
     *) ARGS+=("$1") ;;
   esac
   shift
 done
 CMD=${ARGS[0]:-tick}
 REPOS=("${ARGS[@]:1}")
-G_CONF=$CONFIG_DIR/config
+G_CONF=$CONFIG_DIR/config.toml
+G_JSON=$(toml_json "$G_CONF")
 if [ ${#REPOS[@]} -eq 0 ] && [ "$CMD" != work ] && [ "$CMD" != log ]; then
-  read -r -a REPOS <<<"$(cfg REPOS "$G_CONF")"
+  # repos = ["~/src/a", ...]; a leading ~ is the home directory.
+  while IFS= read -r r; do [ -n "$r" ] && REPOS+=("${r/#\~/$HOME}"); done <<<"$(printf '%s' "$G_JSON" | jq -r '.repos // [] | .[]')"
 fi
-[ ${#REPOS[@]} -gt 0 ] || die "no repos: pass one or set REPOS in $G_CONF"
-
-need() { command -v "$1" >/dev/null || die "$1 is not installed"; }
-need bd; need jq; need git; need opencode
+[ ${#REPOS[@]} -gt 0 ] || die "no repos: pass one or set repos in $G_CONF"
 
 # ---- per-repo context -------------------------------------------------------
 load_repo() {
   REPO=$(cd "$1" && pwd) || die "no such repo: $1"
   [ -d "$REPO/.beads" ] || die "$REPO has no .beads/"
-  local rc=$REPO/.bead-loop
+  R_JSON=$(toml_json "$REPO/.bead-loop.toml")
   SLUG=$(basename "$REPO")
-  LABEL=$(cfg LABEL "$rc" delegate:local)
-  MERGE=$(cfg MERGE "$rc" auto)
-  SETUP=$(cfg SETUP "$rc")
-  GATE=$(cfg GATE "$rc")
-  MODEL=${MODEL_FLAG:-$(cfg MODEL "$rc" "$(cfg MODEL "$G_CONF")")}
-  REVIEW_MODEL=$(cfg REVIEW_MODEL "$rc" "$(cfg REVIEW_MODEL "$G_CONF")")
-  STAGES=$(cfg STAGES "$rc" "$(cfg STAGES "$G_CONF" "$MODEL:$REVIEW_MODEL:1")")
-  ON_EXHAUST=$(cfg ON_EXHAUST "$rc" "$(cfg ON_EXHAUST "$G_CONF" park)")
-  ADOPT=$(cfg ADOPT "$rc" "$(cfg ADOPT "$G_CONF" 1)")
+  LABEL=$(cfg label delegate:local)
+  MERGE=$(cfg merge auto)
+  SETUP=$(cfg setup)
+  GATE=$(cfg gate)
+  MODEL=${MODEL_FLAG:-$(cfg model)}
+  REVIEW_MODEL=$(cfg review_model)
+  STAGES=$(stages_words); STAGES=${STAGES:-$MODEL:$REVIEW_MODEL:1}
+  ON_EXHAUST=$(cfg on_exhaust park)
+  ADOPT=$(cfg adopt true)
   case " $STAGES " in *" claude/"*|*":claude/"*) need claude ;; esac
-  MAX_INFLIGHT=$(cfg MAX_INFLIGHT "$rc" "$(cfg MAX_INFLIGHT "$G_CONF" 1)")
-  WORKER_TIMEOUT=$(cfg WORKER_TIMEOUT "$G_CONF" 3600)
-  ATTACH=$(cfg ATTACH "$G_CONF")
-  BASE=$(cfg BASE "$rc")
+  MAX_INFLIGHT=$(cfg max_inflight 1)
+  WORKER_TIMEOUT=$(cfg worker_timeout 3600)
+  ATTACH=$(cfg attach)
+  BASE=$(cfg base)
   if [ -z "$BASE" ]; then
     BASE=$(git -C "$REPO" symbolic-ref -q --short refs/remotes/origin/HEAD 2>/dev/null | sed 's|^origin/||')
     [ -n "$BASE" ] || BASE=$(git -C "$REPO" remote show origin 2>/dev/null | sed -n 's/.*HEAD branch: //p')
   fi
-  [ -n "$BASE" ] || die "$SLUG: cannot tell the base branch; set BASE in .bead-loop"
+  [ -n "$BASE" ] || die "$SLUG: cannot tell the base branch; set base in .bead-loop.toml"
   RS=$STATE_DIR/$SLUG
   mkdir -p "$RS/inflight" "$RS/logs" "$RS/wt" "$RS/attempts"
 }
@@ -158,7 +175,7 @@ run_gate() {
 }
 
 # ---- attempts and stages ---------------------------------------------------
-# STAGES is "worker:reviewer:attempts[:timeout] ..." in order. An attempt that
+# STAGES is "worker:reviewer:attempts:timeout" words, one per [[stages]] table, in order. An attempt that
 # fails sends the bead back to open with its note; the next attempt may be a
 # later stage. attempts_of ID reads the counter; stage_for N resolves attempt N
 # (0-based) into S_MODEL S_REVIEW S_TIMEOUT S_LAST, or returns 1 when exhausted.
@@ -401,9 +418,9 @@ close_merged() {
 
 # adopt: any open PR on a bead/<id>[-slug] branch this loop did not open (another
 # session, a human) joins inflight, so green merges and the bead closes whoever
-# wrote it. ADOPT=0 in .bead-loop turns it off.
+# wrote it. adopt = false in .bead-loop.toml turns it off.
 adopt() {
-  [ "$ADOPT" = 1 ] || return 0
+  [ "$ADOPT" = true ] || return 0
   local num head url id
   while IFS=$'\t' read -r num head url; do
     [ -n "$num" ] || continue

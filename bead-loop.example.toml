@@ -1,0 +1,29 @@
+# Copy to <repo>/.bead-loop.toml. TOML; every key optional. Any key from the global
+# ~/.config/bead-loop/config.toml may appear here too and wins for this repo.
+label = "delegate:qwen30b"            # bd ready -l LABEL picks the work           (default "delegate:local")
+base = "master"                        # branch to fork from and PR into           (default: origin's HEAD)
+setup = "npm ci"                       # runs in the fresh worktree before the worker (no node_modules there)
+gate = "npm run typecheck && npm run lint"   # after the worker, before push; unset = CI is the gate
+merge = "auto"                         # auto: the next tick squash-merges once every CI check is green | manual: PR only
+review_model = "acbox/coder"           # the senior model that judges the diff before the push; unset = no review
+on_exhaust = "repeat"                  # repeat: cycle the stages until it lands | park: leave it for you (default)
+# adopt = true                         # open bead/* PRs from anyone join the loop and merge on green
+# max_inflight = 1                     # open PRs before the loop waits for CI
+
+# Escalation, in order. A failed attempt sends the bead back to the queue with its
+# note; later attempts may use a later stage. Usually set once, globally.
+[[stages]]
+worker = "devbox/coder"
+reviewer = "acbox/coder"
+attempts = 3
+
+[[stages]]
+worker = "acbox/coder"
+reviewer = "acbox/instruct"
+attempts = 2
+timeout = 14400                        # seconds; default worker_timeout
+
+[[stages]]
+worker = "claude/opus"                 # runs in Claude Code instead of opencode
+reviewer = "claude/opus"
+attempts = 1

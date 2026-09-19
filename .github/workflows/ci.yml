@@ -17,6 +17,8 @@ jobs:
         run: bash -n bin/bead-supervisor install.sh test/run.sh test/lint-skills.sh test/bin/*
       - name: shellcheck
         run: shellcheck -S warning bin/bead-supervisor install.sh test/run.sh test/lint-skills.sh test/bin/*
+      - name: yq
+        run: command -v yq >/dev/null || { sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 && sudo chmod +x /usr/local/bin/yq; }; yq --version
       - name: skills and agents
         run: test/lint-skills.sh
       - name: supervisor state machine

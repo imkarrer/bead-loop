@@ -21,17 +21,25 @@ ln -sfnT "$HERE/bin/bead-supervisor" "$HOME/.local/bin/bead-supervisor"
 echo "bin    ~/.local/bin/bead-supervisor"
 case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) echo "       (add ~/.local/bin to PATH, or call $HERE/bin/bead-supervisor)";; esac
 
-if [ ! -f "$HOME/.config/bead-loop/config" ]; then
-  cat >"$HOME/.config/bead-loop/config" <<CFG
-# bead-loop global config. KEY=VALUE, no shell.
-MODEL=devbox/coder
-REVIEW_MODEL=
-# ATTACH=http://127.0.0.1:4096   # run sessions inside opencode-web.service; watch them live in the browser
-REPOS=
-WORKER_TIMEOUT=3600
-MAX_INFLIGHT=1
+command -v yq >/dev/null || echo "       yq (mikefarah, v4) is missing: the supervisor reads its TOML config with it"
+if [ ! -f "$HOME/.config/bead-loop/config.toml" ]; then
+  cat >"$HOME/.config/bead-loop/config.toml" <<CFG
+# bead-loop global config. A key in a repo's .bead-loop.toml wins over the same key here.
+repos = []                       # e.g. ["~/src/inquire-platform"]; each has .beads/ and a .bead-loop.toml
+model = "devbox/coder"           # worker, when no stages table is set
+# review_model = "acbox/coder"   # the senior model that judges the diff before the push
+# attach = "http://127.0.0.1:4096"   # run sessions inside opencode-web.service; watch them live in the browser
+worker_timeout = 3600            # seconds per model session
+max_inflight = 1                 # open PRs per repo before the loop waits for CI
+on_exhaust = "park"              # after the last stage: park (for you) | repeat (around again)
+
+# Escalation, in order; a failed attempt requeues the bead for the next one.
+# [[stages]]
+# worker = "devbox/coder"
+# reviewer = "acbox/coder"
+# attempts = 3
 CFG
-  echo "config ~/.config/bead-loop/config (set REPOS)"
+  echo "config ~/.config/bead-loop/config.toml (set repos)"
 fi
 cp "$HERE"/systemd/*.service "$HERE"/systemd/*.timer "$HOME/.config/systemd/user/"
 systemctl --user daemon-reload

@@ -10,7 +10,18 @@ export GIT_AUTHOR_NAME=test GIT_AUTHOR_EMAIL=t@example.com GIT_COMMITTER_NAME=te
 PASS=0 FAIL=0
 
 # ---- fixture -----------------------------------------------------------------
-setup() {  # setup [GATE] [MERGE] [REVIEW_MODEL] [EXTRA_CONFIG_LINES]
+# stages 'worker[:reviewer[:attempts[:timeout]]]'...: [[stages]] tables for EXTRA_TOML.
+stages() {
+  local s w r a t
+  for s in "$@"; do
+    IFS=: read -r w r a t <<<"$s"
+    printf '[[stages]]\nworker = "%s"\n' "$w"
+    [ -n "$r" ] && printf 'reviewer = "%s"\n' "$r"
+    [ -n "$a" ] && printf 'attempts = %s\n' "$a"
+    [ -n "$t" ] && printf 'timeout = %s\n' "$t"
+  done; true
+}
+setup() {  # setup [GATE] [MERGE] [REVIEW_MODEL] [EXTRA_TOML]
   T=$(mktemp -d); export T
   export BEAD_LOOP_CONFIG=$T/config BEAD_LOOP_STATE=$T/state TEST_CTRL=$T/ctrl BD_STATE=$T/bd
   mkdir -p "$BEAD_LOOP_CONFIG" "$TEST_CTRL" "$BD_STATE"
@@ -19,8 +30,8 @@ setup() {  # setup [GATE] [MERGE] [REVIEW_MODEL] [EXTRA_CONFIG_LINES]
   REPO=$T/repo
   mkdir -p "$REPO/.beads"; echo base >"$REPO/README"; touch "$REPO/.beads/issues.jsonl"
   git -C "$REPO" add -A && git -C "$REPO" commit -qm base && git -C "$REPO" branch -qM main && git -C "$REPO" push -q -u origin main
-  printf 'LABEL=delegate:local\nBASE=main\nGATE=%s\nMERGE=%s\nREVIEW_MODEL=%s\n%s\n' "${1:-true}" "${2:-auto}" "${3-stub/reviewer}" "${4-}" >"$REPO/.bead-loop"
-  printf 'MODEL=stub/worker\nREPOS=%s\nWORKER_TIMEOUT=60\n' "$REPO" >"$BEAD_LOOP_CONFIG/config"
+  printf 'label = "delegate:local"\nbase = "main"\ngate = \047%s\047\nmerge = "%s"\nreview_model = "%s"\n%s\n' "${1:-true}" "${2:-auto}" "${3-stub/reviewer}" "${4-}" >"$REPO/.bead-loop.toml"
+  printf 'model = "stub/worker"\nrepos = ["%s"]\nworker_timeout = 60\n' "$REPO" >"$BEAD_LOOP_CONFIG/config.toml"
   jq -n '[{id:"t-1", title:"Do the thing", description:"Edit work.txt", acceptance_criteria:"work.txt exists", status:"open", priority:2, issue_type:"task", labels:["delegate:local"]}]' >"$BD_STATE/issues.json"
   echo "done" >"$TEST_CTRL/worker"; echo approve >"$TEST_CTRL/review"; : >"$TEST_CTRL/calls"
 }
@@ -52,7 +63,7 @@ case_done_to_pr() {
   setup; sup work "$REPO"
   assert_eq "$(calls)" "bead-worker bead-reviewer" "worker then reviewer"
   assert_match "$(sed -n 1p "$TEST_CTRL/calls")" " stub/worker " "worker model from global config"
-  assert_match "$(sed -n 2p "$TEST_CTRL/calls")" " stub/reviewer " "reviewer model from .bead-loop"
+  assert_match "$(sed -n 2p "$TEST_CTRL/calls")" " stub/reviewer " "reviewer model from .bead-loop.toml"
   assert_match "$(cat "$TEST_CTRL/prompt.1")" "ACCEPTANCE CRITERIA" "bead rendered into the prompt"
   assert_match "$(cat "$TEST_CTRL/prompt.2")" "<diff>" "reviewer sees the diff"
   assert_branch bead/t-1 "branch pushed"
@@ -165,7 +176,7 @@ case_inflight_limits_tick() {
   setup; sup work "$REPO"
   jq '. + [{id:"t-2", title:"Next", description:"x", status:"open", priority:2, labels:["delegate:local"]}]' "$BD_STATE/issues.json" >"$BD_STATE/i.tmp" && mv "$BD_STATE/i.tmp" "$BD_STATE/issues.json"
   : >"$TEST_CTRL/calls"; sup tick
-  assert_eq "$(calls)" "" "MAX_INFLIGHT=1: no new bead while a PR is open"
+  assert_eq "$(calls)" "" "max_inflight = 1: no new bead while a PR is open"
   assert_eq "$(jq -r '.[]|select(.id=="t-2")|.status' "$BD_STATE/issues.json")" open "t-2 untouched"
 }
 case_nothing_ready() {
@@ -181,12 +192,26 @@ case_lock_skips() {
   wait
 }
 case_config_comments() {
-  setup 'true   # trailing comment'; sup work "$REPO"
-  assert_branch bead/t-1 "GATE with a trailing comment still runs as `true`"
+  setup; sed -i "s|^gate = 'true'$|gate = 'true'   # trailing comment|" "$REPO/.bead-loop.toml"; sup work "$REPO"
+  assert_branch bead/t-1 "gate with a trailing comment still runs as `true`"
+}
+case_config_layers() {
+  # repo file over global over default; a global stages table serves every repo;
+  # ~ in repos expands; a config that does not parse is a loud stop.
+  setup true auto ''
+  printf 'model = "stub/worker"\nrepos = ["~/repo"]\nworker_timeout = 60\nmax_inflight = 3\n%s\n' "$(stages stub/global::1)" >"$BEAD_LOOP_CONFIG/config.toml"
+  out=$(sup --dry-run work "$REPO")
+  assert_match "$out" "model: stub/global" "stages from the global file"
+  printf 'max_inflight = 1\n%s\n' "$(stages stub/repo::1)" >>"$REPO/.bead-loop.toml"
+  out=$(sup --dry-run work "$REPO")
+  assert_match "$out" "model: stub/repo" "repo stages win over global"
+  out=$(HOME=$T sup --dry-run tick); assert_match "$out" "Do the thing" "~ in repos is the home directory"
+  echo 'gate = "unterminated' >>"$REPO/.bead-loop.toml"
+  rc=0; sup work "$REPO" || rc=$?; assert_eq "$rc" 1 "unparseable config dies"
 }
 
 case_escalation_stages() {
-  setup true auto '' $'STAGES=stub/fast::2 stub/slow:stub/senior:1'; echo nocommit >"$TEST_CTRL/worker"
+  setup true auto '' "$(stages stub/fast::2 stub/slow:stub/senior:1)"; echo nocommit >"$TEST_CTRL/worker"
   sup tick; assert_eq "$(bead .status)" open "attempt 1 failed: back in the queue"
   assert_eq "$(cat "$BEAD_LOOP_STATE/repo/attempts/t-1")" 1 "attempt counted"
   sup tick; sup tick
@@ -196,24 +221,24 @@ case_escalation_stages() {
   : >"$TEST_CTRL/calls"; sup tick; assert_eq "$(calls)" "" "parked bead is not retried"
 }
 case_repeat_cycles() {
-  setup true auto '' $'STAGES=stub/fast::1 stub/slow::1\nON_EXHAUST=repeat'; echo nocommit >"$TEST_CTRL/worker"
+  setup true auto '' "$(echo 'on_exhaust = "repeat"'; stages stub/fast::1 stub/slow::1)"; echo nocommit >"$TEST_CTRL/worker"
   sup tick; sup tick; sup tick; sup tick
   assert_eq "$(cut -d' ' -f3 "$TEST_CTRL/calls" | tr '\n' ' ' | sed 's/ $//')" "stub/fast stub/slow stub/fast stub/slow" "cycles through the stages"
   assert_eq "$(bead .status)" open "still in the queue"
 }
 case_blocked_at_last_stage_parks() {
-  setup true auto '' $'STAGES=stub/fast::1 stub/slow::1\nON_EXHAUST=repeat'; echo blocked >"$TEST_CTRL/worker"
+  setup true auto '' "$(echo 'on_exhaust = "repeat"'; stages stub/fast::1 stub/slow::1)"; echo blocked >"$TEST_CTRL/worker"
   sup tick; assert_eq "$(bead .status)" open "BLOCKED at the first stage: a stronger model may not be"
   sup tick; assert_eq "$(bead .status)" in_progress "BLOCKED at the last stage: parked even with repeat"
 }
 case_history_in_prompt() {
-  setup true auto '' 'STAGES=stub/fast::2'; echo nocommit >"$TEST_CTRL/worker"
+  setup true auto '' "$(stages stub/fast::2)"; echo nocommit >"$TEST_CTRL/worker"
   sup tick; ! grep -q '<previous-attempts>' "$TEST_CTRL/prompt.1" && ok || bad "first attempt has no history"
   sup tick; assert_match "$(cat "$TEST_CTRL/prompt.2")" "<previous-attempts>" "second attempt sees the history"
   assert_match "$(cat "$TEST_CTRL/prompt.2")" "attempt 1 (stub/fast): worker made no commit" "with the note"
 }
 case_fair_pick() {
-  setup true auto '' 'STAGES=stub/fast::3'; echo nocommit >"$TEST_CTRL/worker"
+  setup true auto '' "$(stages stub/fast::3)"; echo nocommit >"$TEST_CTRL/worker"
   jq '. + [{id:"t-2", title:"Second", description:"y", status:"open", priority:3, labels:["delegate:local"]}]' "$BD_STATE/issues.json" >"$BD_STATE/i.tmp" && mv "$BD_STATE/i.tmp" "$BD_STATE/issues.json"
   sup tick; sup tick
   assert_match "$(cat "$TEST_CTRL/prompt.1")" "id: t-1" "first pick is bd's order"
@@ -221,12 +246,12 @@ case_fair_pick() {
   sup tick; assert_match "$(cat "$TEST_CTRL/prompt.3")" "id: t-1" "then t-1's second attempt"
 }
 case_dry_run_names_stage() {
-  setup true auto '' 'STAGES=stub/fast::1:7'; out=$(sup --dry-run work "$REPO")
+  setup true auto '' "$(stages stub/fast::1:7)"; out=$(sup --dry-run work "$REPO")
   assert_match "$out" "attempt 1  model: stub/fast" "dry run names the stage"
 }
 
 case_claude_stage_after_local_ones() {
-  setup true auto '' $'STAGES=stub/fast::1 claude/opus:claude/opus:1'; echo nocommit >"$TEST_CTRL/worker"
+  setup true auto '' "$(stages stub/fast::1 claude/opus:claude/opus:1)"; echo nocommit >"$TEST_CTRL/worker"
   sup tick; assert_eq "$(bead .status)" open "local attempt failed, requeued"
   sup tick
   assert_eq "$(cut -d' ' -f3,4 "$TEST_CTRL/calls" | tr '\n' '|')" "stub/fast none|claude/opus claude|claude/opus claude|" "then Claude Code implements and reviews"
@@ -253,21 +278,21 @@ case_adopted_prs_do_not_block_new_work() {
   jq -n '[{number:41, headRefName:"bead/x-1", url:"https://github.com/example/repo/pull/41", state:"OPEN", checks:[{context:"ci",state:"PENDING"}]}]' >"$TEST_CTRL/extra-prs.json"
   sup tick
   assert_file "$BEAD_LOOP_STATE/repo/inflight/x-1" "adopted and tracked"
-  assert_eq "$(calls)" "bead-worker bead-reviewer" "an adopted PR pending CI does not count toward MAX_INFLIGHT"
+  assert_eq "$(calls)" "bead-worker bead-reviewer" "an adopted PR pending CI does not count toward max_inflight"
   assert_match "$(sup status "$REPO")" "x-1 .*\[adopted\]" "status says adopted"
 }
 case_adopt_off() {
-  setup true auto stub/reviewer 'ADOPT=0'
+  setup true auto stub/reviewer 'adopt = false'
   jq -n '[{number:41, headRefName:"bead/x-1", url:"https://github.com/example/repo/pull/41", state:"OPEN", checks:[{context:"ci",state:"SUCCESS"}]}]' >"$TEST_CTRL/extra-prs.json"
   sup reconcile "$REPO"
-  assert_nofile "$BEAD_LOOP_STATE/repo/inflight/x-1" "ADOPT=0: ignored"
+  assert_nofile "$BEAD_LOOP_STATE/repo/inflight/x-1" "adopt = false: ignored"
 }
 case_dotted_ids_count_as_inflight() {
   setup; jq '.[0].id="t-1.2"' "$BD_STATE/issues.json" >"$BD_STATE/i.tmp" && mv "$BD_STATE/i.tmp" "$BD_STATE/issues.json"
   sup work "$REPO"; assert_file "$BEAD_LOOP_STATE/repo/inflight/t-1.2" "tracked"
   jq '. + [{id:"t-3", title:"Next", description:"x", status:"open", priority:2, labels:["delegate:local"]}]' "$BD_STATE/issues.json" >"$BD_STATE/i.tmp" && mv "$BD_STATE/i.tmp" "$BD_STATE/issues.json"
   : >"$TEST_CTRL/calls"; sup tick
-  assert_eq "$(calls)" "" "a bead id with a dot still counts toward MAX_INFLIGHT"
+  assert_eq "$(calls)" "" "a bead id with a dot still counts toward max_inflight"
 }
 
 # ---- main ----------------------------------------------------------------------------

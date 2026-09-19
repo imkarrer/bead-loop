@@ -63,11 +63,12 @@ agents/bead-worker.md     implementor agent                -> ~/.config/opencode
 agents/bead-reviewer.md   reviewer agent                   -> ~/.config/opencode/agents/
 bin/bead-supervisor       the loop                         -> ~/.local/bin/
 systemd/                  supervisor oneshot + 10 min timer, opencode-web service
-bead-loop.example         per-repo config                  -> <repo>/.bead-loop
+bead-loop.example.toml    per-repo config                  -> <repo>/.bead-loop.toml
 docs/loop.mmd             the diagram above
 ```
 
-`./install.sh` makes the links (re-runnable). Repo-specific skills (how to verify,
+`./install.sh` makes the links (re-runnable). The supervisor needs `bd`, `git`, `jq`, `gh`,
+`opencode` and `yq` (mikefarah, v4: it reads the TOML). Repo-specific skills (how to verify,
 house style, vocabulary) stay in each repo under `.agents/skills/` or
 `.opencode/skills/`; the workflow skill tells the worker to look for them.
 
@@ -76,10 +77,12 @@ house style, vocabulary) stay in each repo under `.agents/skills/` or
 1. Label the beads the model may work: `bd label add <id> delegate:local`.
    A bead needs a DESCRIPTION naming the files and an ACCEPTANCE CRITERIA the
    worker can run; the workflow skill turns anything vaguer into a `BLOCKED:` note.
-2. Copy `bead-loop.example` to `<repo>/.bead-loop`: the label, base branch, `SETUP`
-   (what a fresh worktree needs, e.g. `npm ci`), `GATE` (fast local proof),
-   `REVIEW_MODEL`, `MERGE`.
-3. Add the repo to `REPOS` in `~/.config/bead-loop/config`.
+2. Copy `bead-loop.example.toml` to `<repo>/.bead-loop.toml`: the label, base branch, `setup`
+   (what a fresh worktree needs, e.g. `npm ci`), `gate` (fast local proof),
+   `review_model`, `merge`.
+3. Add the repo to `repos` in `~/.config/bead-loop/config.toml`. Everything else in
+   that file is a default the repo file may override; the models and `[[stages]]`
+   usually live there once, not per repo.
 4. On GitHub: CI that reports a status on PRs. `gh` must be logged in. The supervisor
    never asks GitHub to auto-merge (on a branch with no required checks that merges
    immediately); a later tick merges once every reported check is green, and refuses
@@ -88,7 +91,7 @@ house style, vocabulary) stay in each repo under `.agents/skills/` or
 ## Watching it
 
 Interactive: `opencode-web.service` serves opencode's web UI at
-<http://127.0.0.1:4096>. With `ATTACH=http://127.0.0.1:4096` in the global config
+<http://127.0.0.1:4096>. With `attach = "http://127.0.0.1:4096"` in the global config
 every worker and reviewer session runs inside that server, so it streams there live,
 titled by bead, with the diff. No terminal needed. The UI starts empty per browser: **Add
 project** → select the repo (e.g. `~/src/inquire-platform`); its bead sessions, run in
@@ -122,11 +125,21 @@ sudo loginctl enable-linger $USER                       # timers survive logout
 An **attempt** is worker → gate (one fix round on failure) → reviewer (one fix round on
 REJECT). It ends in a PR, or in a note on the bead saying exactly where it stopped.
 
-What happens after a failed attempt is the **escalation path**, `STAGES` in `.bead-loop`:
+What happens after a failed attempt is the **escalation path**, the `[[stages]]` tables in the config:
 
-```
-STAGES=devbox/coder:acbox/coder:3 acbox/coder:acbox/instruct:2:14400
-ON_EXHAUST=repeat
+```toml
+on_exhaust = "repeat"
+
+[[stages]]
+worker = "devbox/coder"
+reviewer = "acbox/coder"
+attempts = 3
+
+[[stages]]
+worker = "acbox/coder"
+reviewer = "acbox/instruct"
+attempts = 2
+timeout = 14400
 ```
 
 Read: three attempts with the fast GPU worker reviewed by the 80B; then two with the 80B
@@ -140,7 +153,7 @@ note; the next attempt reads the notes of the earlier ones. Among ready beads th
 with the fewest attempts goes first, so a stubborn bead never starves the rest.
 
 Two things park a bead (`in_progress`, no more attempts) for a human: the stages are
-exhausted with `ON_EXHAUST=park`, or the *last* stage says `BLOCKED:` — a claim in the
+exhausted with `on_exhaust = "park"`, or the *last* stage says `BLOCKED:` — a claim in the
 bead is false, and no model fixes that.
 
 ## PRs from anyone
@@ -148,7 +161,7 @@ bead is false, and no model fixes that.
 `reconcile` also **adopts** any open PR on a `bead/<id>…` branch it did not open — another
 session's, or yours by hand. It merges on green like its own and closes the bead the
 branch names. Adopted PRs cost CI, not the model, so they do not count toward
-`MAX_INFLIGHT`. `ADOPT=0` in `.bead-loop` turns it off.
+`max_inflight`. `adopt = false` turns it off.
 
 ## What each outcome does to the bead
 
@@ -158,7 +171,7 @@ branch names. Adopted PRs cost CI, not the model, so they do not count toward
 | Setup fails, or no commit | note with the tail of the log; next attempt | removed |
 | Gate fails twice (one revision round with its output) | note with the errors; next attempt | removed |
 | Reviewer `REJECT:` twice | note with the last rejection; next attempt | removed |
-| Attempts exhausted (`ON_EXHAUST=park`) | in_progress, for you | — |
+| Attempts exhausted (`on_exhaust = "park"`) | in_progress, for you | — |
 | PR opened | in_progress, comment with the url | pushed |
 | CI green | closed with the PR url | squash-merged, branch deleted |
 | CI red | in_progress, one note | PR left open for you |
@@ -181,7 +194,7 @@ check green.
 
 ## Why this shape
 
-- One model server per box, so one bead in flight per box: `MAX_INFLIGHT` defaults to 1
+- One model server per box, so one bead in flight per box: `max_inflight` defaults to 1
   and the timer serialises ticks with a lock.
 - The 80B at ~3 tok/s is too slow to sit in an agentic edit loop and too good to leave
   out; one review call per PR is where it pays. First live result: it rejected a diff
