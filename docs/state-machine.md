@@ -22,6 +22,7 @@ The loop keeps no state of its own beyond files; a bead's state is a function of
 | `$RS/review/ID` | in the review queue (holds the worker's last line) |
 | `$RS/inflight/ID` | in the merge queue (holds the PR url); beside it `.ID.adopted`, `.ID.red`, `.ID.nocheck`, `.ID.fixing` |
 | `$RS/lane.NAME` | the bead the lane NAME is on (`dev`, `review`; or the `[[lanes]]` names: `gpu`, `cpu`, `claude`) |
+| `$RS/rejoin/ID` | `SID worker` or `SID reviewer`: a session still running on the server after a restart, for the lane to wait on instead of starting one |
 | `$RS/wt/ID`, branch `bead/ID` (local, origin) | the work |
 | GitHub | the PR: none / OPEN (checks pending, green, red, none; mergeState CLEAN, BEHIND, DIRTY, BLOCKED) / MERGED / CLOSED |
 | the servers | opencode session running or orphaned; devbox, acbox, claude, gh reachable or not |
@@ -128,6 +129,7 @@ Two flags are orthogonal to the state and do not move a bead:
 | dev | gate fails, fix round, gate fails | ready | +1 | removed | exists |
 | dev | gate passes | review | — | kept | exists |
 | dev | loop stopped / crashed | ready ("round interrupted") | — | kept for the resume | exists (recover at start; a worker, gate or reviewer that comes back under the stop is cut short, never judged — `signals::stopping`) |
+| dev | loop restarted (a deploy) with the worker session still running on the server | ready, first, with `rejoin/ID` | — | kept, untouched | exists (recover; the lane waits on the session — `harness::rejoin_session`) |
 | dev | round crashes (`bd`/`git` error) | ready (held: "round crashed") · human after 3 | — | removed | **new** — today: the lane dies |
 
 ### review → reviewing → …
@@ -144,6 +146,7 @@ Two flags are orthogonal to the state and do not move a bead:
 | reviewing | push refused (non-fast-forward: someone pushed to `bead/ID`) | ready (held: "branch diverged on origin") | — | kept | **new** — today: `set -e`, the lane dies |
 | reviewing | `gh pr create` fails (gh signed out, network) | review (held: "gh: <error>") | — | pushed | **new** — today: the lane dies |
 | reviewing | loop stopped | review | — | kept | exists (`review/ID` survives; the lane retakes it; a reviewer that comes back under the stop is cut short, not a send-back) |
+| reviewing | loop restarted with the reviewer session still running | review, with `rejoin/ID` | — | kept | exists (the review lane waits on the session) |
 
 ### merge → …
 

@@ -82,6 +82,30 @@ impl Repo {
     pub fn lane_bead(&self, name: &str) -> Option<String> {
         read_to_string(&self.lane_path(name)).map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
     }
+    /// `$RS/rejoin/ID`: a session of this bead still running on the opencode server after
+    /// the loop restarted — `SID worker` or `SID reviewer`. The lane that takes the bead
+    /// waits on that session instead of starting one (harness.rs rejoin_session).
+    pub fn rejoin_path(&self, id: &str) -> PathBuf {
+        self.rs.join("rejoin").join(id)
+    }
+    pub fn rejoin_set(&self, id: &str, sid: &str, kind: &str) {
+        write_file(
+            &self.rejoin_path(id),
+            &format!(
+                "{sid} {kind}
+"
+            ),
+        );
+    }
+    pub fn rejoin_clear(&self, id: &str) {
+        let _ = std::fs::remove_file(self.rejoin_path(id));
+    }
+    /// (session id, worker|reviewer), when a session is to be rejoined.
+    pub fn rejoin_of(&self, id: &str) -> Option<(String, String)> {
+        let s = read_to_string(&self.rejoin_path(id))?;
+        let mut it = s.split_whitespace();
+        Some((it.next()?.to_string(), it.next().unwrap_or("worker").to_string()))
+    }
     pub fn pause_path(&self, name: &str) -> PathBuf {
         self.state_dir.join(format!("pause.{name}"))
     }
@@ -191,15 +215,17 @@ pub fn dev_queue(repo: &Repo) -> Vec<String> {
 
 /// The dev queue from what `bd ready` said, in the loop's order.
 pub fn order_dev(repo: &Repo, ready: Vec<String>) -> Vec<String> {
-    let mut v: Vec<(u64, usize, String)> = ready
+    let lanes = repo.lane_files();
+    let mut v: Vec<(bool, u64, usize, String)> = ready
         .into_iter()
         .enumerate()
         .filter(|(_, id)| !repo.review_path(id).exists() && !repo.inflight_path(id).exists())
-        .filter(|(_, id)| repo.lane_bead("dev").as_deref() != Some(id) && repo.lane_bead("review").as_deref() != Some(id))
-        .map(|(i, id)| (repo.failures_of(&id), i, id))
+        .filter(|(_, id)| !lanes.iter().any(|n| repo.lane_bead(n).as_deref() == Some(id)))
+        // a session to rejoin goes first: it is already running, and it holds the server
+        .map(|(i, id)| (repo.rejoin_path(&id).exists(), repo.failures_of(&id), i, id))
         .collect();
-    v.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
-    v.into_iter().map(|t| t.2).collect()
+    v.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)).then(a.2.cmp(&b.2)));
+    v.into_iter().map(|t| t.3).collect()
 }
 
 #[cfg(test)]

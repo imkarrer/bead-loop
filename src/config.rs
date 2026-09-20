@@ -254,7 +254,7 @@ impl Repo {
 /// same counter, file by file (a status run may have made failures/ first), then the
 /// old directory goes.
 pub fn make_state_dirs(rs: &Path) {
-    for d in ["inflight", "logs", "wt", "review", "failures", "held", "parked"] {
+    for d in ["inflight", "logs", "wt", "review", "failures", "held", "parked", "rejoin"] {
         let _ = std::fs::create_dir_all(rs.join(d));
     }
     let old = rs.join("attempts");
@@ -594,7 +594,7 @@ mod tests {
         assert_eq!(std::fs::read_to_string(rs.join("failures/t-1.notes")).unwrap(), "round 1 (x): y\n", "the history too");
         assert_eq!(std::fs::read_to_string(rs.join("failures/t-9")).unwrap(), "5\n", "an existing counter is not overwritten");
         assert!(!rs.join("attempts").exists(), "attempts/ gone");
-        for sub in ["inflight", "logs", "wt", "review", "failures", "held"] {
+        for sub in ["inflight", "logs", "wt", "review", "failures", "held", "rejoin"] {
             assert!(rs.join(sub).is_dir(), "{sub}/ made");
         }
         let _ = std::fs::remove_dir_all(&d);

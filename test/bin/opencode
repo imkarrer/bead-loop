@@ -39,6 +39,7 @@ case $agent in
     v=$(sed -n "${round}p" "$TEST_CTRL/review")
     case $v in
       approve) say "APPROVE: checked every criterion" ;;
+      hang) say "reading the diff"; sleep 30 ;;   # a stop or the clock ends it
       crash) echo "connection refused" >&2; exit 7 ;;   # the reviewer's server is down
       *) say "REJECT: work.txt:1 wrong, fix it"; say "$(printf "For the worker:\n- What is wrong: work.txt:1 says round 1\n- What to do: append the word fixed\n- How to check: grep -c fixed work.txt prints 1")" ;;
     esac ;;
