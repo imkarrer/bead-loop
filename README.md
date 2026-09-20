@@ -372,7 +372,9 @@ bead-supervisor log ~/src/repo [bead-id]                  # the newest session's
 
 The web UI itself, <http://127.0.0.1:4096> (`opencode-web.service`): with
 `attach = "http://127.0.0.1:4096"` in the global config every worker and reviewer session
-runs inside that server and streams there live, titled by bead, with the diff.
+runs inside that server and streams there live, titled by bead, with the diff. The unit
+runs `opencode serve`, not `opencode web`: the same server and the same UI, but `web`
+also opens a browser tab every time it starts, which a deploy does.
 
 State lives in `~/.local/state/bead-loop/<repo>/`: `inflight/<id>` (the PR url),
 `logs/<id>.<stamp>.*` (setup, worker, gate, reviewer, brief output per attempt), `wt/<id>`
