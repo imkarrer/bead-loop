@@ -24,20 +24,10 @@ fail() { echo "automerge: $*" >&2; exit 1; }
 
 number=${BUILDKITE_PULL_REQUEST:-}
 sha=${BUILDKITE_COMMIT:-}
-# owner/name from git@github.com:owner/name.git or https://github.com/owner/name(.git):
-# POSIX ERE has no lazy `+?`, so the .git comes off in a second step (build #2's
-# automerge got a 404 on "bead-loop.git").
-repo=$(printf '%s' "${BUILDKITE_REPO:-}" | sed -nE 's|.*github\.com[:/]([^/]+/[^/]+)$|\1|p' | sed 's/\.git$//')
+# shellcheck source=scripts/ci-github.sh
+. "$(dirname "$0")/ci-github.sh"   # token, repo (build #2's automerge got a 404 on "bead-loop.git")
 if [ -z "$number" ] || [ "$number" = false ] || [ -z "$sha" ] || [ -z "$repo" ]; then
   fail "not a pull request build (BUILDKITE_PULL_REQUEST=$number, BUILDKITE_REPO=${BUILDKITE_REPO:-})"
-fi
-
-token=${GITHUB_TOKEN:-}
-if [ -z "$token" ]; then
-  # GIT_CONFIG_KEY_n=url.https://x-access-token:TOKEN@github.com/.insteadOf
-  while IFS='=' read -r k v; do
-    case $k in GIT_CONFIG_KEY_*) t=$(printf '%s' "$v" | sed -nE 's|.*x-access-token:([^@]+)@github\.com.*|\1|p'); [ -n "$t" ] && token=$t;; esac
-  done < <(env)
 fi
 [ -n "$token" ] || fail "no GitHub token: set GITHUB_TOKEN on the agent, or a GIT_CONFIG_KEY_n url rewrite with x-access-token"
 

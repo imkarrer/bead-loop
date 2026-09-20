@@ -19,14 +19,18 @@ if command -v claude >/dev/null; then
   for s in "$HERE"/skills/*/; do n=$(basename "$s"); ln -sfnT "$s" "$HOME/.claude/skills/$n"; echo "skill  ~/.claude/skills/$n -> $s (Claude Code)"; done
 fi
 
-# The binary: cargo from PATH, else from this checkout's flox env. `install` replaces
-# the file rather than writing into it, so a running loop keeps its old inode until it
-# re-execs at an idle moment (it watches the path for exactly this).
+# The binary: a prebuilt one in BEAD_SUPERVISOR_BIN (the deploy's, downloaded from the
+# release the pipeline built and tested), else cargo from PATH, else this checkout's
+# flox env. `install` replaces the file rather than writing into it, so a running loop
+# keeps its old inode until it re-execs at an idle moment (it watches the path for
+# exactly this).
 build() { (cd "$HERE" && cargo build --release --quiet); }
-if command -v cargo >/dev/null; then build
-elif command -v flox >/dev/null; then (cd "$HERE" && flox activate -- cargo build --release --quiet)
+bin=${BEAD_SUPERVISOR_BIN:-}
+if [ -n "$bin" ]; then [ -x "$bin" ] || { echo "       BEAD_SUPERVISOR_BIN=$bin is not an executable"; exit 1; }
+elif command -v cargo >/dev/null; then build; bin=$HERE/target/release/bead-supervisor
+elif command -v flox >/dev/null; then (cd "$HERE" && flox activate -- cargo build --release --quiet); bin=$HERE/target/release/bead-supervisor
 else echo "       cargo is missing: install rust, or flox (the env in .flox/ has it)"; exit 1; fi
-install -m 755 "$HERE/target/release/bead-supervisor" "$HOME/.local/bin/bead-supervisor"
+install -m 755 "$bin" "$HOME/.local/bin/bead-supervisor"
 ln -sfnT "$HERE/bin/bead-loop-ui" "$HOME/.local/bin/bead-loop-ui"
 echo "bin    ~/.local/bin/bead-supervisor ($(bead-supervisor --help 2>/dev/null | head -1 | cut -c1-60 || true))"
 echo "bin    ~/.local/bin/bead-loop-ui -> $HERE/bin/bead-loop-ui"

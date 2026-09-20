@@ -3,7 +3,7 @@ Description=bead-loop web UI: the loop on one page at http://127.0.0.1:4097, wit
 After=network.target
 
 [Service]
-ExecStart=%h/src/bead-loop/bin/bead-loop-ui
+ExecStart=%h/.local/bin/bead-loop-ui
 # node for the server; bead-supervisor (and through it bd, jq, yq, gh, curl), systemctl, journalctl for what it shows.
 Environment=PATH=%h/.local/bin:%h/.nix-profile/bin:/run/current-system/sw/bin:/usr/bin:/bin
 Restart=on-failure

@@ -157,7 +157,8 @@ bin/bead-loop-ui          the web UI server (node)         -> ~/.local/bin/
 ui/index.html             the page it serves
 systemd/                  the loop's service and its keeper timer, opencode-web and bead-loop-ui services,
                           the deploy timer and its service
-scripts/                  ci.sh (the steps, with the cargo cache), ci-merge.sh (automerge), deploy.sh (the pull)
+scripts/                  ci.sh (the steps, the cargo cache, the release), ci-github.sh (the agent's token),
+                          ci-merge.sh (automerge), deploy.sh (the pull: the release into the deploy's clone)
 bead-loop.example.toml    per-repo config                  -> <repo>/.bead-loop.toml
 .flox/env/manifest.toml   flox: every tool above, pinned, cargo included; services for a box without systemd
 docs/                     loop.mmd (the diagram above), state-machine.md (every state, every exit),
@@ -165,7 +166,8 @@ docs/                     loop.mmd (the diagram above), state-machine.md (every 
 ```
 
 `./install.sh` builds the binary (`cargo build --release`, through `flox activate` when
-cargo is not on PATH), installs it to `~/.local/bin`, makes the links, installs the units
+cargo is not on PATH; or installs the one in `BEAD_SUPERVISOR_BIN`, as the deploy does),
+puts it in `~/.local/bin`, makes the links, installs the units
 (re-runnable; the deploy runs it). The supervisor needs `bd`, `git`, `gh`, `opencode` and
 `curl` at run time; the UI needs `node`. **`flox activate`** in this checkout provides all of
 them plus the Rust toolchain, and puts `target/release`, `target/debug` and `bin/` on
@@ -492,8 +494,8 @@ delegate:local` lists what the loop may take), `.bead-loop.toml` says how a work
 proven (the crate builds and its tests pass, the scripts pass shellcheck, the skills lint
 and the state-machine suite against the fresh binary — the same checks CI runs), and
 `~/src/bead-loop` is in the global `repos`. So an improvement to the loop is a bead, and
-the loop works it: worker, gate, reviewer, PR, CI, automerge, deploy. Within two minutes
-of a merge to main the deploy timer recycles the whole stack on this box
+the loop works it: worker, gate, reviewer, PR, CI, automerge, release, deploy. Within two
+minutes of the release the deploy timer recycles the whole stack on this box
 (`scripts/deploy.sh`), and the running loop reopens any round that cut short with no
 failure charged — the gate, CI, the merge and recover are the guard. A bead that touches
 `src/` should say so in its acceptance criteria.
@@ -520,20 +522,31 @@ GitHub Actions workflow that covered the gap is gone.)
 side, then the `suite`, then — on a PR carrying the `automerge` label, which the loop puts
 on every PR it opens under `merge = "pipeline"` — `scripts/ci-merge.sh` squash-merges the
 commit the build tested (the same contract as inquire-platform's automerge: the label is
-read from the live PR, a moved head is refused, a removed label is a withdrawn request).
+read from the live PR, a moved head is refused, a removed label is a withdrawn request) —
+and on main, `release`: the release binary as the GitHub release `main-<sha7>` at that
+commit (`scripts/ci.sh release`; the last ten are kept), what the box deploys.
 The cargo registry and target directory live beside the agent's checkouts
 (`scripts/ci.sh`), so a build recompiles only what changed and a docs-only push costs a
 no-op build. Two Buildkite settings make the rest add up: "Build pull requests" and
 "cancel intermediate builds".
 
-**The deploy is a pull, not a step.** The box the loop runs on is behind WSL's NAT, where
-the shared agent on ac-box cannot reach it, so `bead-loop-deploy.timer` on that box runs
-`scripts/deploy.sh` every two minutes: one `git fetch`, and nothing more unless
-`origin/main` has moved past the live checkout — then fast-forward it, `install.sh`,
-restart opencode-web, the UI and the loop. A merge is running here within two minutes
-of landing. `scripts/deploy.sh --force` rebuilds and recycles what is checked out
-(`systemctl --user start bead-loop-deploy.service` is the same, on the timer's terms).
-The same shape as the homelab's own deploys, and for the same reason.
+**The deploy is a pull, not a step — and a download, not a build.** The box the loop runs
+on is behind WSL's NAT, where the shared agent on ac-box cannot reach it, so
+`bead-loop-deploy.timer` on that box runs `scripts/deploy.sh` every two minutes: one
+`git fetch` in the deploy's own clone (`~/.local/state/bead-loop/deploy/src`), and
+nothing more unless `origin/main` has moved past what is deployed — then download the
+GitHub release `main-<sha7>` that the pipeline's `release` step published for exactly
+that commit (the tested binary, byte for byte; no compiler on the box), put the clone at
+the commit, `install.sh` with that binary, restart opencode-web, the UI and the loop. A
+merge is running here within two minutes of its release. The clone is the deploy's alone
+— nothing else writes there, so a reset is always safe — and `~/src/bead-loop`, the
+project the loop works (where `bd` writes `.beads/` and the bead worktrees hang), is not
+read by the deploy at all: development never blocks it. The binary links the flox env's
+glibc by store path; the box runs it inside the same pinned env (`manifest.lock`) — the
+deploy activates it at the commit before installing. `scripts/deploy.sh --force`
+installs origin/main's release again; `--dry-run` fetches, downloads and checks, and
+installs nothing (`systemctl --user start bead-loop-deploy.service` is the timer's run,
+now). The same shape as the homelab's own deploys, and for the same reason.
 
 ## Why this shape
 
