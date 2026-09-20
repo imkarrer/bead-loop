@@ -522,7 +522,9 @@ GitHub Actions workflow that covered the gap is gone.)
 side, then the `suite`, then — on a PR carrying the `automerge` label, which the loop puts
 on every PR it opens under `merge = "pipeline"` — `scripts/ci-merge.sh` squash-merges the
 commit the build tested (the same contract as inquire-platform's automerge: the label is
-read from the live PR, a moved head is refused, a removed label is a withdrawn request) —
+read from the live PR, a moved head is refused, a removed label is a withdrawn request;
+when main requires the build's own status check, the step arms GitHub's auto-merge for
+the tested sha instead, and GitHub merges as the build reports green) —
 and on main, `release`: the release binary as the GitHub release `main-<sha7>` at that
 commit (`scripts/ci.sh release`; the last ten are kept), what the box deploys.
 The cargo registry and target directory live beside the agent's checkouts
