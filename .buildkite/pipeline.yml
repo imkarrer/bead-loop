@@ -1,0 +1,46 @@
+# The same checks as .github/workflows/ci.yml, on the self-hosted queue: every step
+# runs inside this repo's .flox/ (bd, git, jq, gh, yq, node, shellcheck — see
+# .flox/env/manifest.toml) through the imkarrer/flox plugin, on queue `self`.
+#
+# The plugin ref is main, like inquire-platform's: the agent runs natively on
+# NixOS, which has no /bin/bash, and the hooks' move to #!/usr/bin/env bash
+# (a218a63) is on main only -- tags v1.0.0, v1.0.1 and v1.0.2 all point at the
+# 7 Sep commit whose hooks begin #!/bin/bash, and every job died in the
+# environment hook in one second. Pin a tag again once one exists at or after
+# a218a63.
+#
+# One agent serves every build, so every step has a timeout, and the two checks
+# that take time wait for the cheap one: a script that does not parse or fails
+# shellcheck does not get to run the state machine.
+#
+# What is proven: the scripts parse and pass shellcheck, the skills and agents
+# have the frontmatter opencode needs, and the supervisor's state machine does
+# what the README's outcome table says (test/run.sh, against stub bd/opencode/gh
+# and a real git origin — no model, no network; about five minutes).
+
+agents:
+  queue: self
+
+steps:
+  - label: ":bash: syntax + shellcheck"
+    key: syntax
+    timeout_in_minutes: 10
+    plugins:
+      - imkarrer/flox#main:
+          command: bash -n bin/bead-supervisor install.sh test/run.sh test/lint-skills.sh test/bin/* && node --check bin/bead-loop-ui && shellcheck -S warning bin/bead-supervisor install.sh test/run.sh test/lint-skills.sh test/bin/*
+
+  - wait
+
+  - label: ":memo: skills and agents"
+    key: lint-skills
+    timeout_in_minutes: 5
+    plugins:
+      - imkarrer/flox#main:
+          command: test/lint-skills.sh
+
+  - label: ":repeat: supervisor state machine"
+    key: state-machine
+    timeout_in_minutes: 15
+    plugins:
+      - imkarrer/flox#main:
+          command: test/run.sh
