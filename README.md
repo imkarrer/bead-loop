@@ -576,8 +576,10 @@ on is behind WSL's NAT, where the shared agent on ac-box cannot reach it, so
 nothing more unless `origin/main` has moved past what is deployed — then download the
 GitHub release `main-<sha7>` that the pipeline's `release` step published for exactly
 that commit (the tested binary, byte for byte; no compiler on the box), put the clone at
-the commit, `install.sh` with that binary, restart opencode-web, the UI and the loop. A
-merge is running here within two minutes of its release. The clone is the deploy's alone
+the commit, `install.sh` with that binary, and restart what changed: the loop always; the
+opencode server (where the model sessions live) only when `agents/`, `skills/` or its unit
+moved; the UI only when `bin/`, `ui/` or its unit did — a change to `src/` leaves every
+session running. A merge is running here within two minutes of its release. The clone is the deploy's alone
 — nothing else writes there, so a reset is always safe — and `~/src/bead-loop`, the
 project the loop works (where `bd` writes `.beads/` and the bead worktrees hang), is not
 read by the deploy at all: development never blocks it. The binary links the flox env's
