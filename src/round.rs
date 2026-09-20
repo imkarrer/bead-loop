@@ -11,7 +11,7 @@ use crate::config::{LaneSpec, Repo};
 use crate::harness::{abort_sessions, run_agent, runnable};
 use crate::park::{park, record_round, Reason};
 use crate::shell::{
-    bd_claim, bd_comment, bd_note, bd_show, bd_status, branch_exists, gh, git, git_must, git_ok, git_out, local_branch_exists,
+    bd_claim, bd_comment, bd_note, bd_show, bd_status, branch_exists, gh, git, git_ok, git_out, git_try, local_branch_exists,
     worktree_remove,
 };
 use crate::signals;
@@ -245,6 +245,22 @@ pub fn hold(repo: &Repo, id: &str, wt: Option<&Path>, why: &str) {
         bd_status(repo, id, "open");
     }
     repo.wake();
+}
+
+/// The bead's worktree: on its branch when a round left one (`resumed`, tracking origin's
+/// copy when only that exists), else a fresh branch off the base. Git's refusal is the
+/// reason to hold the bead.
+pub fn make_worktree(repo: &Repo, branch: &str, wt: &Path, resumed: bool) -> Result<(), String> {
+    if resumed {
+        if !local_branch_exists(repo, branch) {
+            git_try(&repo.repo, &["branch", "-q", "--track", branch, &format!("origin/{branch}")])?;
+        }
+        git_try(&repo.repo, &["worktree", "add", "-q", &wt.to_string_lossy(), branch])?;
+    } else {
+        let _ = git(&repo.repo, &["branch", "-D", branch]);
+        git_try(&repo.repo, &["worktree", "add", "-q", "-b", branch, &wt.to_string_lossy(), &format!("origin/{}", repo.base)])?;
+    }
+    Ok(())
 }
 
 /// `send_back ID WT fresh|keep NOTE`. `stem` is the round's log prefix (`logs/ID.STAMP`),
@@ -524,14 +540,11 @@ pub fn dev_one(repo: &Repo, opts: &Opts, id: Option<&str>, last_id: &mut Option<
         if wt.exists() {
             worktree_remove(repo, &wt);
         }
-        if resumed {
-            if !local_branch_exists(repo, &branch) {
-                git_must(&repo.repo, &["branch", "-q", "--track", &branch, &format!("origin/{branch}")]);
-            }
-            git_must(&repo.repo, &["worktree", "add", "-q", &wt.to_string_lossy(), &branch]);
-        } else {
-            let _ = git(&repo.repo, &["branch", "-D", &branch]);
-            git_must(&repo.repo, &["worktree", "add", "-q", "-b", &branch, &wt.to_string_lossy(), &format!("origin/{}", repo.base)]);
+        // Git refusing the worktree is the world's doing, not the bead's: held, no
+        // failure, the lane on to the next bead (a stale registration once killed the loop).
+        if let Err(e) = make_worktree(repo, &branch, &wt, resumed) {
+            hold(repo, &id, Some(&wt), &format!("cannot make the worktree: {e}"));
+            return Pass::Worked;
         }
         if !repo.setup.is_empty() {
             log(&format!("{}: setup: {}", repo.slug, repo.setup));
@@ -672,10 +685,10 @@ pub fn review_one(repo: &Repo, opts: &Opts, id: Option<&str>, lane: Option<&Lane
     // branch rather than review an empty directory.
     if !wt.join(".git").exists() && branch_exists(repo, &branch) {
         worktree_remove(repo, &wt);
-        if !local_branch_exists(repo, &branch) {
-            git_must(&repo.repo, &["branch", "-q", "--track", &branch, &format!("origin/{branch}")]);
+        if let Err(e) = make_worktree(repo, &branch, &wt, true) {
+            hold(repo, &id, None, &format!("cannot rebuild the worktree for the review: {e}"));
+            return Pass::Worked;
         }
-        git_must(&repo.repo, &["worktree", "add", "-q", &wt.to_string_lossy(), &branch]);
         log(&format!("{}: {id}: worktree rebuilt from {branch} for the review", repo.slug));
     }
     let lane_name = lane.map(|l| l.name.as_str()).unwrap_or("review");

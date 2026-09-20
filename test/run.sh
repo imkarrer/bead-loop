@@ -833,6 +833,27 @@ case_conflicting_pr_rebased_by_the_last_stage() {
 }
 
 # ---- the state machine's exits (docs/state-machine.md) ------------------------------------
+case_git_refusing_the_worktree_holds() {
+  # The bead's branch is checked out in a worktree nobody pruned (a hand test run left
+  # one): git refuses the lane's worktree add. That is the world's doing, not the bead's
+  # — held, no failure, the supervisor alive for the next bead — and once the obstacle is
+  # gone the next pass works it. (Before: git_must died, and the whole loop with it.)
+  setup; git -C "$REPO" worktree add -q "$T/elsewhere" -b bead/t-1 origin/main
+  rc=0; sup --once tick || rc=$?
+  assert_eq "$rc" 0 "the supervisor lives"
+  assert_eq "$(calls)" "" "no model ran"
+  assert_eq "$(bead .status)" open "still in the dev queue"
+  assert_eq "$(cat "$BEAD_LOOP_STATE/repo/failures/t-1" 2>/dev/null || echo 0)" 0 "no failure charged"
+  assert_match "$(cat "$BEAD_LOOP_STATE/repo/held/t-1")" "cannot make the worktree: git worktree add .* fatal: 'bead/t-1' is already used by worktree at '$T/elsewhere'" "held, with git's words"
+  assert_match "$(bead .notes)" "held, no failure charged: cannot make the worktree" "noted"
+  assert_nofile "$BEAD_LOOP_STATE/repo/lane.dev" "the lane is free"
+  git -C "$REPO" worktree remove --force "$T/elsewhere" && git -C "$REPO" branch -D bead/t-1 -q
+  BEAD_LOOP_HOLD_BACKOFF=0 sup --once tick
+  assert_eq "$(calls)" "bead-worker bead-reviewer" "the obstacle gone: worked on the next pass"
+  assert_file "$BEAD_LOOP_STATE/repo/inflight/t-1" "to a PR"
+  assert_eq "$(grep -c 'cannot make the worktree' "$BEAD_LOOP_STATE/repo/held/t-1" 2>/dev/null || true)" 0 "that hold is gone (the watcher's own, on the stub PR's missing checks, is another)"
+}
+
 case_setup_failure_is_held() {
   # Setup runs on a fresh worktree of the base, so it failing is the environment's fault,
   # not the bead's: no failure, the bead stays in the dev queue held with the reason; the

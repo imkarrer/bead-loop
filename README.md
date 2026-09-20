@@ -494,6 +494,7 @@ turns it off.
 | Worker `BLOCKED:` | note with the worker's line, +1 failure; dev queue — parked if this was the last stage, with the brief's question | removed (after the brief) |
 | No commit, or the session timed out | note, +1 failure; dev queue | removed |
 | Setup fails | **held**, no failure: the reason on the bead once; retried after the backoff | removed |
+| Git refuses the worktree (the branch checked out elsewhere, a stale registration) | **held**, no failure, with git's words; the lane takes the next bead | not made |
 | Harness exits with nothing said (server down) | **held**, no failure; the lane takes the next bead | removed (dev) / kept (review) |
 | Gate fails twice (one fix round with its output) | note with the errors, +1 failure; dev queue | removed |
 | Gate passes | in_progress; review queue | kept, in its worktree |
