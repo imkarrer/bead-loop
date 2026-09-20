@@ -123,6 +123,8 @@ case_reject_then_approve() {
   sup work "$REPO"
   assert_eq "$(calls)" "bead-worker bead-reviewer bead-worker bead-reviewer" "second round: dev, then review"
   assert_match "$(cat "$TEST_CTRL/prompt.3")" "REJECT: work.txt:1" "rejection fed back verbatim"
+  assert_match "$(cat "$TEST_CTRL/prompt.3" | tr '\n' ' ')" "For the worker: - What is wrong: work.txt:1 says round 1 - What to do: append the word fixed - How to check: grep -c fixed work.txt prints 1" "the whole work order, not one line"
+  assert_match "$(cat "$TEST_CTRL/prompt.3")" "a work order from the senior reviewer" "told to act on it"
   assert_match "$(cat "$TEST_CTRL/prompt.3")" "already carries your earlier commit" "told to fix, not restart"
   assert_eq "$(tr '\n' '|' <"$TEST_CTRL/titles")" "t-1 · worker · round 1|t-1 · reviewer · round 1|t-1 · worker · round 2|t-1 · reviewer · round 2|" "every session titled by bead, role and round"
   assert_branch bead/t-1 "pushed after approval"

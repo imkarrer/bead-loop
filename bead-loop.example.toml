@@ -29,6 +29,6 @@ failures = 2
 timeout = 14400                        # seconds; default worker_timeout
 
 [[stages]]
-worker = "claude/opus"                 # runs in Claude Code instead of opencode
-reviewer = "claude/opus"
+worker = "claude/sonnet"                 # runs in Claude Code instead of opencode
+reviewer = "claude/sonnet"
 failures = 1

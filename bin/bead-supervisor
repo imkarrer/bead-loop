@@ -417,7 +417,7 @@ $(printf '%s' "$json" | render_bead)
 
 You are on branch $branch$([ $resumed = 1 ] && printf ', which already carries your earlier commit(s) for this bead: fix them in place rather than starting over' || printf ", a fresh worktree of $BASE"). Commit your work on this branch and leave .beads/ untouched. End your turn with one line: DONE: <evidence> or BLOCKED: <note>.${history:+
 
-Earlier rounds on this bead were sent back; their notes follow. Read them before you start and do not repeat them.
+Earlier rounds on this bead were sent back; their notes follow. A note that begins "review (...) rejected:" is a work order from the senior reviewer: do exactly what its "What to do" says, prove it with its "How to check", and leave alone what it says to leave alone. Read them before you start and do not repeat them.
 
 <previous-attempts>
 $history
@@ -526,13 +526,16 @@ $final
 $(git -C "$wt" diff "origin/$BASE...HEAD" --stat; git -C "$wt" diff "origin/$BASE...HEAD" | head -c 60000)
 </diff>
 
-End with one line: APPROVE: <what you checked> or REJECT: <file:line, what is wrong, what would fix it>." "$id · reviewer · round $((n + 1))") || rc=$?
+End with APPROVE: <what you checked> on one line, or REJECT: <file:line, what is wrong> followed by the 'For the worker:' block your instructions describe — the worker acts on that block alone." "$id · reviewer · round $((n + 1))") || rc=$?
     if [ $rc -ne 0 ]; then
       rm -f "$RS/review/$id"; send_back "$id" "$wt" keep "reviewer exited $rc. Log: $logf.review.jsonl"; return 0
     fi
     if ! printf '%s' "$verdict" | grep -q '^APPROVE:'; then
       rm -f "$RS/review/$id"
-      send_back "$id" "$wt" keep "review ($REVIEW_MODEL) rejected: $(printf '%s' "$verdict" | grep '^REJECT:' | tail -1 | cut -c1-600)"; return 0
+      # The whole of the reviewer's verdict travels — the REJECT line and the block for
+      # the worker under it — not a 600-character summary of it: it is the work order.
+      send_back "$id" "$wt" keep "review ($REVIEW_MODEL) rejected:
+$(printf '%s' "$verdict" | sed -n '/^REJECT:/,$p' | head -c 4000)"; return 0
     fi
     log "$SLUG: $id: review approved"
   else
@@ -590,7 +593,7 @@ send_back() {
   log "$SLUG: $id round $n stopped: $(printf '%s' "$note" | head -1)"
   bdr update "$id" --append-notes "bead-loop round $n ($MODEL) $(date -Iminutes): $note" >/dev/null
   printf '%s\n' "$n" >"$RS/failures/$id"
-  printf 'round %s (%s): %s\n' "$n" "$MODEL" "$(printf '%s' "$note" | tr '\n' ' ' | cut -c1-600)" >>"$RS/failures/$id.notes"
+  printf 'round %s (%s): %s\n' "$n" "$MODEL" "$(printf '%s' "$note" | tr '\n' ' ' | cut -c1-2000)" >>"$RS/failures/$id.notes"
   lane_clear dev; lane_clear review; CUR_WT=
   if [ "$mode" = fresh ]; then
     git -C "$REPO" worktree remove --force "$wt" 2>/dev/null || true
