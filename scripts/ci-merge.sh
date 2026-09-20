@@ -6,7 +6,9 @@
 # usually empty. Squash, as the merges done by hand are.
 #
 # Two things keep this honest. The merge names the commit the build tested, and GitHub
-# refuses (409) if the PR head has moved since. And a label removed while the build ran
+# refuses (409) if the PR head has moved since — or, when main requires this build's own
+# status check and so cannot be merged from inside it, GitHub's auto-merge is armed for
+# that sha and merges when the build reports green. And a label removed while the build ran
 # is a withdrawn request, not a failure.
 #
 # The credential is the agent's token for this repo — GITHUB_TOKEN when set, else the
@@ -24,20 +26,10 @@ fail() { echo "automerge: $*" >&2; exit 1; }
 
 number=${BUILDKITE_PULL_REQUEST:-}
 sha=${BUILDKITE_COMMIT:-}
-# owner/name from git@github.com:owner/name.git or https://github.com/owner/name(.git):
-# POSIX ERE has no lazy `+?`, so the .git comes off in a second step (build #2's
-# automerge got a 404 on "bead-loop.git").
-repo=$(printf '%s' "${BUILDKITE_REPO:-}" | sed -nE 's|.*github\.com[:/]([^/]+/[^/]+)$|\1|p' | sed 's/\.git$//')
+# shellcheck source=scripts/ci-github.sh
+. "$(dirname "$0")/ci-github.sh"   # token, repo (build #2's automerge got a 404 on "bead-loop.git")
 if [ -z "$number" ] || [ "$number" = false ] || [ -z "$sha" ] || [ -z "$repo" ]; then
   fail "not a pull request build (BUILDKITE_PULL_REQUEST=$number, BUILDKITE_REPO=${BUILDKITE_REPO:-})"
-fi
-
-token=${GITHUB_TOKEN:-}
-if [ -z "$token" ]; then
-  # GIT_CONFIG_KEY_n=url.https://x-access-token:TOKEN@github.com/.insteadOf
-  while IFS='=' read -r k v; do
-    case $k in GIT_CONFIG_KEY_*) t=$(printf '%s' "$v" | sed -nE 's|.*x-access-token:([^@]+)@github\.com.*|\1|p'); [ -n "$t" ] && token=$t;; esac
-  done < <(env)
 fi
 [ -n "$token" ] || fail "no GitHub token: set GITHUB_TOKEN on the agent, or a GIT_CONFIG_KEY_n url rewrite with x-access-token"
 
@@ -71,5 +63,32 @@ if [ "$head" != "$sha" ]; then
   fail "#$number head is ${head:0:7}, this build tested ${sha:0:7}; the newer build merges"
 fi
 
-result=$(github PUT "/repos/$repo/pulls/$number/merge" "$(jq -cn --arg sha "$sha" '{merge_method: "squash", sha: $sha}')")
-echo "merged #$number \"$(printf '%s' "$pr" | jq -r .title)\" as $(printf '%s' "$result" | jq -r '.sha[0:7]') into $(printf '%s' "$pr" | jq -r .base.ref)"
+# The merge names the commit this build tested. When main requires the build's own
+# status check (branch protection on a public repo), that check is still pending while
+# this step — part of the build — runs, and GitHub refuses with 405; then the request
+# becomes GitHub's auto-merge, bound to the same sha (expectedHeadOid: a moved head is
+# refused here too), and GitHub squash-merges the moment the build reports green, a
+# few seconds after this step ends. Any other refusal is a failure, as before.
+title=$(printf '%s' "$pr" | jq -r .title); base=$(printf '%s' "$pr" | jq -r .base.ref)
+body=$(jq -cn --arg sha "$sha" '{merge_method: "squash", sha: $sha}')
+out=$(curl -sS -X PUT "https://api.github.com/repos/$repo/pulls/$number/merge" \
+  -H "authorization: Bearer $token" -H "accept: application/vnd.github+json" -H "x-github-api-version: 2022-11-28" \
+  -H "content-type: application/json" -d "$body" -w '\n%{http_code}')
+code=${out##*$'\n'}; out=${out%$'\n'*}
+if [ "$code" -lt 300 ]; then
+  echo "merged #$number \"$title\" as $(printf '%s' "$out" | jq -r '.sha[0:7]') into $base"
+  exit 0
+fi
+message=$(printf '%s' "$out" | jq -r '.message // "(no message)"')
+case "$code:$message" in
+  405:*"status check"*"pending"*|405:*"status check"*"expected"*) ;;
+  *) fail "PUT /repos/$repo/pulls/$number/merge → $code: $message" ;;
+esac
+node_id=$(printf '%s' "$pr" | jq -r .node_id)
+q='mutation($id: ID!, $sha: GitObjectID!) { enablePullRequestAutoMerge(input: {pullRequestId: $id, mergeMethod: SQUASH, expectedHeadOid: $sha}) { pullRequest { autoMergeRequest { enabledAt } } } }'
+gql=$(curl -sS -X POST https://api.github.com/graphql -H "authorization: Bearer $token" -H "content-type: application/json" \
+  -d "$(jq -cn --arg q "$q" --arg id "$node_id" --arg sha "$sha" '{query: $q, variables: {id: $id, sha: $sha}}')")
+if printf '%s' "$gql" | jq -e '.errors and ([.errors[].message] | join(" ") | test("already"; "i") | not)' >/dev/null 2>&1; then   # "already enabled" (a rerun) is fine
+  fail "auto-merge for #$number refused: $(printf '%s' "$gql" | jq -r '[.errors[].message] | join("; ")')"
+fi
+echo "#$number \"$title\": $message — auto-merge armed for ${sha:0:7}; GitHub squash-merges it into $base when this build reports green"

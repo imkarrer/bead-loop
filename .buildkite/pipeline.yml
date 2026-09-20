@@ -9,10 +9,11 @@
 # One shared agent, queue `self` on ac-box, builds and tests every push and PR and
 # merges a labelled PR (scripts/ci-merge.sh — the loop labels every PR it opens under
 # merge = "pipeline", so the loop's own work lands without a hand on it). The deploy is
-# not a step: the box the loop runs on is behind WSL's NAT where ac-box cannot reach it,
-# so it pulls — bead-loop-deploy.timer there runs scripts/deploy.sh every two minutes,
-# which fast-forwards the live checkout, builds, installs and recycles the stack only
-# when origin/main has moved. The same shape as the homelab's own deploys (ADR 0006).
+# a pull, not a push: the box the loop runs on is behind WSL's NAT where ac-box cannot reach it,
+# so bead-loop-deploy.timer there runs scripts/deploy.sh every two minutes, which downloads
+# the release the `release` step published for origin/main into a clone of its own,
+# installs it and recycles the stack — only when origin/main has moved. The same shape
+# as the homelab's own deploys (ADR 0006).
 #
 # One agent serves every build on `self`, so every step has a timeout, the cheap steps
 # go first, and a failing build cancels what is behind it. The pipeline's own setting
@@ -22,7 +23,8 @@
 #
 # What is proven on main: the crate builds, its unit tests pass, the scripts and skills
 # lint, and the supervisor's state machine does what docs/state-machine.md says against
-# the fresh binary (test/run.sh) — and then, within two minutes, that binary is what runs.
+# the fresh binary (test/run.sh) — and then, within two minutes of the release, that
+# binary is what runs.
 
 agents:
   queue: self
@@ -66,3 +68,14 @@ steps:
     plugins:
       - imkarrer/flox#main:
           command: scripts/ci-merge.sh
+
+  # main only: the tested commit's release binary, published as the GitHub release
+  # main-<sha7>. The box's deploy (scripts/deploy.sh, on its timer) downloads exactly
+  # the release origin/main names, so what runs is what this build proved.
+  - label: ":package: release"
+    key: release
+    timeout_in_minutes: 15
+    if: build.branch == "main" && build.pull_request.id == null
+    plugins:
+      - imkarrer/flox#main:
+          command: scripts/ci.sh release

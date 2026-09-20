@@ -1,10 +1,12 @@
 [Unit]
-Description=bead-loop: deploy origin/main to this box when it has moved (pull, build, install, recycle the stack)
+Description=bead-loop: deploy origin/main to this box when it has moved (download the release, install, recycle the stack)
 
 [Service]
-# The pipeline merges on the shared agent (ac-box); this box pulls. scripts/deploy.sh
-# exits at once when origin/main is what the live checkout already runs, so the timer's
-# usual firing costs one git fetch. cargo, flox and git come from the login profile.
+# The pipeline merges on the shared agent (ac-box) and publishes the tested binary as a
+# GitHub release; this box pulls. scripts/deploy.sh exits at once when origin/main is
+# what is deployed, so the timer's usual firing costs one git fetch. It runs from the
+# deploy's own clone, never from a checkout being worked on. git, gh and flox come from
+# the system profile; no compiler is needed.
 Type=oneshot
-ExecStart=%h/src/bead-loop/scripts/deploy.sh
+ExecStart=%h/.local/state/bead-loop/deploy/src/scripts/deploy.sh
 Environment=PATH=%h/.local/bin:%h/.nix-profile/bin:/run/current-system/sw/bin:/usr/bin:/bin
