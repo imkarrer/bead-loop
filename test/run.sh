@@ -558,7 +558,7 @@ case_status_json_and_ui() {
   html=$(render_page "$T/state.json")
   node --check "$T/page.js" 2>/dev/null && ok || bad "the page's script parses"
   # The scoreboard card: the tiles from the 7d window (the default), the landing listed.
-  score=$(printf '%s' "$html" | tr '\n' ' ' | grep -o '<section class="card" id="score">.*' | head -c 6000)
+  score=$(printf '%s' "$html" | tr '\n' ' ' | grep -o '<section class="card" id="score">.*' | cut -c1-6000)
   assert_match "$score" '<div class="label">Landed</div><div class="value ">1<small>' "the Landed tile"
   assert_match "$score" '<div class="label">Without Claude</div><div class="value ">100%</div>' "the Without Claude tile"
   assert_match "$score" '<span class="k">gate</span><span class="bar" title="1 of 1">' "where rounds go back"
@@ -566,13 +566,13 @@ case_status_json_and_ui() {
   assert_match "$score" '<button class="cur" onclick="setWin(.7d.)">7d</button>' "the window picker, 7d by default"
   # The decision under Needs you: the question, its text in full, and the answer box.
   assert_match "$(printf '%s' "$html" | grep -o '<h3 class="human">Needs you<span class="n">[0-9]*</span>')" '<span class="n">2</span>' "Needs you counts the decision with the parked bead"
-  dec=$(printf '%s' "$html" | tr '\n' ' ' | grep -o '<table class="decisions">.*' | head -c 1200)
+  dec=$(printf '%s' "$html" | tr '\n' ' ' | grep -o '<table class="decisions">.*' | cut -c1-1200)
   assert_match "$dec" 'class="id">t-8</td><td class="title"><b>Which ntfy topic?</b>' "the decision, first"
   assert_match "$dec" 'Which topic, and for which events?' "with its text in full"
   assert_match "$dec" "onclick=\"act('decide',{repo:" "and the Answer &amp; close lever"
-  assert_match "$(printf '%s' "$html" | grep -o '<div class="q claude">.*' | head -c 400)" '<h3>Claude<span class="n">1</span></h3>' "the Claude column, with its count"
-  assert_match "$(printf '%s' "$html" | grep -o '<div class="q claude">.*' | head -c 600)" 'class="id">t-7</td>.*dev queue #3' "t-7 in it, with where it sits"
-  assert_match "$(printf '%s' "$html" | grep -o '<div class="q dev">.*' | head -c 2000)" 'title="sent back to dev 2 times">2×</span> <button class="hist" onclick="toggleHist(.t-7.)"[^>]*>▸ 2 rounds</button>' "t-7's round history behind a toggle, closed"
+  assert_match "$(printf '%s' "$html" | grep -o '<div class="q claude">.*' | cut -c1-400)" '<h3>Claude<span class="n">1</span></h3>' "the Claude column, with its count"
+  assert_match "$(printf '%s' "$html" | grep -o '<div class="q claude">.*' | cut -c1-600)" 'class="id">t-7</td>.*dev queue #3' "t-7 in it, with where it sits"
+  assert_match "$(printf '%s' "$html" | grep -o '<div class="q dev">.*' | cut -c1-3000)" 'title="sent back to dev 2 times">2×</span> <button class="hist" onclick="toggleHist(.t-7.)"[^>]*>▸ 2 rounds</button>' "t-7's round history behind a toggle, closed"
   assert_eq "$(printf '%s' "$html" | grep -c 'pre class="hist"')" 0 "no history listed until opened"
   # The parked bead under Needs you: the question first, the reason, the brief and the
   # bead's notes folded, the rounds behind their toggle; opened, each round with its note
@@ -587,7 +587,16 @@ case_status_json_and_ui() {
   assert_match "$opened" '<div class="round"><div class="head">round 1 <span class="chip worker">stub/worker</span><span class="muted">stage 1</span><span class="muted">2026-09-18 17:00</span></div><pre class="note">gate failed twice: npm test boom: 1 of 2 tests failed</pre><div class="logs">logs: <button class="link " onclick="toggleLog(&quot;'"$REPO"'&quot;,&quot;t-5.20260918T170000.gate&quot;)" title="t-5.20260918T170000.gate">▸ gate</button></div></div>' "round 1: who, when, the note in full, its gate log to open"
   assert_match "$opened" '<div class="round"><div class="head">round 2 .*<pre class="note">review (stub/reviewer) rejected: REJECT: x.ts:1 wrong</pre></div>' "round 2, no logs"
   assert_match "$opened" '<pre class="text">WHAT HAPPENED: round 1 broke a test. WHY: the bead asks for two things.</pre>' "the brief, opened"
-  assert_match "$(printf '%s' "$html" | grep -o '<div class="q dev">.*' | head -c 3000)" 'onclick="toggleHist(.t-7.)"' "a queue row has the same toggle"
+  assert_match "$(printf '%s' "$html" | grep -o '<div class="q dev">.*' | cut -c1-3000)" 'onclick="toggleHist(.t-7.)"' "a queue row has the same toggle"
+  # A note to a bead in a queue, from its row: the lever, the box under the row once
+  # opened, and the action — an operator note on the bead, nothing else moved.
+  assert_match "$(printf '%s' "$html" | grep -o '<div class="q dev">.*' | cut -c1-3000)" 'onclick="toggleNote(&quot;t-2&quot;)" title="a note on the bead; its next round reads it">✎ note</button>' "each queue row offers a note"
+  assert_eq "$(printf '%s' "$html" | grep -c 'id="note-t-2"')" 0 "no box until opened"
+  assert_match "$(render_page "$T/state.json" "toggleNote('t-2')" | tr '\n' ' ' | grep -o '<div class="q dev">.*' | cut -c1-4000)" '<textarea id="note-t-2" rows="2" placeholder="Context it lacked.*<button  onclick="act(.note.,{repo:' "opened: the box and Add note under the row"
+  assert_match "$("$REAL_CURL" -s -m 3 -X POST -H 'content-type: application/json' -d "{\"repo\":\"$REPO\",\"id\":\"t-2\",\"text\":\"the flag is --dry-run, see lib/x.ts:9\"}" "http://127.0.0.1:$port/api/note")" '"noted":"t-2"' "note from the page"
+  assert_match "$(jq -r '.[]|select(.id=="t-2")|.notes' "$BD_STATE/issues.json")" "^operator 20[0-9-]*T[0-9:]*+00:00: the flag is --dry-run, see lib/x.ts:9$" "an operator note on the bead, dated as answer's are"
+  assert_eq "$(jq -r '.[]|select(.id=="t-2")|.status' "$BD_STATE/issues.json")" open "nothing else moved"
+  assert_match "$("$REAL_CURL" -s -m 3 -X POST -H 'content-type: application/json' -d "{\"repo\":\"$REPO\",\"id\":\"t-2\",\"text\":\" \"}" "http://127.0.0.1:$port/api/note")" "write the note first" "an empty note is refused"
   # A round's log, from the server: by its name under the repo's logs dir, nothing else.
   assert_eq "$("$REAL_CURL" -s -m 3 "http://127.0.0.1:$port/api/log?repo=$REPO&file=t-5.20260918T170000.gate")" "boom: 1 of 2 tests failed" "/api/log serves the file"
   assert_match "$("$REAL_CURL" -s -m 3 "http://127.0.0.1:$port/api/log?repo=$REPO&file=../failures/t-5")" "bad log name" "no path, only a name"

@@ -313,6 +313,22 @@ const actions = {
     await supervisor(['answer', repo, id, String(text).trim()]);
     return { answered: id };
   },
+  // note {repo, id, text}: a word to a bead in a queue — context it lacked, a claim that
+  // changed — before its next round, which reads the bead's notes. `bd update ID
+  // --append-notes "operator DATE: TEXT"`, the same line `answer` leaves; nothing else
+  // moves (no failure forgiven, no reopen). Then the bell, in case the lane was idle.
+  async note({ repo, id, text }) {
+    if (!ID.test(String(id || ''))) throw new Error('bad bead id');
+    if (!String(text || '').trim()) throw new Error('write the note first');
+    const repos = await knownRepos();
+    const rp = repos.find((r) => r.repo === repo);
+    if (!rp) throw new Error('unknown repo');
+    const when = new Date().toISOString().replace(/:\d\d\.\d+Z$/, '+00:00');
+    const r = await run('bd', ['update', id, '--append-notes', `operator ${when}: ${String(text).trim()}`], { cwd: repo });
+    if (!r.ok) throw new Error(r.stderr.trim() || `bd exited ${r.code}`);
+    await run(SUPERVISOR, ['wake']);
+    return { noted: id };
+  },
   // decide {repo, id, text}: your answer to a decision bead — `bd close ID --reason
   // "decided: TEXT"`, the reason being where whoever asked reads it; then the bell, since
   // beads that depended on the decision are ready now.
