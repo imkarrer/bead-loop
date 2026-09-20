@@ -56,7 +56,7 @@ stateDiagram-v2
 | **review** | `review/ID`, `wt/ID`, bd `in_progress` | the review lane |
 | **reviewing** | `review/ID` + `lane.NAME = ID` | the review lane: to merge, or back to ready |
 | **merge** | `inflight/ID` + PR OPEN, bd `in_progress` | the merge watcher: closed, or back to ready, or human |
-| **human** | bd `in_progress`, no marker, no worktree (*parked*) — or any queue state with a `held` flag (below) | you: answer, reopen, escalate, or the merge queue's own recovery |
+| **human** | bd `in_progress`, no marker, no worktree (*parked*), `parked/ID` when the loop parked it — or any queue state with a `held` flag (below) | you: answer, reopen, escalate, or the merge queue's own recovery |
 | **closed** | bd `closed` | terminal |
 
 Two flags are orthogonal to the state and do not move a bead:
@@ -66,6 +66,14 @@ Two flags are orthogonal to the state and do not move a bead:
   change before it moves: the note says what. Shown in the human queue *beside* parked
   beads, and still polled, so it clears itself when the world changes. Held is how the
   loop says "I am waiting on you" without abandoning the bead.
+- **`parked/ID`** — the loop's record of a parking: the reason (BLOCKED at the last
+  stage, stages exhausted, the PR closed), the stage it stopped on, and **the question**
+  for the owner — the brief's (`brief_model` reads the rounds and their logs and answers
+  what happened, why, what to decide) or the loop's own from the reason. Written on every
+  exit into *human (parked)*, removed by `answer`, `escalate` and the next claim. A bead
+  `in_progress` with no record was parked by hand or by a stop. Beside it,
+  `failures/ID.rounds.jsonl` is the history the page and the brief read: one record per
+  send-back with the whole note and the round's log files.
 
 ## Invariants
 
@@ -211,7 +219,8 @@ Every way I could make a bead or a lane wait for ever, from the code, and what s
 
 Nothing in the list needs a human to notice it before the loop does; the human list is
 where the loop puts what it cannot do. The human list is **parked ∪ held**, each with
-its note and its ways out.
+its question — the brief's, written before the bead is raised — its rounds and their
+logs, and its ways out.
 
 ## Tests the suite lacks for this
 

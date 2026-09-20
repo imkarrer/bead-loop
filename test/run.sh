@@ -68,16 +68,17 @@ assert_nofile() { [ ! -e "$1" ] && ok || bad "$2: unexpected $1"; }
 assert_branch() { git -C "$T/origin.git" show-ref -q "refs/heads/$1" && ok || bad "$2: origin has no branch $1"; }
 assert_nobranch() { git -C "$T/origin.git" show-ref -q "refs/heads/$1" && bad "$2: origin has branch $1" || ok; }
 calls() { cut -d' ' -f1 "$TEST_CTRL/calls" | tr '\n' ' ' | sed 's/ $//'; }
-# render_page STATE.json: the page's script run against that state under a stub DOM (the
-# elements it looks up, an EventSource that pushes the state once); prints main's HTML.
+# render_page STATE.json [JS]: the page's script run against that state under a stub DOM
+# (the elements it looks up, an EventSource that pushes the state once), then JS — a
+# click, say — and prints main's HTML.
 render_page() {
   sed -n '/^<script>/,/^<\/script>/p' "$HERE/../ui/index.html" | sed '1d;$d' >"$T/page.js"
   node -e '
     const els = {}; const el = (id) => els[id] ||= { id, innerHTML: "", textContent: "", hidden: false, dataset: {}, scrollTop: 0, scrollHeight: 0, value: "" };
     global.document = { getElementById: el, addEventListener() {}, hidden: false };
     global.window = global; global.setInterval = () => {};
-    global.EventSource = class { constructor() { setTimeout(() => { this.onopen(); this.onmessage({ data: require("fs").readFileSync(process.argv[1], "utf8") }); console.log(el("main").innerHTML); }, 0); } };
-    require(process.argv[2]);' "$1" "$T/page.js"
+    global.EventSource = class { constructor() { setTimeout(() => { this.onopen(); this.onmessage({ data: require("fs").readFileSync(process.argv[1], "utf8") }); if (process.argv[3]) new Function(process.argv[3])(); console.log(el("main").innerHTML); }, 0); } };
+    require(process.argv[2]);' "$1" "$T/page.js" "${2-}"
 }
 
 # ---- cases -------------------------------------------------------------------------
@@ -109,9 +110,13 @@ case_actor_from_env() {
 }
 case_blocked() {
   setup; echo blocked >"$TEST_CTRL/worker"; sup work "$REPO"
-  assert_eq "$(calls)" "bead-worker" "stops after the worker"
+  # One stage: BLOCKED there parks the bead, and the brief follows — in the worktree,
+  # before it goes, by the last stage's worker.
+  assert_eq "$(calls)" "bead-worker bead-briefer" "stops after the worker; the brief follows"
+  assert_eq "$(sed -n 2p "$TEST_CTRL/calls")" "bead-briefer $BEAD_LOOP_STATE/repo/wt/t-1 stub/worker none" "the brief runs in the worktree, on the stage's worker"
   assert_eq "$(bead .status)" in_progress "parked"
   assert_match "$(bead .notes)" "BLOCKED: lib/x.ts:3" "worker's line in the note"
+  assert_match "$(bead .notes)" "parked (BLOCKED at the last stage). Is the flag called --dry-run" "the brief's question on the bead"
   assert_nobranch bead/t-1 "nothing pushed"
   assert_nofile "$BEAD_LOOP_STATE/repo/inflight/t-1" "no PR"
 }
@@ -163,6 +168,19 @@ case_reject_until_parked() {
   sup work "$REPO"; sup work "$REPO"; sup work "$REPO"
   assert_eq "$(bead .status)" in_progress "three failures: parked"
   assert_match "$(bead .notes)" "round 3 (stub/worker)" "the last round's note"
+  # The history: one record per round, the whole rejection, the round's log files.
+  assert_eq "$(jq -r '[.round, .model, .stage] | @tsv' "$BEAD_LOOP_STATE/repo/failures/t-1.rounds.jsonl" | tr '\t\n' ' ;')" "1 stub/worker 1;2 stub/worker 1;3 stub/worker 1;" "three rounds on stage 1"
+  assert_match "$(jq -r 'select(.round==2) | .note' "$BEAD_LOOP_STATE/repo/failures/t-1.rounds.jsonl")" "How to check: grep -c fixed work.txt prints 1" "the whole work order kept"
+  assert_match "$(jq -r 'select(.round==2) | .logs | join(" ")' "$BEAD_LOOP_STATE/repo/failures/t-1.rounds.jsonl")" 't-1\.[0-9T]*\.review\.jsonl' "the reviewer's log named"
+  assert_nofile "$BEAD_LOOP_STATE/repo/failures/t-1.notes" "the one-line notes file is history"
+  # The brief read the rounds and their logs; the worktree was still there for it.
+  bp=$(grep -l "^The automated loop has parked" "$TEST_CTRL"/prompt.*)
+  assert_match "$(cat "$bp")" "every stage has had its turn (3 rounds, all sent back)" "the brief's prompt says why"
+  assert_match "$(cat "$bp")" "round 3 · stub/worker (stage 1) · " "and lists the rounds"
+  assert_match "$(cat "$bp")" -- "--- round 3: t-1\.[0-9T]*\.review\.jsonl, the end:" "with the end of each log"
+  assert_match "$(cat "$bp")" "> REJECT: work.txt:1 wrong, fix it" "rendered as the session's lines"
+  assert_eq "$(jq -r .question "$BEAD_LOOP_STATE/repo/parked/t-1")" "Is the flag called --dry-run (add it to the bead), or should the criterion go?" "the brief's question is the record's"
+  assert_match "$(jq -r .stopped_on "$BEAD_LOOP_STATE/repo/parked/t-1")" "^review (stub/reviewer) rejected:" "and what it stopped on"
   assert_nofile "$BEAD_LOOP_STATE/repo/wt/t-1" "worktree removed when parked"
   assert_nobranch bead/t-1 "nothing pushed"
   : >"$TEST_CTRL/calls"; sup work "$REPO"; assert_eq "$(calls)" "" "parked bead is not picked up"
@@ -286,9 +304,11 @@ case_escalation_stages() {
   sup --once tick; assert_eq "$(bead .status)" open "round 1 failed: back in the queue"
   assert_eq "$(cat "$BEAD_LOOP_STATE/repo/failures/t-1")" 1 "failure counted"
   sup --once tick; sup --once tick
-  assert_eq "$(cut -d' ' -f3 "$TEST_CTRL/calls" | tr '\n' ' ' | sed 's/ $//')" "stub/fast stub/fast stub/slow" "two fast attempts, then the slow stage"
+  assert_eq "$(cut -d' ' -f3 "$TEST_CTRL/calls" | tr '\n' ' ' | sed 's/ $//')" "stub/fast stub/fast stub/slow stub/slow" "two fast attempts, then the slow stage, then its brief"
   assert_eq "$(bead .status)" in_progress "exhausted: parked"
   assert_match "$(bead .notes)" "round 3 (stub/slow)" "note names the round and model"
+  assert_match "$(bead .notes)" "parked (stages exhausted after 3 rounds)" "and the parking, with its count"
+  assert_eq "$(jq -r '.reason + " " + (.failures|tostring) + " " + (.stage.index|tostring) + " " + .brief_model' "$BEAD_LOOP_STATE/repo/parked/t-1")" "exhausted 3 2 stub/slow" "the record: why, the count, the stage it stopped on, who briefed"
   : >"$TEST_CTRL/calls"; sup --once tick; assert_eq "$(calls)" "" "parked bead is not retried"
 }
 case_repeat_cycles() {
@@ -469,6 +489,12 @@ case_status_json_and_ui() {
   echo '{"ses_rev":{"type":"busy"}}' >"$TEST_CTRL/session-status.json"
   echo https://github.com/example/repo/pull/7 >"$BEAD_LOOP_STATE/repo/inflight/t-1"; : >"$BEAD_LOOP_STATE/repo/inflight/.t-1.red"
   jq '. + [{id:"t-5", title:"Parked one", description:"p", status:"in_progress", priority:2, labels:["delegate:local"], notes:"someone: a human note\nbead-loop 2026-09-18T17:05+00:00: stages exhausted after REJECT: x.ts:1 wrong"}]' "$BD_STATE/issues.json" >"$BD_STATE/i.tmp" && mv "$BD_STATE/i.tmp" "$BD_STATE/issues.json"
+  # t-5 as the loop parks a bead now: the rounds record with a round's log, and the
+  # parked record — the reason, the brief's question and its brief.
+  mkdir -p "$R/logs" "$R/parked"; printf 'boom: 1 of 2 tests failed\n' >"$R/logs/t-5.20260918T170000.gate"
+  printf '{"round":1,"model":"stub/worker","stage":1,"when":"2026-09-18T17:00+00:00","note":"gate failed twice: npm test\\nboom: 1 of 2 tests failed","logs":["t-5.20260918T170000.gate"]}\n{"round":2,"model":"stub/worker","stage":1,"when":"2026-09-18T17:05+00:00","note":"review (stub/reviewer) rejected:\\nREJECT: x.ts:1 wrong","logs":[]}\n' >"$R/failures/t-5.rounds.jsonl"
+  echo 2 >"$R/failures/t-5"
+  mkdir -p "$R/parked"; printf '{"when":"2026-09-18T17:05+00:00","reason":"exhausted","failures":2,"stage":{"index":1,"worker":"stub/worker","reviewer":"stub/reviewer"},"stopped_on":"review (stub/reviewer) rejected:\\nREJECT: x.ts:1 wrong","question":"Does x.ts:1 have to print the total, or only the count? The bead says both.","brief":"WHAT HAPPENED:\\nround 1 broke a test.\\nWHY:\\nthe bead asks for two things.","brief_model":"stub/worker"}\n' >"$R/parked/t-5"
   # t-8: a decision — a question for the human, type decision (a needs-human label does the same).
   jq '. + [{id:"t-8", title:"Which ntfy topic?", description:"The loop can post to ntfy. Which topic, and for which events?", status:"open", priority:1, issue_type:"decision", labels:[]}]' "$BD_STATE/issues.json" >"$BD_STATE/i.tmp" && mv "$BD_STATE/i.tmp" "$BD_STATE/issues.json"
   # t-9: landed by the loop an hour ago, one send-back on the way; a session log for its round.
@@ -522,6 +548,25 @@ case_status_json_and_ui() {
   assert_match "$(printf '%s' "$html" | grep -o '<div class="q claude">.*' | head -c 600)" 'class="id">t-7</td>.*dev queue #3' "t-7 in it, with where it sits"
   assert_match "$(printf '%s' "$html" | grep -o '<div class="q dev">.*' | head -c 2000)" 'title="sent back to dev 2 times">2×</span> <button class="hist" onclick="toggleHist(.t-7.)"[^>]*>▸ 2 rounds</button>' "t-7's round history behind a toggle, closed"
   assert_eq "$(printf '%s' "$html" | grep -c 'pre class="hist"')" 0 "no history listed until opened"
+  # The parked bead under Needs you: the question first, the reason, the brief and the
+  # bead's notes folded, the rounds behind their toggle; opened, each round with its note
+  # and its log to open in place.
+  hum=$(printf '%s' "$html" | tr '\n' ' ' | grep -o '<h3 class="human">.*' | head -c 4000)
+  assert_match "$hum" 'class="id">t-5</td>.*<span class="chip bad" title="every stage has had its failures">exhausted</span>' "the reason as the chip"
+  assert_match "$hum" '<div class="ask"><div class="head">The question<span class="muted">parked 2026-09-18 17:05 · stopped on stage 1 (stub/worker) · brief by stub/worker</span></div><pre class="text">Does x.ts:1 have to print the total, or only the count? The bead says both.</pre></div>' "the question, first, with when and who asked"
+  assert_match "$hum" '<button class="hist" onclick="toggleFold(&quot;brief:t-5&quot;)">▸ what happened, and why</button>' "the brief folded"
+  assert_match "$hum" 'toggleFold(&quot;notes:t-5&quot;)">▸ the bead&#39;s notes</button>' "the notes folded"
+  assert_eq "$(printf '%s' "$hum" | grep -c 'WHAT HAPPENED')" 0 "closed: the brief not shown"
+  opened=$(render_page "$T/state.json" "toggleHist('t-5'); toggleFold('brief:t-5')" | tr '\n' ' ' | grep -o '<h3 class="human">.*' | head -c 6000)
+  assert_match "$opened" '<div class="round"><div class="head">round 1 <span class="chip worker">stub/worker</span><span class="muted">stage 1</span><span class="muted">2026-09-18 17:00</span></div><pre class="note">gate failed twice: npm test boom: 1 of 2 tests failed</pre><div class="logs">logs: <button class="link " onclick="toggleLog(&quot;'"$REPO"'&quot;,&quot;t-5.20260918T170000.gate&quot;)" title="t-5.20260918T170000.gate">▸ gate</button></div></div>' "round 1: who, when, the note in full, its gate log to open"
+  assert_match "$opened" '<div class="round"><div class="head">round 2 .*<pre class="note">review (stub/reviewer) rejected: REJECT: x.ts:1 wrong</pre></div>' "round 2, no logs"
+  assert_match "$opened" '<pre class="text">WHAT HAPPENED: round 1 broke a test. WHY: the bead asks for two things.</pre>' "the brief, opened"
+  assert_match "$(printf '%s' "$html" | grep -o '<div class="q dev">.*' | head -c 3000)" 'onclick="toggleHist(.t-7.)"' "a queue row has the same toggle"
+  # A round's log, from the server: by its name under the repo's logs dir, nothing else.
+  assert_eq "$("$REAL_CURL" -s -m 3 "http://127.0.0.1:$port/api/log?repo=$REPO&file=t-5.20260918T170000.gate")" "boom: 1 of 2 tests failed" "/api/log serves the file"
+  assert_match "$("$REAL_CURL" -s -m 3 "http://127.0.0.1:$port/api/log?repo=$REPO&file=../failures/t-5")" "bad log name" "no path, only a name"
+  assert_match "$("$REAL_CURL" -s -m 3 "http://127.0.0.1:$port/api/log?repo=/nope&file=t-5.20260918T170000.gate")" "unknown repo" "only a configured repo's"
+  assert_match "$("$REAL_CURL" -s -m 3 "http://127.0.0.1:$port/api/log?repo=$REPO&file=t-9.none")" "no such log" "a name that is not there"
   # The supervisor log with systemd's own lines in it: hidden by default, the box unchecked.
   jq '.log = [{t: now, msg: "Starting bead-supervisor.service - the bead loop..."}, {t: now, msg: "03:50:01 repo: dev: bead t-2 to stub/worker"}, {t: now, msg: "Finished bead-supervisor.service - the bead loop."}]' "$T/state.json" >"$T/state-log.json"
   log=$(render_page "$T/state-log.json" | grep -o '<section class="card"><h3 class="log">.*')
@@ -656,23 +701,58 @@ case_human_queue_answer_and_open() {
   setup true auto '' "$(stages stub/fast::1)"; echo blocked >"$TEST_CTRL/worker"
   sup --once tick; assert_eq "$(bead .status)" in_progress "parked with the question"
   j=$(sup --json status "$REPO")
-  assert_eq "$(printf '%s' "$j" | jq -r '.parked[0] | "\(.question) \(.why.what[0:8])"')" "true BLOCKED:" "status marks it a question"
+  assert_eq "$(printf '%s' "$j" | jq -r '.parked[0] | "\(.question) \(.parked.reason) \(.why.what[0:8])"')" "true blocked parked (" "status marks it a question, with the reason"
+  assert_eq "$(printf '%s' "$j" | jq -r '.parked[0].parked.question')" "Is the flag called --dry-run (add it to the bead), or should the criterion go?" "the brief's question"
+  assert_match "$(printf '%s' "$j" | jq -r '.parked[0].parked.brief')" "^WHAT HAPPENED:" "and its brief"
+  assert_eq "$(printf '%s' "$j" | jq -r '.parked[0].history | length, .[0].round, (.[0].logs|length)' | tr '\n' ' ')" "1 1 1 " "the round, with its worker log"
+  assert_match "$(printf '%s' "$j" | jq -r '.parked[0].notes')" "BLOCKED: lib/x.ts:3" "the bead's notes, whole"
   assert_eq "$(printf '%s' "$j" | jq -r '.parked[0].open_cmd')" "bead-supervisor open $REPO t-1" "and says how to open it"
   sup answer "$REPO" t-1 "the flag is called --dry-run, see lib/x.ts:9"
   assert_eq "$(bead .status)" open "answered: back in the dev queue"
+  assert_nofile "$BEAD_LOOP_STATE/repo/parked/t-1" "answered: the question is closed"
   assert_match "$(bead .notes)" "operator .*: the flag is called --dry-run" "the answer on the bead"
   echo "done" >"$TEST_CTRL/worker"; sup --once tick
-  assert_match "$(cat "$TEST_CTRL/prompt.2")" "operator .*: the flag is called --dry-run" "the next round reads the answer"
+  assert_match "$(tr '\n' ' ' <"$TEST_CTRL/prompt.3")" "parked (BLOCKED at the last stage). Is the flag called --dry-run.*operator .*: the flag is called --dry-run" "the next round reads the question and the answer under it"
   assert_eq "$(cut -d' ' -f3 "$TEST_CTRL/calls" | tail -1)" "stub/fast" "at the same stage, not escalated"
-  # open: an interactive Claude Code session in the bead's worktree, the bead and the
-  # loop's note in the first prompt, on the branch a round left when there is one.
+  # open: an interactive Claude Code session in the bead's worktree, the bead, the loop's
+  # question and brief in the first prompt, on the branch a round left when there is one.
   setup true auto '' "$(stages stub/fast::1)"; echo blocked >"$TEST_CTRL/worker"; sup --once tick
   sup open "$REPO" t-1
   assert_eq "$(cat "$TEST_CTRL/opened")" "$BEAD_LOOP_STATE/repo/wt/t-1" "claude opened in the worktree"
   assert_match "$(cat "$TEST_CTRL/opened.prompt")" "branch bead/t-1" "on the bead's branch"
-  assert_match "$(cat "$TEST_CTRL/opened.prompt")" "its last note: bead-loop round 1 .*BLOCKED: lib/x.ts:3 has no such flag" "with the question"
+  assert_match "$(cat "$TEST_CTRL/opened.prompt")" "The automated loop parked it (blocked). Its question for the owner: Is the flag called --dry-run" "with the question"
+  assert_match "$(cat "$TEST_CTRL/opened.prompt")" "The loop's brief of the rounds so far:" "and the brief"
   assert_match "$(cat "$TEST_CTRL/opened.prompt")" "title: Do the thing" "and the bead"
   assert_eq "$(git -C "$BEAD_LOOP_STATE/repo/wt/t-1" rev-parse --abbrev-ref HEAD)" bead/t-1 "the worktree is on the branch"
+}
+
+case_brief_falls_back_to_the_loops_question() {
+  # The brief is one model call; without it — no model (brief_model = "none"), a model
+  # that answers out of shape, a harness that dies, Claude signed out — the loop's own
+  # question stands: the BLOCKED line, and what the owner can do about it.
+  setup true auto '' "$(echo 'brief_model = "none"'; stages stub/fast::1)"; echo blocked >"$TEST_CTRL/worker"; sup --once tick
+  assert_eq "$(calls)" "bead-worker" "no brief model: no call"
+  assert_eq "$(jq -r '.question' "$BEAD_LOOP_STATE/repo/parked/t-1")" "The last stage (stub/fast) stopped: BLOCKED: lib/x.ts:3 has no such flag — Answer what it needs to know, fix the bead's text if a claim in it is false, or take it yourself." "the loop's question"
+  assert_eq "$(jq -r '.brief, .brief_model' "$BEAD_LOOP_STATE/repo/parked/t-1" | tr '\n' ' ')" "null null " "no brief"
+  assert_match "$(bead .notes)" "parked (BLOCKED at the last stage). The last stage (stub/fast) stopped: BLOCKED: lib/x.ts:3" "on the bead"
+  setup true auto '' "$(echo 'brief_model = "stub/senior"'; stages stub/fast::1)"; echo blocked >"$TEST_CTRL/worker"; echo plain >"$TEST_CTRL/brief"; sup --once tick
+  assert_eq "$(sed -n 2p "$TEST_CTRL/calls" | cut -d' ' -f1,3)" "bead-briefer stub/senior" "brief_model names who briefs"
+  assert_match "$(jq -r '.question' "$BEAD_LOOP_STATE/repo/parked/t-1")" "^The last stage (stub/fast) stopped: BLOCKED:" "out of shape: the loop's question"
+  assert_eq "$(jq -r '.brief' "$BEAD_LOOP_STATE/repo/parked/t-1")" "I read the rounds; it looks like the flag is missing." "what the model said is kept as the brief"
+  setup true auto '' "$(stages stub/fast::1)"; echo blocked >"$TEST_CTRL/worker"; echo crash >"$TEST_CTRL/brief"; sup --once tick
+  assert_eq "$(bead .status)" in_progress "the brief dying does not unpark the bead"
+  assert_match "$(jq -r '.question' "$BEAD_LOOP_STATE/repo/parked/t-1")" "^The last stage (stub/fast) stopped: BLOCKED:" "harness down: the loop's question"
+  assert_match "$(grep 'brief did not come' "$T/sup.log")" "stub/fast exited 7" "said in the log"
+  # A Claude brief needs Claude signed in; signed out, the loop's question stands and the
+  # bead is parked all the same — nothing waits on the brief.
+  setup true auto '' "$(echo 'brief_model = "claude/opus"'; stages stub/fast::1)"; echo blocked >"$TEST_CTRL/worker"; touch "$TEST_CTRL/claude-signed-out"; sup --once tick
+  assert_eq "$(calls)" "bead-worker" "Claude signed out: no brief call"
+  assert_match "$(grep 'no brief' "$T/sup.log")" "claude/opus cannot run now" "said in the log"
+  assert_match "$(jq -r '.question' "$BEAD_LOOP_STATE/repo/parked/t-1")" "^The last stage (stub/fast) stopped: BLOCKED:" "the loop's question"
+  rm "$TEST_CTRL/claude-signed-out"; sup answer "$REPO" t-1 "try again"; sup --once tick
+  assert_eq "$(sed -n 3p "$TEST_CTRL/calls" | cut -d' ' -f1,3)" "bead-briefer claude/opus" "signed in: Claude Code writes the brief, read-only"
+  assert_match "$(cat "$TEST_CTRL/system.3")" "You write the brief a bead's owner reads" "with the briefer's agent body as its system prompt"
+  assert_eq "$(jq -r '.question' "$BEAD_LOOP_STATE/repo/parked/t-1")" "Is the flag called --dry-run, or should the criterion go?" "Claude's brief"
 }
 
 case_claude_signed_out_beads_wait() {

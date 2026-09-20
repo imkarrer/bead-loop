@@ -109,14 +109,10 @@ fn stage_json(repo: &Repo, n: u64) -> Value {
     }
 }
 
+/// The rounds sent back so far — round, model, stage, when, the whole note, the log
+/// files — oldest first (park.rs).
 fn history_json(repo: &Repo, id: &str) -> Value {
-    let lines: Vec<Value> = read_to_string(&repo.notes_path(id))
-        .unwrap_or_default()
-        .lines()
-        .filter(|l| !l.is_empty())
-        .map(|l| Value::String(l.to_string()))
-        .collect();
-    Value::Array(lines)
+    Value::Array(crate::park::rounds(repo, id))
 }
 
 /// The bead as every queue row carries it.
@@ -218,10 +214,19 @@ pub fn status_json_from(repo: &Repo, open: Value, inprog: Value, specs: &[crate:
         .filter(|(id, _)| !merge_ids.contains(id) && !laneids.contains(id) && !review_ids.contains(id))
         .map(|(id, b)| {
             let mut m = bead_json(repo, &byid, &id);
-            let why = why_of(b.get("notes").and_then(|n| n.as_str()).unwrap_or(""));
-            let question = why.get("what").and_then(|w| w.as_str()).map(|w| w.contains("BLOCKED:")).unwrap_or(false);
+            let notes = b.get("notes").and_then(|n| n.as_str()).unwrap_or("");
+            let why = why_of(notes);
+            // The loop's record of the parking — the reason, the question, the brief — when
+            // the loop parked it; a bead in_progress with none was parked by hand or by a stop.
+            let parked = repo.parked_record(&id);
+            let question = match &parked {
+                Some(p) => p.get("reason").and_then(|r| r.as_str()) == Some("blocked"),
+                None => why.get("what").and_then(|w| w.as_str()).map(|w| w.contains("BLOCKED:")).unwrap_or(false),
+            };
             m.insert("why".into(), why);
             m.insert("question".into(), json!(question));
+            m.insert("parked".into(), parked.unwrap_or(Value::Null));
+            m.insert("notes".into(), json!(notes));
             m.insert("open_cmd".into(), json!(format!("bead-supervisor open {} {id}", repo.repo.display())));
             Value::Object(m)
         })
@@ -289,7 +294,7 @@ pub fn status_json_from(repo: &Repo, open: Value, inprog: Value, specs: &[crate:
         crate::lanes::priority_repo(&repo.state_dir).map(|p| p == repo.repo || p.to_string_lossy() == repo.slug).unwrap_or(false);
     json!({
         "slug": repo.slug, "repo": repo.repo.to_string_lossy(), "label": repo.label, "base": repo.base,
-        "merge": repo.merge, "attach": repo.attach,
+        "merge": repo.merge, "attach": repo.attach, "logs_dir": repo.rs.join("logs").to_string_lossy(),
         "max_inflight": if repo.max_inflight == u64::MAX { Value::Null } else { json!(repo.max_inflight) },
         "stages": stages, "on_exhaust": repo.on_exhaust,
         "conflict_worker": if repo.conflict_worker.is_empty() { Value::Null } else { json!(repo.conflict_worker) },
@@ -403,7 +408,11 @@ pub fn status_text(j: &Value) -> String {
     if !parked.is_empty() {
         out.push_str("  parked:\n");
         for b in &parked {
-            let what = b["why"].get("what").and_then(|w| w.as_str()).unwrap_or("(no note from the loop)");
+            // the loop's question when it parked the bead; its last note otherwise
+            let what = match b["parked"].get("question").and_then(|q| q.as_str()) {
+                Some(q) => q.replace('\n', " "),
+                None => b["why"].get("what").and_then(|w| w.as_str()).unwrap_or("(no note from the loop)").to_string(),
+            };
             out.push_str(&format!("    {} {}\n", pad(s(b, "id"), 14), what.chars().take(140).collect::<String>()));
         }
     }
@@ -497,34 +506,38 @@ pub fn log_follow(repo: &Repo, id: Option<&str>) {
     use std::io::BufRead;
     let out = child.stdout.take().unwrap();
     for line in std::io::BufReader::new(out).lines().map_while(Result::ok) {
-        let v: Value = match serde_json::from_str(&line) {
-            Ok(v) => v,
-            Err(_) => continue,
-        };
-        match v.get("type").and_then(|t| t.as_str()) {
-            Some("tool_use") => {
-                let inp = v.pointer("/part/state/input").cloned().unwrap_or(Value::Null);
-                let arg = ["command", "filePath", "path", "pattern", "description"]
-                    .iter()
-                    .find_map(|k| inp.get(k).and_then(|x| x.as_str()).map(str::to_string))
-                    .unwrap_or_default();
-                println!(
-                    "[{}] {}",
-                    v.pointer("/part/tool").and_then(|t| t.as_str()).unwrap_or(""),
-                    arg.chars().take(160).collect::<String>()
-                );
-            }
-            Some("text") => {
-                println!("> {}", v.pointer("/part/text").and_then(|t| t.as_str()).unwrap_or("").chars().take(400).collect::<String>())
-            }
-            Some("step_finish") => println!(
-                "-- step: {}  tokens in={} out={}",
-                v.pointer("/part/reason").and_then(|t| t.as_str()).unwrap_or(""),
-                v.pointer("/part/tokens/input").cloned().unwrap_or(Value::Null),
-                v.pointer("/part/tokens/output").cloned().unwrap_or(Value::Null)
-            ),
-            _ => {}
+        if let Some(l) = serde_json::from_str::<Value>(&line).ok().and_then(|v| log_line(&v)) {
+            println!("{l}");
         }
+    }
+}
+
+/// One event of an opencode session log as one line: a tool call with its argument, a
+/// text, a step's end with its tokens; nothing for the rest.
+pub fn log_line(v: &Value) -> Option<String> {
+    match v.get("type").and_then(|t| t.as_str()) {
+        Some("tool_use") => {
+            let inp = v.pointer("/part/state/input").cloned().unwrap_or(Value::Null);
+            let arg = ["command", "filePath", "path", "pattern", "description"]
+                .iter()
+                .find_map(|k| inp.get(k).and_then(|x| x.as_str()).map(str::to_string))
+                .unwrap_or_default();
+            Some(format!(
+                "[{}] {}",
+                v.pointer("/part/tool").and_then(|t| t.as_str()).unwrap_or(""),
+                arg.chars().take(160).collect::<String>()
+            ))
+        }
+        Some("text") => {
+            Some(format!("> {}", v.pointer("/part/text").and_then(|t| t.as_str()).unwrap_or("").chars().take(400).collect::<String>()))
+        }
+        Some("step_finish") => Some(format!(
+            "-- step: {}  tokens in={} out={}",
+            v.pointer("/part/reason").and_then(|t| t.as_str()).unwrap_or(""),
+            v.pointer("/part/tokens/input").cloned().unwrap_or(Value::Null),
+            v.pointer("/part/tokens/output").cloned().unwrap_or(Value::Null)
+        )),
+        _ => None,
     }
 }
 
@@ -615,7 +628,8 @@ mod tests {
         assert_eq!(dev[3]["stage"]["index"], 2);
         assert_eq!(
             dev[3]["history"],
-            json!(["round 1 (stub/worker): BLOCKED: which flag?", "round 2 (stub/worker): REJECT: x.ts:1 wrong"])
+            json!([{"round": 1, "model": "stub/worker", "note": "BLOCKED: which flag?"}, {"round": 2, "model": "stub/worker", "note": "REJECT: x.ts:1 wrong"}]),
+            "the older one-line notes read as rounds"
         );
         assert_eq!(dev[0]["history"], json!([]), "no notes file: an empty history");
         assert_eq!(dev[1]["held"]["why"], "setup failed: false", "a held bead is still in its queue");
@@ -632,7 +646,10 @@ mod tests {
             json!({"round": null, "when": "2026-09-18T17:05+00:00", "what": "stages exhausted after REJECT: x.ts:1 wrong"})
         );
         assert_eq!(j["parked"][0]["question"], false);
+        assert_eq!(j["parked"][0]["parked"], Value::Null, "no record: parked by hand, or before the loop kept one");
+        assert!(j["parked"][0]["notes"].as_str().unwrap().starts_with("someone: a human note\n"), "the bead's notes, whole");
         assert!(j["parked"][0]["open_cmd"].as_str().unwrap().ends_with("/repo t-5"));
+        assert!(j["logs_dir"].as_str().unwrap().ends_with("/state/repo/logs"), "where the rounds' log files are");
         assert_eq!(j["held"][0]["id"], "t-8");
         assert_eq!(j["held"][0]["where"], "dev");
         assert_eq!(j["worktrees"][0]["id"], "t-1");
@@ -658,6 +675,18 @@ mod tests {
         assert_eq!(j["queues"]["merge"][0]["held"]["why"], "CI red on adopted PR");
         assert_eq!(j["parked"][0]["question"], true, "BLOCKED: in the last note is a question for you");
         assert_eq!(j["parked"][0]["why"]["round"], " round 1 (stub/fast)");
+        // The loop's record, when it parked the bead: the reason says what kind of question.
+        crate::util::write_file(
+            &repo.parked_path("t-9"),
+            r#"{"when":"2026-09-18T17:06+00:00","reason":"exhausted","question":"What should change?","brief":"WHAT HAPPENED:\nx"}"#,
+        );
+        let inprog = json!([{"id":"t-9","title":"Asked","notes":"bead-loop 2026-09-18T17:06+00:00: parked (stages exhausted after 3 rounds). What should change?"}]);
+        let j = status_json_from(&repo, json!([]), inprog, &default_lanes(true));
+        assert_eq!(j["parked"][0]["question"], false, "exhausted, not BLOCKED");
+        assert_eq!(j["parked"][0]["parked"]["question"], "What should change?");
+        assert_eq!(j["parked"][0]["parked"]["brief"], "WHAT HAPPENED:\nx");
+        let t = status_text(&j);
+        assert!(t.contains("\n  parked:\n    t-9            What should change?\n"), "the text shows the question: {t}");
         let _ = std::fs::remove_dir_all(&d);
     }
 

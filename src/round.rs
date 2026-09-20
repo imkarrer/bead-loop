@@ -9,15 +9,14 @@
 //! read them.
 use crate::config::{LaneSpec, Repo};
 use crate::harness::{abort_sessions, run_agent, runnable};
+use crate::park::{park, record_round, Reason};
 use crate::shell::{
     bd_claim, bd_comment, bd_note, bd_show, bd_status, branch_exists, gh, git, git_must, git_ok, git_out, local_branch_exists,
     worktree_remove,
 };
 use crate::signals;
 use crate::state::{dev_queue, review_queue, StageHit};
-use crate::util::{
-    append_file, cut_bytes, date_iminutes, die, first_line, log, read_to_string, stamp, stderr_str, stdout_str, tail_lines, write_file,
-};
+use crate::util::{cut_bytes, date_iminutes, die, first_line, log, read_to_string, stamp, stderr_str, stdout_str, tail_lines, write_file};
 use serde_json::Value;
 use std::path::Path;
 
@@ -120,9 +119,9 @@ fn run_shell_to(script: &str, dir: &Path, logf: &Path) -> bool {
     }
 }
 
-/// The last three notes of earlier rounds, for the prompt.
+/// The last three rounds' notes, for the prompt.
 fn history(repo: &Repo, id: &str) -> String {
-    read_to_string(&repo.notes_path(id)).map(|s| tail_lines(&s, 3)).unwrap_or_default()
+    crate::park::history(repo, id, 3)
 }
 
 /// Whether a held bead's hold is old enough to try again.
@@ -228,40 +227,48 @@ pub fn hold(repo: &Repo, id: &str, wt: Option<&Path>, why: &str) {
     repo.wake();
 }
 
-/// `send_back ID WT fresh|keep NOTE`
-pub fn send_back(repo: &Repo, id: &str, wt: &Path, keep: bool, note: &str, model: &str, last: bool) {
+/// `send_back ID WT fresh|keep NOTE`. `stem` is the round's log prefix (`logs/ID.STAMP`),
+/// so the history can name the round's files.
+#[allow(clippy::too_many_arguments)]
+pub fn send_back(repo: &Repo, id: &str, wt: &Path, keep: bool, note: &str, model: &str, last: bool, stem: Option<&Path>) {
     let n = repo.failures_of(id) + 1;
     log(&format!("{}: {id} round {n} stopped: {}", repo.slug, first_line(note)));
     bd_note(repo, id, &format!("bead-loop round {n} ({model}) {}: {note}", date_iminutes()));
+    record_round(repo, id, n, model, note, stem);
     repo.set_failures(id, n);
-    let one_line: String = note.replace('\n', " ");
-    append_file(&repo.notes_path(id), &format!("round {n} ({model}): {}\n", cut_bytes(&one_line, 2000)));
+    // Parked: BLOCKED at the last stage (whatever on_exhaust says), or the stages are
+    // spent. The brief runs before the worktree goes, so it can see what was tried.
+    let parked = if last && note.contains("BLOCKED:") {
+        log(&format!("{}: {id}: BLOCKED at the last stage, parked for you", repo.slug));
+        Some(Reason::Blocked)
+    } else if repo.stage_for(n).is_none() {
+        log(&format!("{}: {id}: stages exhausted ({n} failures), parked for you", repo.slug));
+        Some(Reason::Exhausted)
+    } else {
+        None
+    };
+    if let Some(reason) = parked.clone() {
+        park(repo, id, reason, Some(wt));
+    }
     clear_lane_of(repo, id);
     repo.release(id);
     if !keep {
         worktree_remove(repo, wt);
         let _ = git(&repo.repo, &["branch", "-D", &format!("bead/{id}")]);
     }
-    if last && note.contains("BLOCKED:") {
-        log(&format!("{}: {id}: BLOCKED at the last stage, parked for you", repo.slug));
+    if parked.is_some() {
         park_cleanup(repo, wt);
         repo.wake();
         return;
     }
-    match repo.stage_for(n) {
-        Some(st) => {
-            bd_status(repo, id, "open");
-            log(&format!(
-                "{}: {id}: → dev queue ({n} failures; next: worker {}, reviewer {})",
-                repo.slug,
-                st.model,
-                if st.review.is_empty() { "none".to_string() } else { st.review.clone() }
-            ));
-        }
-        None => {
-            log(&format!("{}: {id}: stages exhausted ({n} failures), parked for you", repo.slug));
-            park_cleanup(repo, wt);
-        }
+    if let Some(st) = repo.stage_for(n) {
+        bd_status(repo, id, "open");
+        log(&format!(
+            "{}: {id}: → dev queue ({n} failures; next: worker {}, reviewer {})",
+            repo.slug,
+            st.model,
+            if st.review.is_empty() { "none".to_string() } else { st.review.clone() }
+        ));
     }
     repo.wake();
 }
@@ -413,8 +420,10 @@ pub fn dev_one(repo: &Repo, opts: &Opts, id: Option<&str>, last_id: &mut Option<
     let st: StageHit = match repo.stage_for(n) {
         Some(s) => s,
         None => {
+            // Picked with no stage left (the config changed under it): parked, with the question.
             log(&format!("{}: {id}: stages exhausted ({n} failures), parked", repo.slug));
             bd_status(repo, &id, "in_progress");
+            park(repo, &id, Reason::Exhausted, None);
             return Pass::Worked;
         }
     };
@@ -478,6 +487,8 @@ pub fn dev_one(repo: &Repo, opts: &Opts, id: Option<&str>, last_id: &mut Option<
     }
 
     bd_claim(repo, &id);
+    // Reopened by hand: the old question is history.
+    repo.unpark(&id);
     // The marker carries the lane's name (gpu, cpu, claude — or dev, the default pair's),
     // so status shows the lane on it and two lanes in one repo never share a file.
     let lane_name = lane.map(|l| l.name.as_str()).unwrap_or("dev");
@@ -533,15 +544,25 @@ pub fn dev_one(repo: &Repo, opts: &Opts, id: Option<&str>, last_id: &mut Option<
             &format!("worker exited {} (timeout={timeout} s). Log: {}", r.rc, worker_log.display()),
             &model,
             st.last,
+            Some(&logf),
         );
         return Pass::Worked;
     }
     if let Some(b) = last_line_starting(&r.text, "BLOCKED:") {
-        send_back(repo, &id, &wt, false, &b, &model, st.last);
+        send_back(repo, &id, &wt, false, &b, &model, st.last, Some(&logf));
         return Pass::Worked;
     }
     if !settle_worktree(repo, &wt, &format!("{id}: {title}")) {
-        send_back(repo, &id, &wt, false, &format!("worker made no commit. Last words: {}", tail_lines(&r.text, 3)), &model, st.last);
+        send_back(
+            repo,
+            &id,
+            &wt,
+            false,
+            &format!("worker made no commit. Last words: {}", tail_lines(&r.text, 3)),
+            &model,
+            st.last,
+            Some(&logf),
+        );
         return Pass::Worked;
     }
     // The gate gets one fix round inside the lane: a compiler message is the cheapest review there is.
@@ -563,18 +584,19 @@ pub fn dev_one(repo: &Repo, opts: &Opts, id: Option<&str>, last_id: &mut Option<
                 &format!("worker exited {} in gate fix round. Log: {}", r2.rc, fix_log.display()),
                 &model,
                 st.last,
+                Some(&logf),
             );
             return Pass::Worked;
         }
         if let Some(b) = last_line_starting(&r2.text, "BLOCKED:") {
-            send_back(repo, &id, &wt, false, &format!("gate fix round: {b}"), &model, st.last);
+            send_back(repo, &id, &wt, false, &format!("gate fix round: {b}"), &model, st.last, Some(&logf));
             return Pass::Worked;
         }
         settle_worktree(repo, &wt, &format!("{id}: fix the gate"));
         let gate2 = std::path::PathBuf::from(format!("{}.gate-2", logf.display()));
         if !run_gate(repo, &wt, &gate2) {
             let tail = tail_lines(&read_to_string(&gate2).unwrap_or_default(), 15);
-            send_back(repo, &id, &wt, false, &format!("gate failed twice: {}\n{tail}", repo.gate), &model, st.last);
+            send_back(repo, &id, &wt, false, &format!("gate failed twice: {}\n{tail}", repo.gate), &model, st.last, Some(&logf));
             return Pass::Worked;
         }
         final_text = r2.text;
@@ -661,7 +683,16 @@ pub fn review_one(repo: &Repo, opts: &Opts, id: Option<&str>, lane: Option<&Lane
                 return Pass::Worked;
             }
             let _ = std::fs::remove_file(repo.review_path(&id));
-            send_back(repo, &id, &wt, true, &format!("reviewer exited {}. Log: {}", r.rc, review_log.display()), &model, false);
+            send_back(
+                repo,
+                &id,
+                &wt,
+                true,
+                &format!("reviewer exited {}. Log: {}", r.rc, review_log.display()),
+                &model,
+                false,
+                Some(&logf),
+            );
             return Pass::Worked;
         }
         if !r.text.lines().any(|l| l.starts_with("APPROVE:")) {
@@ -676,6 +707,7 @@ pub fn review_one(repo: &Repo, opts: &Opts, id: Option<&str>, lane: Option<&Lane
                 &format!("review ({review_model}) rejected:\n{}", cut_bytes(&reject_block(&r.text), 4000)),
                 &model,
                 false,
+                Some(&logf),
             );
             return Pass::Worked;
         }

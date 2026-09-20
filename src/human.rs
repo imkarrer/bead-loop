@@ -36,6 +36,7 @@ pub fn escalate(repo: &Repo, id: &str) {
         ));
     }
     repo.set_failures(id, n);
+    repo.unpark(id);
     let reviewer = if st.review.is_empty() { "none".to_string() } else { st.review.clone() };
     bd_note(
         repo,
@@ -61,6 +62,7 @@ pub fn answer(repo: &Repo, id: &str, text: &str) {
         repo.set_failures(id, n - 1);
     }
     bd_note(repo, id, &format!("operator {}: {text}", date_iminutes()));
+    repo.unpark(id);
     let _ = std::fs::remove_file(repo.review_path(id));
     repo.release(id);
     bd_status(repo, id, "open");
@@ -109,10 +111,24 @@ pub fn open_bead(repo: &Repo, id: &str) -> ! {
         .rfind(|l| l.starts_with("bead-loop"))
         .unwrap_or("")
         .to_string();
+    // The loop's question and brief, when it parked the bead; its last note otherwise.
+    let parked = repo.parked_record(id);
+    let stopped = match &parked {
+        Some(p) => {
+            let s = |k: &str| p.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
+            format!(
+                " The automated loop parked it ({}). Its question for the owner: {}{}",
+                s("reason").replace('_', " "),
+                s("question"),
+                if s("brief").is_empty() { String::new() } else { format!("\n\nThe loop's brief of the rounds so far:\n{}", s("brief")) }
+            )
+        }
+        None if !why.is_empty() => format!(" The automated loop stopped on it — its last note: {why}"),
+        None => String::new(),
+    };
     log(&format!("{}: {id}: opening Claude Code in {} on {branch}", repo.slug, wt.display()));
     let prompt = format!(
-        "You are working the bead below with its owner, in this worktree, on branch {branch}.{} Read the bead and the notes, then ask what you need to know; commit on this branch when it is done and say so.\n\n<bead>\n{}\n</bead>",
-        if why.is_empty() { String::new() } else { format!(" The automated loop stopped on it — its last note: {why}") },
+        "You are working the bead below with its owner, in this worktree, on branch {branch}.{stopped} Read the bead and the notes, then ask what you need to know; commit on this branch when it is done and say so.\n\n<bead>\n{}\n</bead>",
         render_bead(&json)
     );
     use std::os::unix::process::CommandExt;

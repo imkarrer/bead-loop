@@ -17,6 +17,8 @@ use std::sync::Mutex;
 pub struct AgentRun {
     /// the last text the agent wrote (the bash printed it; callers grep DONE:/BLOCKED:/APPROVE:)
     pub text: String,
+    /// all of it: what the brief reads, not the last twenty lines
+    pub full: String,
     pub rc: i32,
     /// the session wrote nothing at all — a harness or server failure, not the model's work
     pub empty: bool,
@@ -39,7 +41,7 @@ pub fn run_agent(
     let stderr = std::fs::File::create(&err_path).ok();
     let timeout_s = timeout.to_string();
     let rc;
-    let text;
+    let full;
     if let Some(rest) = model.strip_prefix("aider:") {
         // Aider explores nothing: it edits the files it is handed, so the files are the
         // ones the bead's DESCRIPTION names that exist in the worktree. The server is the
@@ -74,9 +76,10 @@ pub fn run_agent(
         c.env("OPENAI_API_KEY", key);
         rc = run_to_files(&mut c, stdout, stderr);
         clean_aider(dir);
-        text = tail_lines(&read_to_string(logf).unwrap_or_default(), 20);
+        full = read_to_string(logf).unwrap_or_default();
     } else if let Some(alias) = model.strip_prefix("claude/") {
-        let tools = if agent == "bead-reviewer" {
+        // The worker edits; the reviewer and the briefer only read.
+        let tools = if agent != "bead-worker" {
             "Read,Glob,Grep,Bash(git *),Bash(cat *),Bash(ls *),Bash(rg *),Bash(grep *)"
         } else {
             "Read,Edit,Write,Glob,Grep,Bash"
@@ -107,7 +110,7 @@ pub fn run_agent(
             let _ = std::fs::write(&err_path, result.as_bytes());
             let _ = std::fs::write(logf, b"");
         }
-        text = tail_lines(&result, 20);
+        full = result;
     } else {
         // --title: the session's name in the web UI, said by us. Left to opencode, a model
         // call names it from the prompt, and on a busy box that call has come back as "????".
@@ -137,10 +140,10 @@ pub fn run_agent(
             .filter(|v| v.get("type").and_then(|t| t.as_str()) == Some("text"))
             .filter_map(|v| v.pointer("/part/text").and_then(|t| t.as_str()).map(str::to_string))
             .collect();
-        text = tail_lines(&texts.join("\n"), 20);
+        full = texts.join("\n");
     }
     let empty = std::fs::metadata(logf).map(|m| m.len() == 0).unwrap_or(true);
-    AgentRun { text, rc, empty }
+    AgentRun { text: tail_lines(&full, 20), full, rc, empty }
 }
 
 /// Run with stdout/stderr to files, registering the child so a TERM to the supervisor

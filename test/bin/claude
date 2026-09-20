@@ -18,7 +18,7 @@ while [ $# -gt 0 ]; do
     --append-system-prompt) sys=$2; shift;; --output-format) shift;; --no-session-persistence) ;;
   esac; shift
 done
-case $tools in *Edit*) agent=bead-worker;; *) agent=bead-reviewer;; esac
+case $tools in *Edit*) agent=bead-worker;; *) case $sys in *"brief a bead's owner reads"*) agent=bead-briefer;; *) agent=bead-reviewer;; esac;; esac
 n=$(( $(wc -l <"$TEST_CTRL/calls" 2>/dev/null || echo 0) + 1 ))
 printf '%s %s claude/%s claude\n' "$agent" "$PWD" "$model" >>"$TEST_CTRL/calls"
 printf '%s' "$prompt" >"$TEST_CTRL/prompt.$n"
@@ -36,4 +36,5 @@ case $agent in
     echo "opus round $round" >>work.txt; git add -A && git commit -qm "work: opus round $round"
     say "DONE: acceptance check printed ok" ;;
   bead-reviewer) say "APPROVE: checked every criterion" ;;
+  bead-briefer) say "$(printf "WHAT HAPPENED:\nround 1 tried the flag and stopped.\nWHY:\nthe bead is wrong.\nQUESTION:\nIs the flag called --dry-run, or should the criterion go?")" ;;
 esac
