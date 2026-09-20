@@ -162,6 +162,18 @@ pub fn git_out(dir: &Path, args: &[&str]) -> String {
 }
 
 /// A git call whose failure is a loud stop.
+/// The same, for a lane: git's refusal comes back as the reason to hold the bead (a
+/// branch checked out in a worktree nobody pruned, a locked index) rather than end the
+/// process — one bead's worktree is not the loop's to die on.
+pub fn git_try(dir: &Path, args: &[&str]) -> Result<String, String> {
+    match git(dir, args) {
+        Ok(o) if o.status.success() => Ok(stdout_str(&o)),
+        Ok(o) => Err(format!("git {} in {}: {}", args.join(" "), dir.display(), stderr_str(&o).trim())),
+        Err(e) => Err(format!("git: {e}")),
+    }
+}
+
+/// `git ARGS` in DIR, or the process ends with git's words: for the hand commands.
 pub fn git_must(dir: &Path, args: &[&str]) -> String {
     match git(dir, args) {
         Ok(o) if o.status.success() => stdout_str(&o),
