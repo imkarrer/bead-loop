@@ -910,12 +910,50 @@ case_claude_sign_in_expiring_is_held() {
   assert_branch bead/t-1 "and lands"
 }
 
+case_lanes_from_toml() {
+  # [[lanes]] in the global config: a lane per model server, each taking the worker and
+  # reviewer rounds of its models. t-1 is on the slow stage (one failure spent), t-2 on
+  # the fast one; both lanes work at once and each carries its bead to the PR itself.
+  setup true auto stub/fast "$(stages stub/fast:stub/fast:1 stub/slow:stub/slow:1)"; printf 'approve\napprove\n' >"$TEST_CTRL/review"
+  printf '[[lanes]]\nname = "fast"\nmodels = ["stub/fast"]\n[[lanes]]\nname = "slow"\nmodels = ["stub/slow"]\n' >>"$BEAD_LOOP_CONFIG/config.toml"
+  mkdir -p "$BEAD_LOOP_STATE/repo/failures"; echo 1 >"$BEAD_LOOP_STATE/repo/failures/t-1"
+  jq '. + [{id:"t-2", title:"Second", description:"y", status:"open", priority:3, labels:["delegate:local"]}]' "$BD_STATE/issues.json" >"$BD_STATE/i.tmp" && mv "$BD_STATE/i.tmp" "$BD_STATE/issues.json"
+  LANE_WAIT=0.2 sup tick
+  assert_file "$BEAD_LOOP_STATE/repo/inflight/t-1" "the slow lane carried t-1 to its PR"
+  assert_file "$BEAD_LOOP_STATE/repo/inflight/t-2" "the fast lane carried t-2 to its PR"
+  assert_eq "$(grep -c ' stub/slow ' "$TEST_CTRL/calls")" 2 "t-1: worker and reviewer on stub/slow"
+  assert_eq "$(grep -c ' stub/fast ' "$TEST_CTRL/calls")" 2 "t-2: worker and reviewer on stub/fast"
+  assert_match "$(grep ' stub/slow ' "$TEST_CTRL/calls" | head -1)" "wt/t-1 " "the slow rounds were t-1's"
+  assert_nofile "$BEAD_LOOP_STATE/repo/lane.fast" "fast lane clear"; assert_nofile "$BEAD_LOOP_STATE/repo/lane.slow" "slow lane clear"
+  assert_match "$(sup status "$REPO")" "fast lane: *idle" "status names the configured lanes"
+  assert_eq "$(sup --json status "$REPO" | jq -r '.lane_names | join(" ")')" "fast slow" "json lists them"
+  # Pause one configured lane: its bead waits, the other lane's bead goes through.
+  setup true auto stub/fast "$(stages stub/fast:stub/fast:1 stub/slow:stub/slow:1)"; printf 'approve\napprove\n' >"$TEST_CTRL/review"
+  printf '[[lanes]]\nname = "fast"\nmodels = ["stub/fast"]\n[[lanes]]\nname = "slow"\nmodels = ["stub/slow"]\n' >>"$BEAD_LOOP_CONFIG/config.toml"
+  mkdir -p "$BEAD_LOOP_STATE/repo/failures"; echo 1 >"$BEAD_LOOP_STATE/repo/failures/t-1"
+  jq '. + [{id:"t-2", title:"Second", description:"y", status:"open", priority:3, labels:["delegate:local"]}]' "$BD_STATE/issues.json" >"$BD_STATE/i.tmp" && mv "$BD_STATE/i.tmp" "$BD_STATE/issues.json"
+  sup pause slow; sup --serial tick
+  assert_eq "$(cut -d' ' -f3 "$TEST_CTRL/calls" | sort -u | tr '\n' ' ')" "stub/fast " "only the fast lane's rounds ran"
+  assert_match "$(cat "$T/sup.log")" "slow lane paused; starting nothing" "said so"
+  assert_eq "$(sup --json status "$REPO" | jq -r '.paused.slow, (.queues.dev | map(.id) | join(" "))' | tr '\n' ' ')" "true t-1 " "json: paused; t-1 still queued"
+  rc=0; sup pause gpu 2>>"$T/sup.log" || rc=$?; assert_eq "$rc" 1 "a lane the config does not name is refused"
+  sup resume slow; : >"$TEST_CTRL/calls"; sup --serial tick
+  assert_eq "$(grep -c ' stub/slow ' "$TEST_CTRL/calls")" 2 "resumed: t-1 went through on the slow lane"
+}
+
 # ---- main ----------------------------------------------------------------------------
+# A command that exits non-zero outside an assertion (the supervisor dying, a stub
+# erroring) aborts the run under set -e with no FAIL line: say where, and show the
+# supervisor's last words, so a CI log names the cause. An EXIT trap, not ERR: ERR
+# would fire inside every $(...) whose command legitimately returns non-zero.
+DONE=
+trap 'if [ -z "$DONE" ]; then printf "\n  ABORT in %s (exit %s); the supervisor'"'"'s last lines:\n" "${CASE:-?}" "$?"; tail -n 15 "${T:-/nonexistent}/sup.log" 2>/dev/null | sed "s/^/    /"; fi' EXIT
 cases=$(declare -F | awk '{print $3}' | grep '^case_')
 [ $# -gt 0 ] && cases=$(printf 'case_%s\n' "$@")
 for CASE in $cases; do
   printf '%s\n' "$CASE"; "$CASE"
   [ -n "${KEEP:-}" ] || rm -rf "$T"
 done
+DONE=1
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" = 0 ]

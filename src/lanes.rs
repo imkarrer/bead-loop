@@ -1,18 +1,24 @@
 //! The lanes, and the two ways to run them.
 //!
-//! `tick`: reconcile the merge queue, then the dev and review lanes side by side until
-//! both queues are drained and both lanes idle, then reconcile once more, and exit — the
-//! oneshot the timer used to run, kept for hand runs and the test suite.
+//! A lane is a `LaneSpec` (config.rs): a name, the models whose rounds it takes, and
+//! its roles. The defaults are the pair the loop always had — `dev` (worker rounds),
+//! `review` (reviewer rounds) — plus `claude` when a stage names `claude/*`; `[[lanes]]`
+//! in the global config replaces them with a lane per model server, so that a round on
+//! the CPU box never holds the GPU's queue, and the other way round.
+//!
+//! `tick`: reconcile the merge queue, then every lane side by side until the queues are
+//! drained and every lane idle, then reconcile once more, and exit — the oneshot the
+//! timer used to run, kept for hand runs and the test suite.
 //!
 //! `run`: the resident loop. The same lanes, but a lane with nothing to do blocks on the
-//! bell instead of leaving; a third loop, the merge watcher, polls GitHub while a PR is
-//! in flight and rings the bell when one closes or comes back; nothing waits on a
-//! clock while there is work. A lane that dies is restarted. The binary re-execs itself
-//! at an idle moment when the file on disk changes (the deploy).
+//! bell instead of leaving; a merge watcher polls GitHub while a PR is in flight and
+//! rings the bell when one closes or comes back; nothing waits on a clock while there
+//! is work. A lane that dies is restarted. The binary re-execs itself at an idle moment
+//! when the file on disk changes (the deploy).
 //!
 //! Repos are walked round-robin — each pass starts one repo later than the last — and
 //! a repo named in `$STATE_DIR/priority` goes first on every pass.
-use crate::config::Repo;
+use crate::config::{LaneSpec, Repo};
 use crate::round::{dev_one, review_one, Opts, Pass};
 use crate::util::{log, mtime, sleep_secs, touch};
 use std::path::{Path, PathBuf};
@@ -26,23 +32,18 @@ pub struct Ctx {
     pub once: bool,
     pub serial: bool,
     pub state_dir: PathBuf,
-    /// tick semantics: leave when the queues are drained and the other lane idle
+    /// tick semantics: leave when the queues are drained and the other lanes idle
     pub until_idle: bool,
-    /// a stage somewhere names claude/*: a third lane takes those rounds, and the dev
-    /// and review lanes leave them alone
-    pub claude_lane: bool,
+    /// the lanes this loop runs, in order
+    pub lanes: Vec<LaneSpec>,
 }
 
-/// The lanes this loop runs: dev and review always, claude when a stage names it.
-pub fn lane_names(ctx: &Ctx) -> Vec<&'static str> {
-    if ctx.claude_lane {
-        vec!["dev", "review", "claude"]
-    } else {
-        vec!["dev", "review"]
-    }
+pub fn lane_names(ctx: &Ctx) -> Vec<String> {
+    ctx.lanes.iter().map(|l| l.name.clone()).collect()
 }
 
-/// Whether any repo's stages name a claude/* worker or reviewer (or conflict_worker).
+/// Whether any repo's stages name a claude/* worker or reviewer (or conflict_worker):
+/// the default lanes then include a claude lane.
 pub fn has_claude_stage(repos: &[PathBuf], model_flag: Option<&str>) -> bool {
     repos.iter().any(|r| {
         let repo = Repo::load(r, model_flag);
@@ -119,46 +120,56 @@ pub fn try_lock(path: &Path) -> Option<std::fs::File> {
 /// Which lanes in this process are mid-pass — between starting to look at their queues
 /// and either claiming a bead (the lane file then says so) or finding nothing. The bash
 /// had only the lane file, and a lane picking slowly looked idle to the other one.
-static PASSING: Mutex<Vec<&'static str>> = Mutex::new(Vec::new());
+static PASSING: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
-fn set_passing(name: &'static str, on: bool) {
-    let mut g = PASSING.lock().unwrap();
-    g.retain(|n| *n != name);
+fn set_passing(name: &str, on: bool) {
+    let mut g = PASSING.lock().unwrap_or_else(|e| e.into_inner());
+    g.retain(|n| n != name);
     if on {
-        g.push(name);
+        g.push(name.to_string());
     }
 }
 
-fn other_busy(ctx: &Ctx, name: &str) -> bool {
-    if PASSING.lock().unwrap().contains(&name) {
+fn lane_busy_anywhere(ctx: &Ctx, name: &str) -> bool {
+    if PASSING.lock().unwrap_or_else(|e| e.into_inner()).iter().any(|n| n == name) {
         return true;
     }
     ctx.repos.iter().any(|r| Repo::load(r, ctx.opts.model_flag.as_deref()).lane_busy(name))
+}
+
+/// Any lane but `name` mid-pass or on a round: the reason a lane with an empty queue
+/// does not leave a tick yet.
+fn others_busy(ctx: &Ctx, name: &str) -> bool {
+    ctx.lanes.iter().filter(|l| l.name != name).any(|l| lane_busy_anywhere(ctx, &l.name))
 }
 
 /// `queued_work`: something a lane would take right now.
 fn queued_work(ctx: &Ctx) -> bool {
     for r in &ctx.repos {
         let repo = Repo::load(r, ctx.opts.model_flag.as_deref());
-        if !repo.paused("review") && !crate::state::review_queue(&repo).is_empty() {
-            return true;
-        }
-        if !repo.paused("dev") && repo.inflight_count() < repo.max_inflight && !crate::state::dev_queue(&repo).is_empty() {
-            return true;
+        for l in &ctx.lanes {
+            if repo.paused(&l.name) {
+                continue;
+            }
+            if l.reviewer && crate::round::pick_runnable(&repo, "review", Some(l)).is_some() {
+                return true;
+            }
+            if l.worker && repo.inflight_count() < repo.max_inflight && crate::round::pick_runnable(&repo, "dev", Some(l)).is_some() {
+                return true;
+            }
         }
     }
     false
 }
 
 /// A snapshot of everything the bell watches: the wake file, each repo's queue
-/// directories and its `.beads/` (a bead labelled or reopened by hand), the pause files.
+/// directories and its `.beads/` (a bead labelled or reopened by hand), the pause and
+/// priority files.
 fn world(ctx: &Ctx) -> Vec<i64> {
-    let mut v = vec![
-        mtime(&ctx.state_dir.join("wake")),
-        mtime(&ctx.state_dir.join("pause.dev")),
-        mtime(&ctx.state_dir.join("pause.review")),
-        mtime(&ctx.state_dir.join("priority")),
-    ];
+    let mut v = vec![mtime(&ctx.state_dir.join("wake")), mtime(&ctx.state_dir.join("priority"))];
+    for l in &ctx.lanes {
+        v.push(mtime(&ctx.state_dir.join(format!("pause.{}", l.name))));
+    }
     for r in &ctx.repos {
         let slug = r.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
         let rs = ctx.state_dir.join(&slug);
@@ -189,26 +200,23 @@ pub fn wait_for_work(ctx: &Ctx, max: f64) {
     }
 }
 
-/// `lane NAME`: one lane's passes over every repo. With `until_idle` it leaves when its
-/// queue is empty and the other lane has looked idle three checks running (the other may
-/// still send something this way); otherwise it blocks on the bell and goes on.
-/// One pass of the Claude lane over a repo: finishing before starting — a review round
-/// whose reviewer is claude/*, else a worker round whose worker is; and after a worker
-/// round, the bead's review round too when that is Claude's as well, so the bead's
-/// rounds stay together (a `--once` tick then carries a Claude bead to its PR, as the
-/// dev+review pair did before the lane existed).
-fn claude_pass(repo: &Repo, opts: &Opts) -> Pass {
-    if review_one(repo, opts, None, Some(true)) == Pass::Worked {
+/// One pass of a lane over a repo: finishing before starting — a reviewer round this
+/// lane takes, else a worker round; and after a worker round, the bead's reviewer round
+/// too when that is this lane's as well (or there is no reviewer: nothing then waits on
+/// a model), so a bead's rounds stay together and a `--once` tick carries it to its PR.
+fn lane_pass(repo: &Repo, opts: &Opts, spec: &LaneSpec) -> Pass {
+    if spec.reviewer && review_one(repo, opts, None, Some(spec)) == Pass::Worked {
         return Pass::Worked;
     }
+    if !spec.worker {
+        return Pass::Nothing;
+    }
     let mut last = None;
-    if dev_one(repo, opts, None, &mut last, Some(true)) == Pass::Worked {
-        if let Some(id) = last {
+    if dev_one(repo, opts, None, &mut last, Some(spec)) == Pass::Worked {
+        if let (Some(id), true) = (last, spec.reviewer) {
             if repo.review_path(&id).exists() {
-                // Claude's own reviewer, or none at all (straight to PR): nothing here waits
-                // on a local model, so it is this lane's to finish.
                 let reviewer = repo.stage_for(repo.failures_of(&id)).map(|s| s.review).unwrap_or_default();
-                if reviewer.starts_with("claude/") || reviewer.is_empty() {
+                if reviewer.is_empty() || spec.takes(&reviewer) {
                     review_one(repo, opts, Some(&id), None);
                 }
             }
@@ -218,20 +226,11 @@ fn claude_pass(repo: &Repo, opts: &Opts) -> Pass {
     Pass::Nothing
 }
 
-/// Any lane but `name` mid-pass or on a round: the reason a lane with an empty queue
-/// does not leave a tick yet.
-fn others_busy(ctx: &Ctx, name: &str) -> bool {
-    lane_names(ctx).into_iter().filter(|n| *n != name).any(|n| other_busy(ctx, n))
-}
-
-pub fn lane(ctx: &Ctx, name: &str, pass_counter: Arc<AtomicUsize>) {
-    // Which rounds this lane takes: with a Claude lane, dev and review leave claude/*
-    // rounds to it; without one, they take everything.
-    let only: Option<bool> = match name {
-        "claude" => Some(true),
-        _ if ctx.claude_lane => Some(false),
-        _ => None,
-    };
+/// `lane NAME`: one lane's passes over every repo. With `until_idle` it leaves when it
+/// finds nothing and the other lanes have looked idle three checks running (one may
+/// still send something this way); otherwise it blocks on the bell and goes on.
+pub fn lane(ctx: &Ctx, spec: &LaneSpec, pass_counter: Arc<AtomicUsize>) {
+    let name = spec.name.as_str();
     let _lock = match try_lock(&ctx.state_dir.join(format!("lock.{name}"))) {
         Some(l) => l,
         None => {
@@ -258,29 +257,18 @@ pub fn lane(ctx: &Ctx, name: &str, pass_counter: Arc<AtomicUsize>) {
         said_paused = false;
         let pass = pass_counter.fetch_add(1, Ordering::SeqCst);
         let mut moved = false;
-        let me: &'static str = match name {
-            "dev" => "dev",
-            "claude" => "claude",
-            _ => "review",
-        };
-        set_passing(me, true);
+        set_passing(name, true);
         for r in repos_in_order(&ctx.repos, &ctx.state_dir, pass) {
             let repo = Repo::load(&r, ctx.opts.model_flag.as_deref());
-            let mut last = None;
-            let p = match name {
-                "dev" => dev_one(&repo, &ctx.opts, None, &mut last, only),
-                "claude" => claude_pass(&repo, &ctx.opts),
-                _ => review_one(&repo, &ctx.opts, None, only),
-            };
-            if p == Pass::Worked {
+            if lane_pass(&repo, &ctx.opts, spec) == Pass::Worked {
                 moved = true;
                 if ctx.once {
-                    set_passing(me, false);
+                    set_passing(name, false);
                     return;
                 }
             }
         }
-        set_passing(me, false);
+        set_passing(name, false);
         if moved {
             idle = 0;
             continue;
@@ -289,10 +277,10 @@ pub fn lane(ctx: &Ctx, name: &str, pass_counter: Arc<AtomicUsize>) {
             return;
         }
         if ctx.until_idle {
-            // Nothing for this lane now; the other may still hand something over. The other
-            // lane looks idle between its rounds too — and at the very start, before it has
-            // claimed anything — so this lane leaves only after seeing it idle three checks
-            // in a row, LANE_WAIT apart.
+            // Nothing for this lane now; another may still hand something over. The others
+            // look idle between their rounds too — and at the very start, before they have
+            // claimed anything — so this lane leaves only after seeing them idle three
+            // checks in a row, LANE_WAIT apart.
             if others_busy(ctx, name) {
                 idle = 0;
             } else {
@@ -315,23 +303,25 @@ fn reconcile_all(ctx: &Ctx) {
     }
 }
 
-/// `tick`: reconcile, both lanes until drained, reconcile.
+/// `tick`: reconcile, every lane until drained, reconcile.
 pub fn tick(ctx: &Ctx) {
     reconcile_all(ctx);
     let mut round = 0;
     loop {
         let counter = Arc::new(AtomicUsize::new(0));
         if ctx.serial {
-            for name in lane_names(ctx) {
-                lane(ctx, name, counter.clone());
+            for spec in &ctx.lanes {
+                lane(ctx, spec, counter.clone());
             }
         } else {
-            let handles: Vec<_> = lane_names(ctx)
-                .into_iter()
-                .map(|name| {
+            let handles: Vec<_> = ctx
+                .lanes
+                .iter()
+                .cloned()
+                .map(|spec| {
                     let c = ctx.clone();
                     let k = counter.clone();
-                    std::thread::spawn(move || lane(&c, name, k))
+                    std::thread::spawn(move || lane(&c, &spec, k))
                 })
                 .collect();
             for h in handles {
@@ -339,8 +329,8 @@ pub fn tick(ctx: &Ctx) {
             }
         }
         round += 1;
-        // Both lanes left. If one left work the other should have taken (a race at startup,
-        // a hand-run lane holding a lock), go round once more rather than wait for the timer.
+        // Every lane left. If one left work another should have taken (a race at startup,
+        // a hand-run lane holding a lock), go round once more rather than wait.
         if !ctx.once && round < 3 && queued_work(ctx) {
             log("lanes done but work is queued; going round again");
             continue;
@@ -356,11 +346,9 @@ pub fn tick(ctx: &Ctx) {
 pub fn recover(ctx: &Ctx) {
     for r in &ctx.repos {
         let repo = Repo::load(r, ctx.opts.model_flag.as_deref());
-        for name in ["dev", "review", "claude"] {
-            if repo.lane_busy(name) {
-                log(&format!("{}: stale lane.{name} from a stop; cleared", repo.slug));
-                repo.lane_clear(name);
-            }
+        for name in repo.lane_files() {
+            log(&format!("{}: stale lane.{name} from a stop; cleared", repo.slug));
+            repo.lane_clear(&name);
         }
         let _ = crate::shell::git(&repo.repo, &["worktree", "prune"]);
         if let Ok(rd) = std::fs::read_dir(repo.rs.join("wt")) {
@@ -420,25 +408,26 @@ pub fn run(ctx: &Ctx) -> ! {
     let exe = std::env::current_exe().ok();
     let exe_stamp = exe.as_ref().map(|p| (mtime(p), std::fs::metadata(p).map(|m| m.len()).unwrap_or(0)));
     let counter = Arc::new(AtomicUsize::new(0));
-    let supervise = |name: &'static str, ctx: Ctx, counter: Arc<AtomicUsize>| {
+    let supervise = |spec: LaneSpec, ctx: Ctx, counter: Arc<AtomicUsize>| {
         std::thread::Builder::new()
-            .name(name.into())
+            .name(spec.name.clone())
             .spawn(move || loop {
                 let c = ctx.clone();
                 let k = counter.clone();
-                let h = std::thread::Builder::new().name(format!("{name}-lane")).spawn(move || lane(&c, name, k));
+                let s = spec.clone();
+                let h = std::thread::Builder::new().name(format!("{}-lane", spec.name)).spawn(move || lane(&c, &s, k));
                 match h {
                     Ok(h) => {
                         let _ = h.join();
                     }
-                    Err(e) => log(&format!("cannot start the {name} lane: {e}")),
+                    Err(e) => log(&format!("cannot start the {} lane: {e}", spec.name)),
                 }
-                log(&format!("{name} lane stopped; starting it again in 10 s"));
+                log(&format!("{} lane stopped; starting it again in 10 s", spec.name));
                 sleep_secs(10.0);
             })
             .expect("lane thread")
     };
-    let _lanes: Vec<_> = lane_names(ctx).into_iter().map(|name| supervise(name, ctx.clone(), counter.clone())).collect();
+    let _lanes: Vec<_> = ctx.lanes.iter().cloned().map(|spec| supervise(spec, ctx.clone(), counter.clone())).collect();
     let wctx = ctx.clone();
     let _w = std::thread::Builder::new()
         .name("watcher".into())
@@ -457,10 +446,7 @@ pub fn run(ctx: &Ctx) -> ! {
         if let (Some(exe), Some((m, len))) = (&exe, exe_stamp) {
             let now_stamp = (mtime(exe), std::fs::metadata(exe).map(|x| x.len()).unwrap_or(0));
             if now_stamp != (m, len) && now_stamp.0 != 0 {
-                let busy = ctx.repos.iter().any(|r| {
-                    let repo = Repo::load(r, ctx.opts.model_flag.as_deref());
-                    repo.lane_busy("dev") || repo.lane_busy("review") || repo.lane_busy("claude")
-                });
+                let busy = ctx.repos.iter().any(|r| !Repo::load(r, ctx.opts.model_flag.as_deref()).lane_files().is_empty());
                 if !busy {
                     log("binary changed on disk and the lanes are idle: re-exec");
                     use std::os::unix::process::CommandExt;

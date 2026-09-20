@@ -131,7 +131,16 @@ pub fn gh_stdout_any(repo: &Repo, args: &[&str]) -> String {
 }
 
 // ---- git --------------------------------------------------------------------------
+/// The lanes share one repository (its worktrees share .git), and git refuses a second
+/// writer while one holds a lock file: two lanes adding worktrees, fetching, or deleting
+/// branches at once would fail one of them ("Unable to create ...lock: File exists") —
+/// seen on a slow CI runner. The mutating subcommands take this lock; reads, diffs,
+/// commits and pushes inside a worktree do not need it.
+static GIT_MUTATION: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 pub fn git(dir: &Path, args: &[&str]) -> std::io::Result<Output> {
+    let serialized = matches!(args.first().copied(), Some("worktree" | "branch" | "fetch" | "checkout"));
+    let _guard = if serialized { Some(GIT_MUTATION.lock().unwrap_or_else(|e| e.into_inner())) } else { None };
     output(cmd("git").arg("-C").arg(dir).args(args))
 }
 

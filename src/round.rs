@@ -7,7 +7,7 @@
 //!
 //! The log lines and the notes are the bash's, word for word: the page and the tests
 //! read them.
-use crate::config::Repo;
+use crate::config::{LaneSpec, Repo};
 use crate::harness::{abort_sessions, run_agent, runnable};
 use crate::shell::{
     bd_claim, bd_comment, bd_note, bd_show, bd_status, branch_exists, gh, git, git_must, git_ok, git_out, local_branch_exists,
@@ -133,11 +133,10 @@ fn hold_expired(repo: &Repo, id: &str) -> bool {
 /// `pick_runnable dev|review`: the first bead in that queue whose round's model can run
 /// now and whose hold (if any) has aged; the ones skipped are logged once per pass.
 ///
-/// `only`: which server's rounds this lane takes — `Some(true)` only rounds whose model
-/// is `claude/*` (the Claude lane), `Some(false)` only the rest (the dev and review lanes
-/// when a Claude lane exists), `None` any (a hand-run `work`, or a loop with no Claude
-/// stage). A bead on the Claude stage never waits behind the GPU this way.
-pub fn pick_runnable(repo: &Repo, which: &str, only: Option<bool>) -> Option<String> {
+/// `lane`: the lane asking — it takes only the rounds whose model it matches
+/// (config.rs `LaneSpec`); `None` takes any (a hand-run `work`). A bead on the Claude
+/// stage never waits behind the GPU this way, nor a CPU-box round behind the GPU's.
+pub fn pick_runnable(repo: &Repo, which: &str, lane: Option<&LaneSpec>) -> Option<String> {
     let queue = if which == "dev" { dev_queue(repo) } else { review_queue(repo) };
     let mut skipped_claude = 0;
     let mut pick = None;
@@ -148,10 +147,12 @@ pub fn pick_runnable(repo: &Repo, which: &str, only: Option<bool>) -> Option<Str
         let n = repo.failures_of(&id);
         // The model this round runs on: the stage's worker or reviewer — or, for a bead
         // sent back with a conflict, the rebase worker (conflict_worker, else the last
-        // stage's). A bead whose stages are exhausted is the dev lane's to park.
+        // stage's). A bead whose stages are exhausted is the first lane's to park; a
+        // round with no reviewer (straight to PR) names no model and is the first
+        // reviewing lane's.
         let model = match repo.stage_for(n) {
             None => {
-                if only == Some(true) {
+                if lane.map(|l| !l.parks).unwrap_or(false) {
                     continue;
                 }
                 pick = Some(id);
@@ -171,11 +172,11 @@ pub fn pick_runnable(repo: &Repo, which: &str, only: Option<bool>) -> Option<Str
                 }
             }
         };
-        let is_claude = model.starts_with("claude/");
-        match only {
-            Some(true) if !is_claude => continue,
-            Some(false) if is_claude => continue,
-            _ => {}
+        if let Some(l) = lane {
+            let mine = if model == "none" { l.fallback || l.takes("none") } else { l.takes(&model) };
+            if !mine {
+                continue;
+            }
         }
         if runnable(&model) {
             pick = Some(id);
@@ -293,29 +294,29 @@ pub fn conflict_model(repo: &Repo) -> Option<String> {
     repo.stage_for(repo.last_stage_start()).map(|s| s.model)
 }
 
-pub fn dev_one(repo: &Repo, opts: &Opts, id: Option<&str>, last_id: &mut Option<String>, only: Option<bool>) -> Pass {
+pub fn dev_one(repo: &Repo, opts: &Opts, id: Option<&str>, last_id: &mut Option<String>, lane: Option<&LaneSpec>) -> Pass {
     let id = match id {
         Some(i) => i.to_string(),
         None => {
             // The two idle lines: every pass in a tick (the bash did), once per change in
             // the resident loop, which passes every heartbeat.
-            let lane = if only == Some(true) { "claude" } else { "dev" };
+            let name = lane.map(|l| l.name.as_str()).unwrap_or("dev");
             if repo.inflight_count() >= repo.max_inflight {
                 crate::merge::say(
-                    &format!("{}/{lane}-idle", repo.slug),
-                    format!("{}: {lane}: {} in flight (max {}); waiting on CI", repo.slug, repo.inflight_count(), repo.max_inflight),
+                    &format!("{}/{name}-idle", repo.slug),
+                    format!("{}: {name}: {} in flight (max {}); waiting on CI", repo.slug, repo.inflight_count(), repo.max_inflight),
                 );
                 return Pass::Nothing;
             }
-            match pick_runnable(repo, "dev", only) {
+            match pick_runnable(repo, "dev", lane) {
                 Some(i) => i,
                 None => {
                     crate::merge::say(
-                        &format!("{}/{lane}-idle", repo.slug),
-                        if only == Some(true) {
-                            format!("{}: claude: nothing on the Claude stage", repo.slug)
-                        } else {
+                        &format!("{}/{name}-idle", repo.slug),
+                        if name == "dev" {
                             format!("{}: dev: nothing ready with label {}", repo.slug, repo.label)
+                        } else {
+                            format!("{}: {name}: nothing queued for this lane", repo.slug)
                         },
                     );
                     return Pass::Nothing;
@@ -533,10 +534,10 @@ fn last_line_starting(text: &str, prefix: &str) -> Option<String> {
 }
 
 /// `review_one [ID]`
-pub fn review_one(repo: &Repo, opts: &Opts, id: Option<&str>, only: Option<bool>) -> Pass {
+pub fn review_one(repo: &Repo, opts: &Opts, id: Option<&str>, lane: Option<&LaneSpec>) -> Pass {
     let id = match id {
         Some(i) => i.to_string(),
-        None => match pick_runnable(repo, "review", only) {
+        None => match pick_runnable(repo, "review", lane) {
             Some(i) => i,
             None => return Pass::Nothing,
         },

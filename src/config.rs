@@ -292,9 +292,150 @@ fn origin_head(repo: &Path) -> String {
     String::new()
 }
 
+/// One lane: it takes the rounds whose model matches `models` (globs: `devbox/*`, or
+/// `*` alone) and none of `exclude`, in the roles it has. `[[lanes]]` in the global
+/// config; without it, the pair the loop always had — `dev` (worker rounds) and `review`
+/// (reviewer rounds) — plus a `claude` lane when a stage names `claude/*`.
+///
+/// ```toml
+/// [[lanes]]
+/// name = "gpu"
+/// models = ["devbox/*"]
+/// [[lanes]]
+/// name = "cpu"
+/// models = ["acbox/*"]       # roles = ["worker", "reviewer"] is the default
+/// [[lanes]]
+/// name = "claude"
+/// models = ["claude/*"]
+/// ```
+#[derive(Clone, Debug, PartialEq)]
+pub struct LaneSpec {
+    pub name: String,
+    pub models: Vec<String>,
+    pub exclude: Vec<String>,
+    pub worker: bool,
+    pub reviewer: bool,
+    /// the first lane: it also parks a bead whose stages are exhausted
+    pub parks: bool,
+    /// the first lane with the reviewer role: it also takes a round with no reviewer
+    /// (straight to PR), which names no model for a pattern to match
+    pub fallback: bool,
+}
+
+pub fn glob_match(pat: &str, s: &str) -> bool {
+    if pat == "*" {
+        true
+    } else if let Some(p) = pat.strip_suffix('*') {
+        s.starts_with(p)
+    } else {
+        pat == s
+    }
+}
+
+impl LaneSpec {
+    pub fn takes(&self, model: &str) -> bool {
+        self.models.iter().any(|p| glob_match(p, model)) && !self.exclude.iter().any(|p| glob_match(p, model))
+    }
+}
+
+impl Layers {
+    /// The lanes, from `[[lanes]]` in the global file, else the defaults.
+    pub fn lanes(&self, has_claude: bool) -> Vec<LaneSpec> {
+        if let Some(Value::Array(a)) = self.global.get("lanes") {
+            if !a.is_empty() {
+                let mut first_reviewer = true;
+                return a
+                    .iter()
+                    .enumerate()
+                    .map(|(i, l)| {
+                        let strs = |k: &str| -> Vec<String> {
+                            match l.get(k) {
+                                Some(Value::Array(v)) => v.iter().filter_map(|s| s.as_str()).map(str::to_string).collect(),
+                                Some(Value::String(s)) => vec![s.clone()],
+                                _ => Vec::new(),
+                            }
+                        };
+                        let roles = strs("roles");
+                        let worker = roles.is_empty() || roles.iter().any(|r| r == "worker");
+                        let reviewer = roles.is_empty() || roles.iter().any(|r| r == "reviewer");
+                        let fallback = reviewer && first_reviewer;
+                        if reviewer {
+                            first_reviewer = false;
+                        }
+                        let mut models = strs("models");
+                        if models.is_empty() {
+                            models.push("*".into());
+                        }
+                        LaneSpec {
+                            name: l.get("name").and_then(|n| n.as_str()).unwrap_or(&format!("lane{}", i + 1)).to_string(),
+                            models,
+                            exclude: strs("exclude"),
+                            worker,
+                            reviewer,
+                            parks: i == 0,
+                            fallback,
+                        }
+                    })
+                    .collect();
+            }
+        }
+        let exclude: Vec<String> = if has_claude { vec!["claude/*".into()] } else { Vec::new() };
+        let mut v = vec![
+            LaneSpec {
+                name: "dev".into(),
+                models: vec!["*".into()],
+                exclude: exclude.clone(),
+                worker: true,
+                reviewer: false,
+                parks: true,
+                fallback: false,
+            },
+            LaneSpec {
+                name: "review".into(),
+                models: vec!["*".into()],
+                exclude,
+                worker: false,
+                reviewer: true,
+                parks: false,
+                fallback: true,
+            },
+        ];
+        if has_claude {
+            v.push(LaneSpec {
+                name: "claude".into(),
+                models: vec!["claude/*".into()],
+                exclude: Vec::new(),
+                worker: true,
+                reviewer: true,
+                parks: false,
+                fallback: false,
+            });
+        }
+        v
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lanes_default_and_from_toml() {
+        let l = layers("", "");
+        let names: Vec<String> = l.lanes(true).into_iter().map(|s| s.name).collect();
+        assert_eq!(names, ["dev", "review", "claude"]);
+        assert_eq!(l.lanes(false).len(), 2);
+        assert!(!l.lanes(true)[0].takes("claude/opus") && l.lanes(true)[0].takes("devbox/coder"));
+        let l = layers(
+            "[[lanes]]\nname = \"gpu\"\nmodels = [\"devbox/*\"]\n[[lanes]]\nname = \"cpu\"\nmodels = [\"acbox/*\"]\nroles = [\"worker\"]",
+            "",
+        );
+        let v = l.lanes(true);
+        assert_eq!(v.len(), 2, "[[lanes]] replaces the defaults, claude lane included");
+        assert!(v[0].takes("devbox/coder") && !v[0].takes("acbox/coder") && v[0].parks && v[0].reviewer && v[0].fallback);
+        assert!(v[1].worker && !v[1].reviewer && !v[1].fallback);
+        assert!(glob_match("*", "anything") && glob_match("a/*", "a/b") && !glob_match("a/b", "a/c"));
+    }
 
     fn layers(global: &str, repo: &str) -> Layers {
         let g: toml::Table = global.parse().unwrap();

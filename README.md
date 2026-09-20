@@ -102,16 +102,35 @@ The lanes walk the repos **round-robin** — each pass starts one repo later tha
 so no repo is always last — and a repo made the **priority** (`bead-supervisor priority
 REPO`, or ★ on the page) goes first on every pass until you clear it.
 
-A stage that names `claude/*` gets a lane of its own, the **Claude lane**: it takes every
-round whose model is Claude's — a worker round for a bead on that stage, a reviewer round
-whose reviewer is Claude, a rebase round when `conflict_worker` is — and the dev and
-review lanes leave those alone. A bead escalated to Claude runs at once, on Anthropic,
-while the GPU and the CPU go on with theirs; it never queues behind them. The Claude lane
-keeps a bead's rounds together (worker, then its Claude reviewer), and pauses on its own
-(`pause claude`). With Claude signed out it waits, saying so, and takes the beads the
-moment Sign in completes. (Before this lane existed, two beads escalated to Claude sat
-in the dev queue for a day behind fresh beads: fewest failures first put them last, and
-the one dev lane was the GPU's.)
+**A lane per model server.** The two lanes above are the default split by *role*; the
+scarce thing is the *server*, and a round on the CPU box should never hold the GPU's
+queue. `[[lanes]]` in the global config replaces the defaults with lanes keyed by model:
+
+```toml
+[[lanes]]
+name = "gpu"
+models = ["devbox/*"]
+[[lanes]]
+name = "cpu"
+models = ["acbox/*"]
+[[lanes]]
+name = "claude"
+models = ["claude/*"]
+```
+
+Each lane takes every round — worker or reviewer, and a rebase round when
+`conflict_worker` is its — whose model matches one of its globs (`roles = ["worker"]`
+narrows it; `exclude` carves out). So a stage-2 worker round on acbox runs in the `cpu`
+lane while the `gpu` lane goes on with stage-1 beads, and a bead escalated to Claude runs
+at once, on Anthropic, never behind either. A lane keeps a bead's rounds together
+(worker, then its reviewer when that is the same lane's, or straight to PR with none),
+pauses on its own (`pause cpu`), and shows as its own panel on the page. The first lane
+also parks beads whose stages are exhausted; the first reviewing lane also takes rounds
+with no reviewer. Without `[[lanes]]`, a stage naming `claude/*` still gets its own
+`claude` lane beside `dev` and `review`. With Claude signed out its lane waits, saying so,
+and takes the beads the moment Sign in completes. (Before lanes per server, two beads
+escalated to Claude sat in the dev queue for a day behind fresh beads: fewest failures
+first put them last, and the one dev lane was the GPU's.)
 
 The loop reads the world afresh on every round (both config files, bd, the state dir), so
 an edit takes effect on the next round. The binary watches its own path: after a deploy
@@ -187,6 +206,7 @@ the global one; the global one wins over the default. Anything may go in either.
 | Key | Default | What |
 | --- | --- | --- |
 | `repos` | `[]` | global only: the repos the lanes walk, `~` allowed |
+| `[[lanes]]` | `dev` + `review` (+ `claude`) | global only: the lanes, one per model server — `name`, `models` (globs: `devbox/*`, `acbox/*`, `claude/*`, `*`), `roles` (`worker`, `reviewer`; both by default), `exclude`. Each takes the rounds whose model it matches. Unset: the pair by role, plus a `claude` lane when a stage names `claude/*` |
 | `label` | `"delegate:local"` | `bd ready -l LABEL` picks the work; the loop claims, notes and closes beads as this actor, not as you (`BEADS_ACTOR` in its environment overrides) |
 | `base` | origin's HEAD | branch to fork from and PR into |
 | `setup` | none | runs in a fresh worktree before the worker (`npm ci`); not again on a branch sent back. It failing holds the bead, no failure: setup runs on the base, so it cannot be the bead's fault |

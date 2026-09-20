@@ -271,7 +271,9 @@ function prChips(p, now, r) {
 // for it and the lever to stop it. This is the page's answer to "what is being worked".
 function lanePanel(r, name, now, ticking) {
   const l = r.lanes[name];
-  const role = name === 'dev' ? 'worker' : name === 'claude' ? 'worker or reviewer · Anthropic, waits on no local model' : 'reviewer';
+  // The lane's role: the default pair split by role; a configured lane ([[lanes]]) or
+  // the claude lane takes both roles for its models.
+  const role = name === 'dev' ? 'worker' : name === 'review' ? 'reviewer' : name === 'claude' ? 'worker or reviewer · Anthropic, waits on no local model' : 'worker or reviewer · its models’ rounds';
   const paused = r.paused && r.paused[name];
   const pauseBtn = `<button ${busyAction ? 'disabled' : ''} onclick="act('lane',{name:'${name}',paused:${!paused}})">${paused ? 'Resume lane' : 'Pause lane'}</button>`;
   if (!l) {
@@ -283,6 +285,8 @@ function lanePanel(r, name, now, ticking) {
       ? (r.queues.dev.length === 0 ? 'dev queue empty' : capped ? `waiting on CI (${r.max_inflight} in flight is the limit)` : heldOnly(r.queues.dev) ? 'every bead in the queue is held — see Needs you' : r.queues.dev.every(onClaude) ? 'only Claude-stage beads queued — the Claude lane has them' : ticking ? 'starting…' : 'the loop is down')
       : name === 'claude'
       ? (claudeQueued === 0 ? 'nothing on the Claude stage' : r.claude_ok === false ? `${claudeQueued} waiting — Claude is signed out (Sign in at the top)` : ticking ? 'starting…' : 'the loop is down')
+      : name !== 'review'
+      ? (ticking ? 'nothing queued for its models' : 'the loop is down')
       : (r.queues.review.length === 0 ? 'review queue empty' : heldOnly(r.queues.review) ? 'every bead in the queue is held — see Needs you' : ticking ? 'starting…' : 'the loop is down');
     return `<div class="lane idle ${name}${paused ? ' paused' : ''}"><div class="label">${name} lane ${paused ? '<span class="chip warn">paused</span>' : ''}<span class="act">${pauseBtn}</span></div><div class="what">${paused ? 'paused — starts no new round until resumed' : `idle — ${esc(why)}`}</div></div>`;
   }
@@ -368,7 +372,7 @@ function repo(r, now, ticking) {
     : `<button ${busyAction ? 'disabled' : ''} class="prio" onclick="act('priority',{repo:${js(r.repo)}})" title="the lanes look at this repo first on every pass">☆ make priority</button>`;
   return `<section class="card" id="repo-${esc(r.slug)}">
     <h2>${esc(r.slug)} ${prio} <span class="cfg">${esc(r.label)} · ${esc(r.base)} · merge ${esc(r.merge)} · stages: ${stages} · then ${esc(r.on_exhaust)}${r.attach ? '' : ' · <b>no attach</b>: sessions not visible'}</span></h2>
-    <div class="lanes">${lanePanel(r, 'dev', now, ticking)}${lanePanel(r, 'review', now, ticking)}${r.stages.some((st) => /^claude\//.test(st.worker + ' ' + (st.reviewer || ''))) || (r.conflict_worker || '').startsWith('claude/') ? lanePanel(r, 'claude', now, ticking) : ''}</div>
+    <div class="lanes">${(r.lane_names || ['dev', 'review']).map((n) => lanePanel(r, n, now, ticking)).join('')}</div>
     <div class="queues">${queueCol('dev', r.queues.dev, r, now)}${queueCol('review', r.queues.review, r, now)}${queueCol('merge', r.queues.merge, r, now)}${claudeCol(r)}</div>
     ${strays(r, now)}
     <h3 class="human">Needs you<span class="n">${r.parked.length + (r.held || []).length}</span><span class="note">a question the last stage could not answer, stages exhausted, a PR closed unmerged — or a bead held in its queue by something outside the loop — it waits here until you act, or the world changes</span></h3>${human}${held}

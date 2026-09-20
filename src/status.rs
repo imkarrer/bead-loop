@@ -161,10 +161,18 @@ pub fn status_json(repo: &Repo) -> Value {
             Value::Object(m)
         })
         .collect();
-    // lanes
+    // lanes: the configured ones ([[lanes]] in the global file), else dev + review, plus
+    // claude when this repo's stages name it — the same list the loop runs.
+    let has_claude = repo.stages.iter().any(|s| s.worker.starts_with("claude/") || s.reviewer.starts_with("claude/"))
+        || repo.conflict_worker.starts_with("claude/");
+    let specs = crate::config::Layers::load(&crate::config::config_dir().join("config.toml"), None).lanes(has_claude);
+    let lane_names: Vec<String> = specs.iter().map(|l| l.name.clone()).collect();
     let mut lanes = Map::new();
     let mut laneids = Vec::new();
-    for name in ["dev", "review", "claude"] {
+    for name in lane_names.iter().map(String::as_str).chain(repo.lane_files().iter().map(String::as_str)) {
+        if lanes.contains_key(name) {
+            continue;
+        }
         if let Some(id) = repo.lane_bead(name) {
             let mut m = bead_json(repo, &byid, &id);
             m.insert("since".into(), json!(mtime(&repo.lane_path(name))));
@@ -172,6 +180,7 @@ pub fn status_json(repo: &Repo) -> Value {
             laneids.push(id);
         }
     }
+    let paused: Map<String, Value> = lane_names.iter().map(|n| (n.clone(), json!(repo.paused(n)))).collect();
     let review_ids = review_queue(repo);
     let dev: Vec<Value> = dev_queue(repo)
         .into_iter()
@@ -254,7 +263,8 @@ pub fn status_json(repo: &Repo) -> Value {
         "stages": stages, "on_exhaust": repo.on_exhaust,
         "conflict_worker": if repo.conflict_worker.is_empty() { Value::Null } else { json!(repo.conflict_worker) },
         "lanes": lanes,
-        "paused": {"dev": repo.paused("dev"), "review": repo.paused("review"), "claude": repo.paused("claude")},
+        "lane_names": lane_names,
+        "paused": paused,
         "claude_ok": if has_claude { json!(claude_ok()) } else { Value::Null },
         "priority": priority,
         "queues": {"dev": dev, "review": review, "merge": merge},
@@ -310,15 +320,15 @@ pub fn status_one(repo: &Repo) -> String {
         stages.join(" → "),
         if j["priority"].as_bool().unwrap_or(false) { "  [priority]" } else { "" }
     ));
-    let has_claude = j["stages"]
+    let lane_rows: Vec<(String, String)> = j["lane_names"]
         .as_array()
-        .map(|a| a.iter().any(|st| s(st, "worker").starts_with("claude/") || s(st, "reviewer").starts_with("claude/")))
-        .unwrap_or(false);
-    let mut lane_rows = vec![("dev", "  dev lane:    "), ("review", "  review lane: ")];
-    if has_claude {
-        lane_rows.push(("claude", "  claude lane: "));
-    }
+        .into_iter()
+        .flatten()
+        .filter_map(|n| n.as_str())
+        .map(|n| (n.to_string(), format!("  {:<13}", format!("{n} lane:"))))
+        .collect();
     for (name, label) in lane_rows {
+        let name = name.as_str();
         let l = &j["lanes"][name];
         let what = if l.is_object() {
             format!("{} {} ({})", s(l, "id"), s(l, "title"), age(l["since"].as_i64().unwrap_or(0)))

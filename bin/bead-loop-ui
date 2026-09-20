@@ -222,7 +222,10 @@ const actions = {
   async wake() { await supervisor(['wake']); return { woke: true }; },
   // lane {name, paused}: the lane starts no new round until resumed; the other goes on.
   async lane({ name, paused }) {
-    if (name !== 'dev' && name !== 'review' && name !== 'claude') throw new Error('lane is dev, review or claude');
+    // A lane name from the page: one of the configured lanes ([[lanes]]), or the defaults.
+    if (!/^[a-z][a-z0-9_-]{0,31}$/.test(String(name || ''))) throw new Error('bad lane name');
+    const repos = await knownRepos();
+    if (!repos.some((r) => (r.lane_names || ['dev', 'review']).includes(name))) throw new Error(`no lane named ${name}`);
     await supervisor([paused ? 'pause' : 'resume', name]);
     return { lane: name, paused: !!paused };
   },
