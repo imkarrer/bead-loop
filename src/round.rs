@@ -92,6 +92,9 @@ pub fn run_gate(repo: &Repo, wt: &Path, logf: &Path) -> bool {
     if repo.gate.is_empty() {
         return true;
     }
+    if signals::stopping() {
+        return false; // the caller finds the stop, not a failed gate
+    }
     log(&format!("{}: gate: {}", repo.slug, repo.gate));
     run_shell_to(&repo.gate, wt, logf)
 }
@@ -192,6 +195,23 @@ pub fn pick_runnable(repo: &Repo, which: &str, lane: Option<&LaneSpec>) -> Optio
     pick
 }
 
+/// A worker, gate or reviewer that came back while the loop is stopping came back
+/// because of the stop — its session aborted, its process signalled — not because of
+/// the bead. Nothing is judged: no failure, no note, the branch and the worktree stay,
+/// the bead stays where it is (in_progress with a worktree, or in the review queue),
+/// which is exactly what `recover` reopens at the next start with no failure charged.
+/// The lane then has nothing left to do: it says so, and waits for the process to go
+/// (the signal thread exits once every lane on a round has said so, or after a moment).
+fn cut_short(repo: &Repo, id: &str) {
+    if !signals::stopping() {
+        return;
+    }
+    log(&format!("{}: {id}: round cut short by the stop; nothing charged, recover reopens it", repo.slug));
+    signals::ack_stop();
+    loop {
+        crate::util::sleep_secs(1.0);
+    }
+}
 /// Drop the marker of whichever lane is on this bead — found by its content, not by a
 /// fixed name: the lanes are named by the config (gpu, cpu, claude), and two rounds in
 /// one repo must not share a file. A bead on no lane (the watcher's send-back of a red
@@ -528,6 +548,7 @@ pub fn dev_one(repo: &Repo, opts: &Opts, id: Option<&str>, last_id: &mut Option<
     let title_w = format!("{id} · worker · round {}", n + 1);
     let worker_log = std::path::PathBuf::from(format!("{}.worker.jsonl", logf.display()));
     let r = run_agent(repo, "bead-worker", &model, &wt, &worker_log, &prompt, &title_w, timeout, Some(&json));
+    cut_short(repo, &id);
     if r.rc != 0 {
         if r.empty && r.rc != 124 {
             // Nothing came back at all and it was not the clock: the harness or its server,
@@ -569,12 +590,14 @@ pub fn dev_one(repo: &Repo, opts: &Opts, id: Option<&str>, last_id: &mut Option<
     let gate_log = std::path::PathBuf::from(format!("{}.gate", logf.display()));
     let mut final_text = r.text;
     if !run_gate(repo, &wt, &gate_log) {
+        cut_short(repo, &id);
         log(&format!("{}: {id}: gate failed, fix round", repo.slug));
         let gate_out = tail_lines(&read_to_string(&gate_log).unwrap_or_default(), 40);
         let fix_prompt = gate_fix_prompt(&prompt, &repo.gate, &gate_out);
         let fix_log = std::path::PathBuf::from(format!("{}.worker-gate.jsonl", logf.display()));
         let r2 =
             run_agent(repo, "bead-worker", &model, &wt, &fix_log, &fix_prompt, &format!("{id} · worker · gate fix"), timeout, Some(&json));
+        cut_short(repo, &id);
         if r2.rc != 0 {
             send_back(
                 repo,
@@ -595,6 +618,7 @@ pub fn dev_one(repo: &Repo, opts: &Opts, id: Option<&str>, last_id: &mut Option<
         settle_worktree(repo, &wt, &format!("{id}: fix the gate"));
         let gate2 = std::path::PathBuf::from(format!("{}.gate-2", logf.display()));
         if !run_gate(repo, &wt, &gate2) {
+            cut_short(repo, &id);
             let tail = tail_lines(&read_to_string(&gate2).unwrap_or_default(), 15);
             send_back(repo, &id, &wt, false, &format!("gate failed twice: {}\n{tail}", repo.gate), &model, st.last, Some(&logf));
             return Pass::Worked;
@@ -676,6 +700,7 @@ pub fn review_one(repo: &Repo, opts: &Opts, id: Option<&str>, lane: Option<&Lane
             timeout,
             Some(&json),
         );
+        cut_short(repo, &id);
         if r.rc != 0 {
             if r.empty && r.rc != 124 {
                 let err = tail_lines(&read_to_string(&review_log.with_extension("jsonl.err")).unwrap_or_default(), 5);

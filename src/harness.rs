@@ -36,6 +36,10 @@ pub fn run_agent(
     timeout: u64,
     bead_json: Option<&Value>,
 ) -> AgentRun {
+    if signals::stopping() {
+        // No session starts under a stop: the caller finds the stop (round.rs cut_short).
+        return AgentRun { text: String::new(), full: String::new(), rc: 143, empty: true };
+    }
     let err_path = logf.with_file_name(format!("{}.err", logf.file_name().unwrap().to_string_lossy()));
     let stdout = std::fs::File::create(logf).ok();
     let stderr = std::fs::File::create(&err_path).ok();
