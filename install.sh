@@ -46,6 +46,16 @@ on_exhaust = "park"              # after the last stage: park (for you) | repeat
 # [[stages]]
 # worker = "devbox/coder"
 # failures = 3
+# The lanes, one per model server; unset: dev + review by role (+ claude when a stage names it).
+# [[lanes]]
+# name = "gpu"
+# models = ["devbox/*"]
+# [[lanes]]
+# name = "cpu"
+# models = ["acbox/*"]
+# [[lanes]]
+# name = "claude"
+# models = ["claude/*"]
 CFG
   echo "config ~/.config/bead-loop/config.toml (set repos)"
 fi

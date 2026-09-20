@@ -222,7 +222,10 @@ const actions = {
   async wake() { await supervisor(['wake']); return { woke: true }; },
   // lane {name, paused}: the lane starts no new round until resumed; the other goes on.
   async lane({ name, paused }) {
-    if (name !== 'dev' && name !== 'review') throw new Error('lane is dev or review');
+    // A lane name from the page: one of the configured lanes ([[lanes]]), or the defaults.
+    if (!/^[a-z][a-z0-9_-]{0,31}$/.test(String(name || ''))) throw new Error('bad lane name');
+    const repos = await knownRepos();
+    if (!repos.some((r) => (r.lane_names || ['dev', 'review']).includes(name))) throw new Error(`no lane named ${name}`);
     await supervisor([paused ? 'pause' : 'resume', name]);
     return { lane: name, paused: !!paused };
   },
@@ -295,6 +298,21 @@ const actions = {
     if (!repos.some((r) => r.repo === repo)) throw new Error('unknown repo');
     await supervisor(['answer', repo, id, String(text).trim()]);
     return { answered: id };
+  },
+  // decide {repo, id, text}: your answer to a decision bead — `bd close ID --reason
+  // "decided: TEXT"`, the reason being where whoever asked reads it; then the bell, since
+  // beads that depended on the decision are ready now.
+  async decide({ repo, id, text }) {
+    if (!ID.test(String(id || ''))) throw new Error('bad bead id');
+    if (!String(text || '').trim()) throw new Error('write the decision first');
+    const repos = await knownRepos();
+    const rp = repos.find((r) => r.repo === repo);
+    if (!rp) throw new Error('unknown repo');
+    if (!(rp.decisions || []).some((d) => d.id === id)) throw new Error(`${id} is not an open decision`);
+    const r = await run('bd', ['close', id, '--reason', `decided: ${String(text).trim()}`], { cwd: repo });
+    if (!r.ok) throw new Error(r.stderr.trim() || `bd exited ${r.code}`);
+    await run(SUPERVISOR, ['wake']);
+    return { decided: id };
   },
   // reopen {repo, id}: a parked bead back in the queue, `bd update ID --status open`,
   // then the bell. A bead under a PR is refused: the merge queue is what moves it.

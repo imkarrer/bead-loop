@@ -88,10 +88,25 @@ pub fn run_agent(
         c.current_dir(dir);
         rc = run_to_files(&mut c, stdout, stderr);
         let raw = read_to_string(logf).unwrap_or_default();
-        let result = serde_json::from_str::<Value>(&raw)
-            .ok()
-            .and_then(|v| v.get("result").and_then(|r| r.as_str()).map(str::to_string))
-            .unwrap_or_default();
+        let v = serde_json::from_str::<Value>(&raw).ok();
+        let result = v.as_ref().and_then(|v| v.get("result").and_then(|r| r.as_str()).map(str::to_string)).unwrap_or_default();
+        // Claude Code answers an expired sign-in or an API refusal with a JSON error and
+        // not one token spent: that is the harness failing, not the model's round. Say
+        // so (the caller holds the bead) and forget the sign-in probe so the next pick
+        // asks again rather than trust a minute-old "signed in".
+        let api_error = v
+            .as_ref()
+            .map(|v| {
+                v.get("is_error").and_then(|b| b.as_bool()).unwrap_or(false)
+                    && v.pointer("/usage/input_tokens").and_then(|n| n.as_u64()).unwrap_or(0) == 0
+            })
+            .unwrap_or(false);
+        if api_error {
+            log(&format!("{}: claude did nothing: {}", repo.slug, result.lines().next().unwrap_or("")));
+            forget_probes();
+            let _ = std::fs::write(&err_path, result.as_bytes());
+            let _ = std::fs::write(logf, b"");
+        }
         text = tail_lines(&result, 20);
     } else {
         // --title: the session's name in the web UI, said by us. Left to opencode, a model

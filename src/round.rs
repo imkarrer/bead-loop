@@ -7,7 +7,7 @@
 //!
 //! The log lines and the notes are the bash's, word for word: the page and the tests
 //! read them.
-use crate::config::Repo;
+use crate::config::{LaneSpec, Repo};
 use crate::harness::{abort_sessions, run_agent, runnable};
 use crate::shell::{
     bd_claim, bd_comment, bd_note, bd_show, bd_status, branch_exists, gh, git, git_must, git_ok, git_out, local_branch_exists,
@@ -132,7 +132,11 @@ fn hold_expired(repo: &Repo, id: &str) -> bool {
 
 /// `pick_runnable dev|review`: the first bead in that queue whose round's model can run
 /// now and whose hold (if any) has aged; the ones skipped are logged once per pass.
-pub fn pick_runnable(repo: &Repo, which: &str) -> Option<String> {
+///
+/// `lane`: the lane asking — it takes only the rounds whose model it matches
+/// (config.rs `LaneSpec`); `None` takes any (a hand-run `work`). A bead on the Claude
+/// stage never waits behind the GPU this way, nor a CPU-box round behind the GPU's.
+pub fn pick_runnable(repo: &Repo, which: &str, lane: Option<&LaneSpec>) -> Option<String> {
     let queue = if which == "dev" { dev_queue(repo) } else { review_queue(repo) };
     let mut skipped_claude = 0;
     let mut pick = None;
@@ -141,26 +145,44 @@ pub fn pick_runnable(repo: &Repo, which: &str) -> Option<String> {
             continue;
         }
         let n = repo.failures_of(&id);
-        match repo.stage_for(n) {
+        // The model this round runs on: the stage's worker or reviewer — or, for a bead
+        // sent back with a conflict, the rebase worker (conflict_worker, else the last
+        // stage's). A bead whose stages are exhausted is the first lane's to park; a
+        // round with no reviewer (straight to PR) names no model and is the first
+        // reviewing lane's.
+        let model = match repo.stage_for(n) {
             None => {
+                if lane.map(|l| !l.parks).unwrap_or(false) {
+                    continue;
+                }
                 pick = Some(id);
                 break;
             }
             Some(st) => {
-                let model = if which == "dev" {
-                    st.model.clone()
+                if which == "dev" {
+                    if repo.mark(&id, "conflict").exists() {
+                        conflict_model(repo).unwrap_or(st.model)
+                    } else {
+                        st.model
+                    }
                 } else if st.review.is_empty() {
                     "none".into()
                 } else {
-                    st.review.clone()
-                };
-                if runnable(&model) {
-                    pick = Some(id);
-                    break;
+                    st.review
                 }
-                skipped_claude += 1;
+            }
+        };
+        if let Some(l) = lane {
+            let mine = if model == "none" { l.fallback || l.takes("none") } else { l.takes(&model) };
+            if !mine {
+                continue;
             }
         }
+        if runnable(&model) {
+            pick = Some(id);
+            break;
+        }
+        skipped_claude += 1;
     }
     if skipped_claude > 0 {
         log(&format!(
@@ -264,25 +286,38 @@ fn apply_harness_label(repo: &Repo, id: &str, json: &Value, model: &mut String) 
 }
 
 /// `dev_one [ID]`
-pub fn dev_one(repo: &Repo, opts: &Opts, id: Option<&str>, last_id: &mut Option<String>) -> Pass {
+/// The worker of a conflict (rebase) round: `conflict_worker`, else the last stage's.
+pub fn conflict_model(repo: &Repo) -> Option<String> {
+    if !repo.conflict_worker.is_empty() {
+        return Some(repo.conflict_worker.clone());
+    }
+    repo.stage_for(repo.last_stage_start()).map(|s| s.model)
+}
+
+pub fn dev_one(repo: &Repo, opts: &Opts, id: Option<&str>, last_id: &mut Option<String>, lane: Option<&LaneSpec>) -> Pass {
     let id = match id {
         Some(i) => i.to_string(),
         None => {
             // The two idle lines: every pass in a tick (the bash did), once per change in
             // the resident loop, which passes every heartbeat.
+            let name = lane.map(|l| l.name.as_str()).unwrap_or("dev");
             if repo.inflight_count() >= repo.max_inflight {
                 crate::merge::say(
-                    &format!("{}/dev-idle", repo.slug),
-                    format!("{}: dev: {} in flight (max {}); waiting on CI", repo.slug, repo.inflight_count(), repo.max_inflight),
+                    &format!("{}/{name}-idle", repo.slug),
+                    format!("{}: {name}: {} in flight (max {}); waiting on CI", repo.slug, repo.inflight_count(), repo.max_inflight),
                 );
                 return Pass::Nothing;
             }
-            match pick_runnable(repo, "dev") {
+            match pick_runnable(repo, "dev", lane) {
                 Some(i) => i,
                 None => {
                     crate::merge::say(
-                        &format!("{}/dev-idle", repo.slug),
-                        format!("{}: dev: nothing ready with label {}", repo.slug, repo.label),
+                        &format!("{}/{name}-idle", repo.slug),
+                        if name == "dev" {
+                            format!("{}: dev: nothing ready with label {}", repo.slug, repo.label)
+                        } else {
+                            format!("{}: {name}: nothing queued for this lane", repo.slug)
+                        },
                     );
                     return Pass::Nothing;
                 }
@@ -499,10 +534,10 @@ fn last_line_starting(text: &str, prefix: &str) -> Option<String> {
 }
 
 /// `review_one [ID]`
-pub fn review_one(repo: &Repo, opts: &Opts, id: Option<&str>) -> Pass {
+pub fn review_one(repo: &Repo, opts: &Opts, id: Option<&str>, lane: Option<&LaneSpec>) -> Pass {
     let id = match id {
         Some(i) => i.to_string(),
-        None => match pick_runnable(repo, "review") {
+        None => match pick_runnable(repo, "review", lane) {
             Some(i) => i,
             None => return Pass::Nothing,
         },
@@ -676,10 +711,10 @@ pub fn review_one(repo: &Repo, opts: &Opts, id: Option<&str>) -> Pass {
 /// and a hand-run check want. A bead the dev lane sends back stops there.
 pub fn work(repo: &Repo, opts: &Opts, id: Option<&str>) {
     let mut last = None;
-    if dev_one(repo, opts, id, &mut last) == Pass::Worked {
+    if dev_one(repo, opts, id, &mut last, None) == Pass::Worked {
         if let Some(id) = last {
             if repo.review_path(&id).exists() {
-                review_one(repo, opts, Some(&id));
+                review_one(repo, opts, Some(&id), None);
             }
         }
     }

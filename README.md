@@ -102,6 +102,36 @@ The lanes walk the repos **round-robin** — each pass starts one repo later tha
 so no repo is always last — and a repo made the **priority** (`bead-supervisor priority
 REPO`, or ★ on the page) goes first on every pass until you clear it.
 
+**A lane per model server.** The two lanes above are the default split by *role*; the
+scarce thing is the *server*, and a round on the CPU box should never hold the GPU's
+queue. `[[lanes]]` in the global config replaces the defaults with lanes keyed by model:
+
+```toml
+[[lanes]]
+name = "gpu"
+models = ["devbox/*"]
+[[lanes]]
+name = "cpu"
+models = ["acbox/*"]
+[[lanes]]
+name = "claude"
+models = ["claude/*"]
+```
+
+Each lane takes every round — worker or reviewer, and a rebase round when
+`conflict_worker` is its — whose model matches one of its globs (`roles = ["worker"]`
+narrows it; `exclude` carves out). So a stage-2 worker round on acbox runs in the `cpu`
+lane while the `gpu` lane goes on with stage-1 beads, and a bead escalated to Claude runs
+at once, on Anthropic, never behind either. A lane keeps a bead's rounds together
+(worker, then its reviewer when that is the same lane's, or straight to PR with none),
+pauses on its own (`pause cpu`), and shows as its own panel on the page. The first lane
+also parks beads whose stages are exhausted; the first reviewing lane also takes rounds
+with no reviewer. Without `[[lanes]]`, a stage naming `claude/*` still gets its own
+`claude` lane beside `dev` and `review`. With Claude signed out its lane waits, saying so,
+and takes the beads the moment Sign in completes. (Before lanes per server, two beads
+escalated to Claude sat in the dev queue for a day behind fresh beads: fewest failures
+first put them last, and the one dev lane was the GPU's.)
+
 The loop reads the world afresh on every round (both config files, bd, the state dir), so
 an edit takes effect on the next round. The binary watches its own path: after a deploy
 puts a new one there, the running loop re-execs it at the next moment both lanes are
@@ -176,6 +206,7 @@ the global one; the global one wins over the default. Anything may go in either.
 | Key | Default | What |
 | --- | --- | --- |
 | `repos` | `[]` | global only: the repos the lanes walk, `~` allowed |
+| `[[lanes]]` | `dev` + `review` (+ `claude`) | global only: the lanes, one per model server — `name`, `models` (globs: `devbox/*`, `acbox/*`, `claude/*`, `*`), `roles` (`worker`, `reviewer`; both by default), `exclude`. Each takes the rounds whose model it matches. Unset: the pair by role, plus a `claude` lane when a stage names `claude/*` |
 | `label` | `"delegate:local"` | `bd ready -l LABEL` picks the work; the loop claims, notes and closes beads as this actor, not as you (`BEADS_ACTOR` in its environment overrides) |
 | `base` | origin's HEAD | branch to fork from and PR into |
 | `setup` | none | runs in a fresh worktree before the worker (`npm ci`); not again on a branch sent back. It failing holds the bead, no failure: setup runs on the base, so it cannot be the bead's fault |
@@ -204,11 +235,14 @@ event stream; nobody presses refresh):
 - **The header**: the loop — up since when and what it is on, or down — with **Wake**,
   **Stop** (the keeper brings it back in a minute: a breather) and **Off** (keeper too:
   down until you start it); the GPU switch; Claude's sign-in.
-- **Per repo, first and large, the two lanes**: what the **dev lane** is on and what the
-  **review lane** is on — id, title, its failure count and stage, the live session's model,
-  when it last produced output, a link into it, Abort — or why a lane is idle (queue
-  empty; every bead in it held; waiting on CI under a cap). **★ make priority** on the
-  repo's heading puts it first on every pass.
+- **The lanes, once, at the top**: a lane is one thing for the whole loop — it walks
+  every repo — so each lane has one panel saying what it is on: the bead, **its repo**,
+  title, failure count and stage, the live session's model, when it last produced output,
+  a link into it, Abort — or why it is idle (nothing queued for it in any repo; N queued
+  and starting; Claude signed out), and Pause / Resume. With `[[lanes]]` there is one
+  panel per configured lane (gpu, cpu, claude…).
+- **Per repo**, then: the queues and Needs you below, and **★ make priority** on the
+  repo's heading, which puts it first on every pass.
 - **The three queues in their order**: **dev** (#1 is next; each bead's failures and the
   stage that puts it on), **review** (how long each has waited), **merge** (each PR with
   GitHub's word on it — CI running m/n, red with the failing check, green, merged,
@@ -221,7 +255,14 @@ event stream; nobody presses refresh):
   session in the bead's worktree with the bead and the question as the first prompt.
   Under those, each bead **held** — still in its queue, waiting on something outside the
   loop, with the reason and where it sits; nothing to press, it clears itself when the
-  world changes. Only when there is one, a session the server is still running that is
+  world changes. And, first of all, each **decision**: a bead of type `decision` (or
+  labelled `needs-human`) in a watched repo is a question for you — asked by the loop, by
+  an agent planning work, or by yourself — shown with its text in full and an answer box.
+  **Answer & close** puts the answer on the bead as its close reason, where whoever asked
+  reads it, and rings the bell: beads that depended on the decision are ready. This is
+  how anything that needs you reaches you: not a channel, the page, and always with the
+  why. (`bd create -t decision "the question" -d "the context"` asks one; `bd list -l
+  needs-human` lists them from a terminal.) Only when there is one, a session the server is still running that is
   on no lane (an orphan of a killed round, a hand-run `work`), with Abort.
 - **The supervisor's log**, live.
 
@@ -465,7 +506,11 @@ binary through every row of the outcome table above and every exit in
 docs/state-machine.md with stub `bd`, `opencode`, `claude`, `aider`, `gh` and `curl`
 (`test/bin/`) and a real git origin: no model, no network, a minute. `test/lint-skills.sh`
 checks the frontmatter opencode needs. `scripts/ci.sh rust|scripts|suite` are the three
-steps, run the same way in `.github/workflows/ci.yml` and `.buildkite/pipeline.yml`.
+steps, and `.buildkite/pipeline.yml` is the one place they run: `main`'s protection
+requires the `buildkite/bead-loop` status. (Buildkite posts it only once its GitHub App
+has been given the repo — github.com/settings/installations — which is how the pipeline
+created by homelab's `hub-pipeline.sh` differs from one made in Buildkite's UI; the
+GitHub Actions workflow that covered the gap is gone.)
 
 **Buildkite** is what merges and deploys. Every push and PR builds on queue `self`
 (ac-box): `rust` (fmt, clippy `-D warnings`, build, unit tests) and `scripts` side by

@@ -161,10 +161,18 @@ pub fn status_json(repo: &Repo) -> Value {
             Value::Object(m)
         })
         .collect();
-    // lanes
+    // lanes: the configured ones ([[lanes]] in the global file), else dev + review, plus
+    // claude when this repo's stages name it — the same list the loop runs.
+    let has_claude = repo.stages.iter().any(|s| s.worker.starts_with("claude/") || s.reviewer.starts_with("claude/"))
+        || repo.conflict_worker.starts_with("claude/");
+    let specs = crate::config::Layers::load(&crate::config::config_dir().join("config.toml"), None).lanes(has_claude);
+    let lane_names: Vec<String> = specs.iter().map(|l| l.name.clone()).collect();
     let mut lanes = Map::new();
     let mut laneids = Vec::new();
-    for name in ["dev", "review"] {
+    for name in lane_names.iter().map(String::as_str).chain(repo.lane_files().iter().map(String::as_str)) {
+        if lanes.contains_key(name) {
+            continue;
+        }
         if let Some(id) = repo.lane_bead(name) {
             let mut m = bead_json(repo, &byid, &id);
             m.insert("since".into(), json!(mtime(&repo.lane_path(name))));
@@ -172,6 +180,7 @@ pub fn status_json(repo: &Repo) -> Value {
             laneids.push(id);
         }
     }
+    let paused: Map<String, Value> = lane_names.iter().map(|n| (n.clone(), json!(repo.paused(n)))).collect();
     let review_ids = review_queue(repo);
     let dev: Vec<Value> = dev_queue(repo)
         .into_iter()
@@ -230,6 +239,27 @@ pub fn status_json(repo: &Repo) -> Value {
                 .collect()
         })
         .unwrap_or_default();
+    // decisions: open beads of type `decision`, or labelled needs-human — a question for
+    // the human, asked by the loop, an agent, or the human's own planning. The page lists
+    // them under Needs you with the text in full; the answer closes the bead with the
+    // reason, where whoever asked reads it.
+    let decisions: Vec<Value> = crate::shell::bd_open_json(repo)
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|b| {
+            b.get("issue_type").and_then(|t| t.as_str()) == Some("decision")
+                || b.get("labels").and_then(|l| l.as_array()).map(|a| a.iter().any(|v| v.as_str() == Some("needs-human"))).unwrap_or(false)
+        })
+        .map(|b| {
+            json!({
+                "id": b.get("id").cloned().unwrap_or(Value::Null),
+                "title": b.get("title").cloned().unwrap_or(Value::Null),
+                "description": b.get("description").cloned().unwrap_or(Value::Null),
+                "created_at": b.get("created_at").cloned().unwrap_or(Value::Null),
+            })
+        })
+        .collect();
     let worktrees: Vec<Value> = std::fs::read_dir(repo.rs.join("wt"))
         .map(|rd| {
             let mut dirs: Vec<std::path::PathBuf> = rd.flatten().map(|e| e.path()).filter(|p| p.is_dir()).collect();
@@ -254,12 +284,14 @@ pub fn status_json(repo: &Repo) -> Value {
         "stages": stages, "on_exhaust": repo.on_exhaust,
         "conflict_worker": if repo.conflict_worker.is_empty() { Value::Null } else { json!(repo.conflict_worker) },
         "lanes": lanes,
-        "paused": {"dev": repo.paused("dev"), "review": repo.paused("review")},
+        "lane_names": lane_names,
+        "paused": paused,
         "claude_ok": if has_claude { json!(claude_ok()) } else { Value::Null },
         "priority": priority,
         "queues": {"dev": dev, "review": review, "merge": merge},
         "parked": parked,
         "held": held,
+        "decisions": decisions,
         "worktrees": worktrees,
     })
 }
@@ -310,7 +342,15 @@ pub fn status_one(repo: &Repo) -> String {
         stages.join(" → "),
         if j["priority"].as_bool().unwrap_or(false) { "  [priority]" } else { "" }
     ));
-    for (name, label) in [("dev", "  dev lane:    "), ("review", "  review lane: ")] {
+    let lane_rows: Vec<(String, String)> = j["lane_names"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|n| n.as_str())
+        .map(|n| (n.to_string(), format!("  {:<13}", format!("{n} lane:"))))
+        .collect();
+    for (name, label) in lane_rows {
+        let name = name.as_str();
         let l = &j["lanes"][name];
         let what = if l.is_object() {
             format!("{} {} ({})", s(l, "id"), s(l, "title"), age(l["since"].as_i64().unwrap_or(0)))

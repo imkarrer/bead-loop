@@ -66,6 +66,19 @@ impl Repo {
     pub fn lane_busy(&self, name: &str) -> bool {
         self.lane_path(name).exists()
     }
+    /// The lanes with a marker file in this repo's state dir, by name.
+    pub fn lane_files(&self) -> Vec<String> {
+        let mut v: Vec<String> = std::fs::read_dir(&self.rs)
+            .map(|rd| {
+                rd.flatten()
+                    .filter_map(|e| e.file_name().into_string().ok())
+                    .filter_map(|n| n.strip_prefix("lane.").map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default();
+        v.sort();
+        v
+    }
     pub fn lane_bead(&self, name: &str) -> Option<String> {
         read_to_string(&self.lane_path(name)).map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
     }

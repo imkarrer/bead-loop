@@ -23,6 +23,12 @@ n=$(( $(wc -l <"$TEST_CTRL/calls" 2>/dev/null || echo 0) + 1 ))
 printf '%s %s claude/%s claude\n' "$agent" "$PWD" "$model" >>"$TEST_CTRL/calls"
 printf '%s' "$prompt" >"$TEST_CTRL/prompt.$n"
 printf '%s' "$sys" >"$TEST_CTRL/system.$n"
+# claude-api-error: what Claude Code prints when the sign-in expired mid-run — a JSON
+# error, no token spent, exit 1 (the real thing, 20 Sep 2026: "OAuth session expired").
+if [ -e "$TEST_CTRL/claude-api-error" ]; then
+  jq -n '{type:"result", is_error:true, result:"Failed to authenticate: OAuth session expired and could not be refreshed", usage:{input_tokens:0, output_tokens:0}, terminal_reason:"api_error"}'
+  exit 1
+fi
 say() { jq -n --arg t "$1" '{type:"result", result:$t}'; }
 case $agent in
   bead-worker)
