@@ -75,13 +75,13 @@ async function refreshPrs() {
   }
 }
 async function fetchPr(repo, url) {
-  const r = await run('gh', ['pr', 'view', url, '--json', 'state,mergedAt,statusCheckRollup'], { cwd: repo, timeout: 20000 });
+  const r = await run('gh', ['pr', 'view', url, '--json', 'state,mergedAt,mergeable,statusCheckRollup'], { cwd: repo, timeout: 20000 });
   let pr = null;
   if (r.ok) {
     try {
       const j = JSON.parse(r.stdout);
       const checks = (j.statusCheckRollup || []).map((c) => ({ name: c.context || c.name || '?', state: c.conclusion || c.state || c.status || '?' }));
-      pr = { state: j.state, mergedAt: j.mergedAt ? Math.floor(Date.parse(j.mergedAt) / 1000) : null, checks };
+      pr = { state: j.state, mergedAt: j.mergedAt ? Math.floor(Date.parse(j.mergedAt) / 1000) : null, checks, mergeable: j.mergeable || null };
     } catch { pr = null; }
   }
   return pr;

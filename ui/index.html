@@ -245,10 +245,12 @@ const abortBtn = (r, sess, label) => `<button class="danger" ${busyAction ? 'dis
 
 // A PR in the merge queue: what GitHub says now (p.pr, a minute old at most), then the
 // loop's own markers. Merged or closed on GitHub means the next reconcile finishes it.
-function prChips(p, now) {
+function prChips(p, now, r) {
   const g = p.pr, out = [];
   if (g && g.state === 'MERGED') out.push(`<span class="chip ok">merged${g.mergedAt ? ` ${ago(g.mergedAt, now)} ago` : ''}</span> <span class="muted">bead closes on the next tick</span>`);
   else if (g && g.state === 'CLOSED') out.push('<span class="chip warn">closed unmerged</span> <span class="muted">parked on the next tick</span>');
+  else if (g && g.mergeable === 'CONFLICTING' && !p.adopted) out.push(`<span class="chip warn">conflicts with base</span> <span class="muted">back to dev on the next tick for a rebase by ${esc(r.conflict_worker || (lastStage(r) ? lastStage(r).worker : 'the last stage'))}</span>`);
+  else if (g && g.mergeable === 'CONFLICTING') out.push('<span class="chip warn">conflicts with base</span> <span class="muted">adopted: whoever opened it rebases</span>');
   else if (g) {
     const bad = g.checks.filter((c) => /FAIL|ERROR|CANCEL/i.test(c.state)), pending = g.checks.filter((c) => /PENDING|IN_PROGRESS|QUEUED|EXPECTED/i.test(c.state));
     out.push(bad.length ? `<span class="chip bad">CI red</span> <span class="muted">${esc(bad.map((c) => c.name).join(', '))} · back to dev on the next tick</span>`
@@ -304,7 +306,7 @@ function queueCol(name, rows, r, now) {
   const sub = { dev: 'fewest failures first, then bd’s order', review: 'gate passed; the reviewer next', merge: `PRs in CI · dev pauses at ${r.max_inflight}` }[name];
   let body;
   if (rows.length === 0) body = `<div class="empty">${empty}</div>`;
-  else if (name === 'merge') body = `<table>${rows.map((p) => `<tr><td class="id">${esc(p.id)}</td><td class="title"><span class="t"><a href="${esc(p.url)}" target="_blank" rel="noopener">${esc(p.url.replace(/^https?:\/\/github\.com\/[^/]+\//, ''))} ↗</a></span></td></tr><tr class="sub"><td></td><td>${prChips(p, now)}</td></tr>`).join('')}</table>`;
+  else if (name === 'merge') body = `<table>${rows.map((p) => `<tr><td class="id">${esc(p.id)}</td><td class="title"><span class="t"><a href="${esc(p.url)}" target="_blank" rel="noopener">${esc(p.url.replace(/^https?:\/\/github\.com\/[^/]+\//, ''))} ↗</a></span></td></tr><tr class="sub"><td></td><td>${prChips(p, now, r)}</td></tr>`).join('')}</table>`;
   else body = `<table>${rows.map((b, i) => qRow(i, b, (name === 'dev' ? ` ${stageChip(b.stage, r)}` : ` <span class="muted">${ago(b.since, now)}</span>${stageChip(b.stage, r).includes('waits for') ? ' <span class="chip bad">waits for Claude sign-in</span>' : ''}`) + `</td><td class="act">${claudeBtn(r, b)}`)).join('')}</table>`;
   return `<div class="q ${name}"><h3>${name} queue<span class="n">${rows.length}</span></h3><div class="sub">${sub}</div>${body}</div>`;
 }

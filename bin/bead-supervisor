@@ -28,6 +28,7 @@
 #
 # Config, TOML, every key optional. A key in the repo file wins over the global one:
 #   ~/.config/bead-loop/config.toml   repos (list), model, review_model, stages (worker, reviewer, failures), on_exhaust, adopt,
+#                                     conflict_worker (who rebases a PR that conflicts; default the last stage's worker),
 #                                     max_inflight, worker_timeout, attach (an opencode server url:
 #                                     sessions run there and stream in its web UI)
 #   REPO/.bead-loop.toml              label, base, setup, gate, merge (auto|pipeline|manual), merge_label, plus any key above
@@ -115,6 +116,7 @@ load_repo() {
   REVIEW_MODEL=$(cfg review_model)
   STAGES=$(stages_words); STAGES=${STAGES:-"$MODEL|$REVIEW_MODEL|3"}
   ON_EXHAUST=$(cfg on_exhaust park)
+  CONFLICT_WORKER=$(cfg conflict_worker)   # who rebases a PR that conflicts; default: the last stage's worker
   ADOPT=$(cfg adopt true)
   case " $STAGES " in *" claude/"*|*"|claude/"*) need claude ;; esac
   case " $STAGES " in *" aider:"*) need aider ;; esac
@@ -434,6 +436,22 @@ dev_one() {
   wt=$RS/wt/$id
   stamp=$(date +%Y%m%dT%H%M%S)
   logf=$RS/logs/$id.$stamp
+  # The conflict round: the PR could not merge because the branch conflicts with the
+  # base. The worker is conflict_worker (default: the last stage's), and its order is
+  # the rebase, not the bead. No failure was charged.
+  local conflict=0 rebase_order=''
+  if [ -e "$(mark "$id" conflict)" ]; then
+    conflict=1
+    if [ -n "$CONFLICT_WORKER" ]; then MODEL=$CONFLICT_WORKER; else
+      local last; last=$(last_stage_start); stage_for "$last" && MODEL=${MODEL_FLAG:-$S_MODEL}
+      stage_for "$n" || true
+    fi
+    if ! runnable "$MODEL"; then log "$SLUG: $id: conflict round needs $MODEL, which cannot run now (Claude signed out); waiting"; bdr update "$id" --status open >/dev/null; return 1; fi
+    rebase_order="
+
+This branch has an open pull request that GitHub cannot merge: it conflicts with $BASE. Your job this round is the rebase, not new work. Run: git fetch origin && git rebase origin/$BASE. Resolve every conflict so that both what this branch set out to do (the bead above, and the commits already on the branch) and what $BASE changed since are kept; do not drop either side to make the conflict go away. Then run the gate if one is given, make sure the acceptance criteria still hold, and end with DONE: <what conflicted and how you resolved it>. Do not squash or rewrite the branch beyond the rebase."
+    log "$SLUG: $id: conflict round: rebase onto $BASE by $MODEL"
+  fi
   # A branch left from an earlier round (sent back by review or CI) is resumed, not
   # restarted: the worker fixes its commit. A dev-side failure deleted the branch.
   if git -C "$REPO" show-ref -q "refs/heads/$branch" || git -C "$REPO" show-ref -q "refs/remotes/origin/$branch"; then resumed=1; fi
@@ -445,7 +463,7 @@ Work the bead below in this repository, following the bead-workflow skill.
 $(printf '%s' "$json" | render_bead)
 </bead>
 
-You are on branch $branch$([ $resumed = 1 ] && printf ', which already carries your earlier commit(s) for this bead: fix them in place rather than starting over' || printf ", a fresh worktree of $BASE"). Commit your work on this branch and leave .beads/ untouched. End your turn with one line: DONE: <evidence> or BLOCKED: <note>.${history:+
+You are on branch $branch$([ $resumed = 1 ] && printf ', which already carries your earlier commit(s) for this bead: fix them in place rather than starting over' || printf ", a fresh worktree of $BASE"). Commit your work on this branch and leave .beads/ untouched. End your turn with one line: DONE: <evidence> or BLOCKED: <note>.$rebase_order${history:+
 
 Earlier rounds on this bead were sent back; their notes follow. A note that begins "review (...) rejected:" is a work order from the senior reviewer: do exactly what its "What to do" says, prove it with its "How to check", and leave alone what it says to leave alone. Read them before you start and do not repeat them.
 
@@ -454,7 +472,7 @@ $history
 </previous-attempts>}
 PROMPT
 )
-  log "$SLUG: dev: bead $id — $title ($n failures, worker $MODEL, reviewer ${REVIEW_MODEL:-none}$([ $resumed = 1 ] && echo ', resuming the branch'))"
+  log "$SLUG: dev: bead $id — $title ($n failures, worker $MODEL, reviewer ${REVIEW_MODEL:-none}$([ $resumed = 1 ] && echo ', resuming the branch')$([ $conflict = 1 ] && echo ', rebase'))"
   if [ "$DRY" = 1 ]; then
     printf '%s\n' "--- failures: $n  model: ${MODEL:-agent default}  base: $BASE  setup: ${SETUP:-none}  gate: ${GATE:-none}  review: ${REVIEW_MODEL:-none}  merge: $MERGE" "$prompt"
     return 1
@@ -604,7 +622,7 @@ BODY
   fi
   num=${url##*/}
   printf '%s\n' "$url" >"$RS/inflight/$id"
-  rm -f "$(mark "$id" red)" "$(mark "$id" fixing)"
+  rm -f "$(mark "$id" red)" "$(mark "$id" fixing)" "$(mark "$id" conflict)"
   if [ "$MERGE" = pipeline ]; then hand_to_pipeline "$id" "$num" "$url"; fi
   git -C "$REPO" worktree remove --force "$wt"
   lane_clear review; CUR_WT=
@@ -692,7 +710,7 @@ reconcile() {
     [ -e "$f" ] || continue
     id=$(basename "$f"); url=$(cat "$f"); num=${url##*/}
     need gh
-    view=$(ghr pr view "$num" --json state,mergedAt,mergeStateStatus,statusCheckRollup,url) || { log "$SLUG: cannot read PR $num"; continue; }
+    view=$(ghr pr view "$num" --json state,mergedAt,mergeable,mergeStateStatus,statusCheckRollup,url) || { log "$SLUG: cannot read PR $num"; continue; }
     state=$(printf '%s' "$view" | jq -r .state)
     case $state in
       MERGED) close_merged "$id" "$f" "$url" "$view" ;;
@@ -702,6 +720,17 @@ reconcile() {
         log "$SLUG: $id: PR closed unmerged, parked for you"
         ;;
       OPEN)
+        # A PR of ours that conflicts with the base is not CI's problem, and not the
+        # model's fault: no failure. It goes back to the dev queue on its own branch with a
+        # rebase work order, and that round's worker is conflict_worker — the last stage's
+        # by default, the strong model — since a rebase is judgement, not typing.
+        if [ "$(printf '%s' "$view" | jq -r '.mergeable // ""')" = CONFLICTING ] && [ ! -e "$(mark "$id" adopted)" ]; then
+          rm -f "$f" "$(mark "$id" nocheck)" "$(mark "$id" red)"; touch "$(mark "$id" fixing)" "$(mark "$id" conflict)"
+          bdr update "$id" --append-notes "bead-loop $(date -Iminutes): $url conflicts with $BASE; back to dev for a rebase by ${CONFLICT_WORKER:-the last stage}" >/dev/null
+          bdr update "$id" --status open >/dev/null
+          log "$SLUG: $id: $url conflicts with $BASE → dev queue for a rebase (${CONFLICT_WORKER:-the last stage})"
+          continue
+        fi
         verdict=$(printf '%s' "$view" | jq -r '
           [.statusCheckRollup[]? | (.conclusion // .state // .status)] as $c
           | if ($c | any(IN("FAILURE","ERROR","CANCELLED","TIMED_OUT","ACTION_REQUIRED","STARTUP_FAILURE"))) then "red"
@@ -892,7 +921,7 @@ status_json() {
     fi
   done
   jq -cn --arg slug "$SLUG" --arg repo "$REPO" --arg label "$LABEL" --arg base "$BASE" --arg merge_mode "$MERGE" \
-    --arg stages "$STAGES" --arg attach "$ATTACH" --argjson max_inflight "$MAX_INFLIGHT" --arg on_exhaust "$ON_EXHAUST" \
+    --arg stages "$STAGES" --arg attach "$ATTACH" --argjson max_inflight "$MAX_INFLIGHT" --arg on_exhaust "$ON_EXHAUST" --arg conflict_worker "$CONFLICT_WORKER" \
     --argjson merge "$merge" --argjson failures "$failures" --argjson history "$history" --argjson worktrees "$worktrees" \
     --argjson dev "$dev" --argjson review "$review" --argjson lanes "$lanes" \
     --argjson paused "{\"dev\": $([ -e "$STATE_DIR/pause.dev" ] && echo true || echo false), \"review\": $([ -e "$STATE_DIR/pause.review" ] && echo true || echo false)}" \
@@ -913,7 +942,7 @@ status_json() {
     ($open + $inprog | map({(.id): .}) | add // {}) as $byid
     | ($lanes | [.[]?.id]) as $laneids
     | {slug: $slug, repo: $repo, label: $label, base: $base, merge: $merge_mode, attach: $attach, max_inflight: $max_inflight,
-       stages: $st, on_exhaust: $on_exhaust,
+       stages: $st, on_exhaust: $on_exhaust, conflict_worker: (if $conflict_worker == "" then null else $conflict_worker end),
        lanes: ($lanes | with_entries(.value += (bead($byid[.value.id] // {id: .value.id})))), paused: $paused, claude_ok: $claude_ok,
        queues: {
          dev:    ($dev | map(select(. as $i | $laneids + ($merge | map(.id)) + ($review | map(.id)) | index($i) | not) | bead($byid[.] // {id: .}))),

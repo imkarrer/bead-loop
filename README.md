@@ -154,6 +154,7 @@ the global one; the global one wins over the default. Anything may go in either.
 | `review_model` | none (no review) | the review lane's model when no `[[stages]]` table applies; none: straight to PR |
 | `[[stages]]` | one stage of `model`/`review_model`, `failures = 3` | `worker`, `reviewer`, `failures` (1: how many send-backs this stage absorbs before the next takes over; `attempts` still reads), `timeout` (`worker_timeout`), in order |
 | `on_exhaust` | `"park"` | after the last stage: `park` for you, or `repeat` the stages |
+| `conflict_worker` | the last stage's worker | who rebases a PR that conflicts with the base (see the outcome table); a rebase is judgement, so the strong model by default |
 | `merge` | `"auto"` | `auto`: the tick merges on green · `pipeline`: the loop labels, CI merges · `manual`: PR only |
 | `merge_label` | `"automerge"` | the label `pipeline` puts on each PR |
 | `adopt` | `true` | open `bead/*` PRs from anyone join the loop |
@@ -300,6 +301,11 @@ failure** on its count:
   worker is told to fix its commit in place, and the reviewer sees the fix on top;
 - the merge queue: CI red — same branch, kept; the next round's push updates the same PR.
 
+One send-back is not a failure: a PR that **conflicts with the base** is nobody's mistake.
+It goes back to the dev queue on its branch with a rebase order, and that round's worker is
+`conflict_worker` — the last stage's (Sonnet) by default, because resolving a conflict is
+judgement about two intents, not typing. The push updates the same PR.
+
 The failure count is what chooses the **stage**, the `[[stages]]` tables in the config:
 
 ```toml
@@ -364,6 +370,8 @@ labelled for the pipeline under `pipeline`, and the bead the branch names closes
 | CI green, `merge = "manual"` | in_progress | PR left open for you |
 | CI red | note with the failing checks, +1 failure; dev queue | kept; the next round's push updates the PR |
 | CI red on an adopted PR | in_progress, one note | left open for whoever opened it |
+| PR conflicts with the base | note, **no failure**; dev queue — the next round is a rebase by `conflict_worker` (Sonnet), told to keep both sides | kept; the push updates the PR |
+| Adopted PR conflicts | left alone | whoever opened it rebases |
 | Failures exhausted (`on_exhaust = "park"`) | in_progress, for you | removed |
 | PR closed unmerged | in_progress, note | gone |
 

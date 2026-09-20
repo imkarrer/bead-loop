@@ -691,6 +691,35 @@ case_claude_signed_out_beads_wait() {
   assert_eq "$(cut -d' ' -f3,4 "$TEST_CTRL/calls" | head -1)" "claude/opus claude" "signed in: t-1's Claude round runs"
 }
 
+case_conflicting_pr_rebased_by_the_last_stage() {
+  # GitHub says our PR conflicts with the base: no failure, back to the dev queue on its
+  # branch, and that round's worker is the last stage's (Claude), told to rebase; the push
+  # updates the same PR and the merge queue has it again.
+  setup true auto stub/reviewer "$(printf 'max_inflight = 3\n%s' "$(stages stub/fast:stub/reviewer:2 claude/sonnet:claude/sonnet:1)")"
+  sup work "$REPO"; assert_file "$BEAD_LOOP_STATE/repo/inflight/t-1" "PR up"
+  jq '.mergeable="CONFLICTING"' "$TEST_CTRL/pr.json" >"$TEST_CTRL/pr.tmp" && mv "$TEST_CTRL/pr.tmp" "$TEST_CTRL/pr.json"
+  sup reconcile "$REPO"
+  assert_eq "$(bead .status)" open "back in the dev queue"
+  assert_nofile "$BEAD_LOOP_STATE/repo/inflight/t-1" "out of the merge queue"
+  assert_eq "$(cat "$BEAD_LOOP_STATE/repo/failures/t-1" 2>/dev/null || echo 0)" 0 "no failure charged"
+  assert_match "$(bead .notes)" "conflicts with main; back to dev for a rebase by the last stage" "noted"
+  assert_match "$(cat "$T/sup.log")" "conflicts with main → dev queue for a rebase" "logged"
+  jq '.mergeable="MERGEABLE"' "$TEST_CTRL/pr.json" >"$TEST_CTRL/pr.tmp" && mv "$TEST_CTRL/pr.tmp" "$TEST_CTRL/pr.json"
+  : >"$TEST_CTRL/calls"; printf 'approve\napprove\n' >"$TEST_CTRL/review"; sup work "$REPO"
+  assert_eq "$(cut -d' ' -f3,4 "$TEST_CTRL/calls" | head -1)" "claude/sonnet claude" "the rebase round runs on the last stage's worker"
+  assert_match "$(cat "$TEST_CTRL/prompt.1")" "Your job this round is the rebase, not new work. Run: git fetch origin && git rebase origin/main" "with the rebase order"
+  assert_match "$(cat "$T/sup.log")" "dev: bead t-1 .*rebase)" "the round says it is a rebase"
+  assert_file "$BEAD_LOOP_STATE/repo/inflight/t-1" "back in the merge queue"
+  assert_nofile "$BEAD_LOOP_STATE/repo/inflight/.t-1.conflict" "conflict marker cleared"
+  assert_match "$(bead .comments | tr '\n' ' ')" "pushed round 1 to https://github.com/example/repo/pull/7" "the same PR, updated"
+  # conflict_worker names who rebases; an adopted PR that conflicts is left alone.
+  setup true auto stub/reviewer "$(printf 'max_inflight = 3\nconflict_worker = "stub/senior"\n%s' "$(stages stub/fast:stub/reviewer:2)")"
+  sup work "$REPO"; jq '.mergeable="CONFLICTING"' "$TEST_CTRL/pr.json" >"$TEST_CTRL/pr.tmp" && mv "$TEST_CTRL/pr.tmp" "$TEST_CTRL/pr.json"; sup reconcile "$REPO"
+  jq '.mergeable="MERGEABLE"' "$TEST_CTRL/pr.json" >"$TEST_CTRL/pr.tmp" && mv "$TEST_CTRL/pr.tmp" "$TEST_CTRL/pr.json"
+  : >"$TEST_CTRL/calls"; printf 'approve\napprove\n' >"$TEST_CTRL/review"; sup work "$REPO"
+  assert_eq "$(cut -d' ' -f3 "$TEST_CTRL/calls" | head -1)" "stub/senior" "conflict_worker does the rebase"
+}
+
 # ---- main ----------------------------------------------------------------------------
 cases=$(declare -F | awk '{print $3}' | grep '^case_')
 [ $# -gt 0 ] && cases=$(printf 'case_%s\n' "$@")
