@@ -6,14 +6,13 @@
 # which has no /bin/bash, and the hooks' move to #!/usr/bin/env bash (a218a63) is on
 # main only. Pin a tag again once one exists at or after a218a63.
 #
-# Two queues. `self` is ac-box's agent, which builds and tests every push and PR and
+# One shared agent, queue `self` on ac-box, builds and tests every push and PR and
 # merges a labelled PR (scripts/ci-merge.sh — the loop labels every PR it opens under
-# merge = "pipeline", so the loop's own work lands without a hand on it). `devbox` is the
-# agent on the box the loop runs on — this workstation, behind WSL's NAT, which ac-box
-# cannot reach — and it does one thing: after a merge to main, deploy to itself
-# (scripts/deploy.sh: fast-forward the live checkout, build, install, recycle the
-# stack). Restarting the loop is safe from a pipeline step because the loop is not the
-# agent: the rounds it is on are reopened with no failure when it comes back.
+# merge = "pipeline", so the loop's own work lands without a hand on it). The deploy is
+# not a step: the box the loop runs on is behind WSL's NAT where ac-box cannot reach it,
+# so it pulls — bead-loop-deploy.timer there runs scripts/deploy.sh every two minutes,
+# which fast-forwards the live checkout, builds, installs and recycles the stack only
+# when origin/main has moved. The same shape as the homelab's own deploys (ADR 0006).
 #
 # One agent serves every build on `self`, so every step has a timeout, the cheap steps
 # go first, and a failing build cancels what is behind it. The pipeline's own setting
@@ -23,7 +22,7 @@
 #
 # What is proven on main: the crate builds, its unit tests pass, the scripts and skills
 # lint, and the supervisor's state machine does what docs/state-machine.md says against
-# the fresh binary (test/run.sh) — and then that binary is what runs.
+# the fresh binary (test/run.sh) — and then, within two minutes, that binary is what runs.
 
 agents:
   queue: self
@@ -67,15 +66,3 @@ steps:
     plugins:
       - imkarrer/flox#main:
           command: scripts/ci-merge.sh
-
-  - label: ":rocket: deploy to devbox"
-    key: deploy
-    timeout_in_minutes: 20
-    if: build.branch == "main"
-    concurrency: 1
-    concurrency_group: bead-loop/deploy
-    agents:
-      queue: devbox
-    plugins:
-      - imkarrer/flox#main:
-          command: scripts/deploy.sh

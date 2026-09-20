@@ -1,0 +1,9 @@
+[Unit]
+Description=bead-loop: look at origin/main every two minutes and deploy it here when it has moved
+
+[Timer]
+OnBootSec=2min
+OnUnitInactiveSec=2min
+
+[Install]
+WantedBy=timers.target

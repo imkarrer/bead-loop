@@ -54,3 +54,5 @@ systemctl --user daemon-reload
 echo "ui     bead-loop-ui.service: http://127.0.0.1:4097 once started"
 echo "loop   bead-supervisor.service is the resident loop; bead-supervisor.timer keeps it up. Start with:"
 echo "       systemctl --user enable --now opencode-web.service bead-loop-ui.service bead-supervisor.timer"
+echo "deploy bead-loop-deploy.timer pulls origin/main here every two minutes and redeploys when it moved:"
+echo "       systemctl --user enable --now bead-loop-deploy.timer"

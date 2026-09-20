@@ -28,7 +28,6 @@ rustc.pkg-path = "rustc"
 clippy.pkg-path = "clippy"
 rustfmt.pkg-path = "rustfmt"
 gcc.pkg-path = "gcc"            # the linker cargo calls as cc
-buildkite-agent.pkg-path = "buildkite-agent"   # the deploy agent on the loop's box (systemd/buildkite-agent.service)
 
 [vars]
 # Where the UI listens. bin/bead-loop-ui reads these; systemd/bead-loop-ui.service
