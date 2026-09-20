@@ -22,6 +22,12 @@ opencode.pkg-path = "opencode"
 nodejs.pkg-path = "nodejs"     # bin/bead-loop-ui
 shellcheck.pkg-path = "shellcheck"
 shellcheck.outputs = "all"
+# The supervisor is a Rust binary: cargo build --release in this checkout, or CI's.
+cargo.pkg-path = "cargo"
+rustc.pkg-path = "rustc"
+clippy.pkg-path = "clippy"
+rustfmt.pkg-path = "rustfmt"
+gcc.pkg-path = "gcc"            # the linker cargo calls as cc
 
 [vars]
 # Where the UI listens. bin/bead-loop-ui reads these; systemd/bead-loop-ui.service
