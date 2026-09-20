@@ -259,6 +259,11 @@ pub fn lane(ctx: &Ctx, spec: &LaneSpec, pass_counter: Arc<AtomicUsize>) {
         let mut moved = false;
         set_passing(name, true);
         for r in repos_in_order(&ctx.repos, &ctx.state_dir, pass) {
+            // Paused between two repos of one pass (a hand pause while a round ran): the
+            // next repo waits too, rather than a round starting seconds after the pause.
+            if ctx.state_dir.join(format!("pause.{name}")).exists() {
+                break;
+            }
             let repo = Repo::load(&r, ctx.opts.model_flag.as_deref());
             if lane_pass(&repo, &ctx.opts, spec) == Pass::Worked {
                 moved = true;
