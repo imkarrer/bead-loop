@@ -506,11 +506,11 @@ binary through every row of the outcome table above and every exit in
 docs/state-machine.md with stub `bd`, `opencode`, `claude`, `aider`, `gh` and `curl`
 (`test/bin/`) and a real git origin: no model, no network, a minute. `test/lint-skills.sh`
 checks the frontmatter opencode needs. `scripts/ci.sh rust|scripts|suite` are the three
-steps, run the same way in `.github/workflows/ci.yml` and `.buildkite/pipeline.yml`.
-The GitHub workflow stays only because `main`'s protection requires its `ci` status and
-Buildkite does not yet post one on this repo (the Buildkite GitHub App must be given the
-repo — a decision bead asks for that); once it does, the required check becomes
-`buildkite/bead-loop` and the workflow goes.
+steps, and `.buildkite/pipeline.yml` is the one place they run: `main`'s protection
+requires the `buildkite/bead-loop` status. (Buildkite posts it only once its GitHub App
+has been given the repo — github.com/settings/installations — which is how the pipeline
+created by homelab's `hub-pipeline.sh` differs from one made in Buildkite's UI; the
+GitHub Actions workflow that covered the gap is gone.)
 
 **Buildkite** is what merges and deploys. Every push and PR builds on queue `self`
 (ac-box): `rust` (fmt, clippy `-D warnings`, build, unit tests) and `scripts` side by
