@@ -129,6 +129,7 @@
   <div class="unit" id="claude"></div>
   <div class="unit" id="live" style="margin-left:auto"></div>
 </header>
+<div id="signedout" class="banner signin" hidden></div>
 <div id="signin" class="banner signin" hidden></div>
 <main id="main"><div class="empty">loading…</div></main>
 <footer id="foot"></footer>
@@ -168,6 +169,11 @@ function gpu(s) {
 // would otherwise fail on the spot and the bead loop back to stage 1 unexplained.
 function claude(s) {
   const c = s.claude, dis = busyAction ? 'disabled' : '';
+  const out = $('signedout');
+  if (c && !c.loggedIn && !s.login) {
+    out.hidden = false;
+    out.innerHTML = `<b>Claude is signed out on this box.</b> The ${esc(s.repos.map((r) => r.stages.filter((st) => /^claude\//.test(st.worker)).map((st) => st.worker)).flat()[0] || 'claude/*')} stage cannot run: beads on it wait in their queue, and Work with Claude is off, until you <button ${dis} onclick="act('claude_login')">Sign in</button> — a link to open and a code to paste, right here.`;
+  } else out.hidden = true;
   $('claude').innerHTML = !c ? '' : c.loggedIn ? `<span class="dot on"></span>Claude <span class="muted">signed in${c.method ? ' · ' + esc(c.method) : ''}</span>`
     : `<span class="dot bad"></span>Claude <span class="chip bad">signed out</span> <button ${dis} onclick="act('claude_login')">Sign in</button>`;
   // The sign-in in progress, as a banner: the link to open, the box for the code.
@@ -205,13 +211,15 @@ const titleOf = (s, w) => (s.title && !/^[\s?.…]*$/.test(s.title)) ? s.title :
 // How often the bead has been sent back to dev, and the stage that count puts it on:
 // stage 1 is the fast local pair; a later stage is a stronger model, the last one Opus.
 const failChip = (n) => n ? `<span class="chip n" title="sent back to dev ${n} time${n > 1 ? 's' : ''}">${n}×</span>` : '';
-const stageChip = (st) => !st ? '<span class="chip bad" title="stages exhausted">exhausted</span>'
-  : `<span class="chip ${st.index > 1 ? 'warn' : ''}" title="stage ${st.index}: worker ${esc(st.worker)}${st.reviewer ? ', reviewer ' + esc(st.reviewer) : ''}">${st.index > 1 ? `S${st.index} · ` : ''}${esc(st.worker)}</span>`;
+const stageChip = (st, r) => !st ? '<span class="chip bad" title="stages exhausted">exhausted</span>'
+  : `<span class="chip ${st.index > 1 ? 'warn' : ''}" title="stage ${st.index}: worker ${esc(st.worker)}${st.reviewer ? ', reviewer ' + esc(st.reviewer) : ''}">${st.index > 1 ? `S${st.index} · ` : ''}${esc(st.worker)}</span>`
+    + ((r && r.claude_ok === false && /^claude\//.test(st.worker + ' ' + (st.reviewer || ''))) ? ' <span class="chip bad" title="a claude/* round cannot run while Claude is signed out; the lane takes other beads meanwhile">waits for Claude sign-in</span>' : '');
 const count = (n, label) => `<div class="count ${n ? '' : 'zero'}">${n}<small>${label}</small></div>`;
 // "Work with Claude": the bead to the last stage and back in the dev queue, now. Shown
 // wherever a bead is not already on that stage.
 const lastStage = (r) => r.stages[r.stages.length - 1];
 const claudeBtn = (r, b) => (!lastStage(r) || (b.stage && b.stage.index === r.stages.length)) ? '' :
+  (r.claude_ok === false && /^claude\//.test(lastStage(r).worker)) ? `<button disabled title="Claude is signed out on this box — Sign in at the top first">Work with ${esc(lastStage(r).worker.replace(/^claude\//, 'Claude '))}</button>` :
   `<button ${busyAction ? 'disabled' : ''} title="to the last stage (${esc(lastStage(r).worker)}) and back into the dev queue now" onclick="act('escalate',{repo:${JSON.stringify(r.repo)},id:${JSON.stringify(b.id)}},'Work ${esc(b.id)} with ${esc(lastStage(r).worker)} now? It goes to the last stage and back into the dev queue, ahead of its failure count.')">Work with ${esc(lastStage(r).worker.replace(/^claude\//, 'Claude '))}</button>`;
 const abortBtn = (r, sess, label) => `<button class="danger" ${busyAction ? 'disabled' : ''} onclick="act('abort',{attach:${JSON.stringify(r.attach)},session:${JSON.stringify(sess.id)}},'Abort ${esc(label)}?')">Abort</button>`;
 
@@ -251,7 +259,7 @@ function lanePanel(r, name, now, ticking) {
     <div class="label">${name} lane <span class="muted">· ${role} · ${ago(l.since, now)}</span> ${paused ? '<span class="chip warn" title="finishes this round, then starts no new one">pausing</span>' : ''}<span class="act">${pauseBtn}</span></div>
     <div class="bead">${esc(l.id)}</div>
     <div class="what">${esc(l.title || '')}</div>
-    <div class="stage">${failChip(l.failures)}${stageChip(l.stage)}
+    <div class="stage">${failChip(l.failures)}${stageChip(l.stage, r)}
       ${live ? `${roleChip(live.agent)} <span class="mono">${esc(live.model)}</span> <span>last output ${ago(live.updated, now)} ago</span> <a href="${esc(live.url)}" target="_blank" rel="noopener">open session ↗</a> ${abortBtn(r, live, `${live.agent} on ${l.id}`)}`
         : `<span>${name === 'dev' ? 'setup, or the gate' : 'pushing the PR'}</span>`}</div>
   </div>`;
@@ -277,7 +285,7 @@ function queueCol(name, rows, r, now) {
   let body;
   if (rows.length === 0) body = `<div class="empty">${empty}</div>`;
   else if (name === 'merge') body = `<table>${rows.map((p) => `<tr><td class="id">${esc(p.id)}</td><td class="title"><span class="t"><a href="${esc(p.url)}" target="_blank" rel="noopener">${esc(p.url.replace(/^https?:\/\/github\.com\/[^/]+\//, ''))} ↗</a></span></td></tr><tr class="sub"><td></td><td>${prChips(p, now)}</td></tr>`).join('')}</table>`;
-  else body = `<table>${rows.map((b, i) => qRow(i, b, (name === 'dev' ? ` ${stageChip(b.stage)}` : ` <span class="muted">${ago(b.since, now)}</span>`) + `</td><td class="act">${claudeBtn(r, b)}`)).join('')}</table>`;
+  else body = `<table>${rows.map((b, i) => qRow(i, b, (name === 'dev' ? ` ${stageChip(b.stage, r)}` : ` <span class="muted">${ago(b.since, now)}</span>${stageChip(b.stage, r).includes('waits for') ? ' <span class="chip bad">waits for Claude sign-in</span>' : ''}`) + `</td><td class="act">${claudeBtn(r, b)}`)).join('')}</table>`;
   return `<div class="q ${name}"><h3>${name} queue<span class="n">${rows.length}</span></h3><div class="sub">${sub}</div>${body}</div>`;
 }
 

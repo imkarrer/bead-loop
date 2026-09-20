@@ -2,6 +2,12 @@
 # Stub claude (Claude Code, -p mode) for bead-loop tests. Same $TEST_CTRL contract as
 # the opencode stub; the role comes from the tools allowed (Edit = worker).
 set -euo pipefail
+# auth status: signed in unless the test says otherwise ($TEST_CTRL/claude-signed-out);
+# like the real thing, exit 1 when signed out, JSON on stdout either way.
+if [ "${1:-}" = auth ] && [ "${2:-}" = status ]; then
+  if [ -e "$TEST_CTRL/claude-signed-out" ]; then echo '{"loggedIn":false,"authMethod":"none"}'; exit 1; fi
+  echo '{"loggedIn":true,"authMethod":"claude.ai"}'; exit 0
+fi
 prompt='' model='' tools='' sys=''
 # Interactive (no -p): `open` execs claude with the prompt as its only argument; the stub
 # records where it was opened and with what, and exits.

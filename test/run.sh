@@ -586,6 +586,28 @@ case_human_queue_answer_and_open() {
   assert_eq "$(git -C "$BEAD_LOOP_STATE/repo/wt/t-1" rev-parse --abbrev-ref HEAD)" bead/t-1 "the worktree is on the branch"
 }
 
+case_claude_signed_out_beads_wait() {
+  # A claude/* round while Claude is signed out would die in seconds and cost a failure for
+  # nothing: the lane leaves such a bead in its queue and takes the next one; escalate
+  # refuses; status says so; signing in (the file gone) lets it run.
+  setup true auto '' "$(printf 'max_inflight = 3\n%s' "$(stages stub/fast::1 claude/opus:claude/opus:1)")"; echo nocommit >"$TEST_CTRL/worker"
+  sup --once tick   # t-1 fails on stub/fast: 1 failure, next round is Claude's
+  : >"$TEST_CTRL/claude-signed-out"
+  rc=0; sup escalate "$REPO" t-1 || rc=$?; assert_eq "$rc" 1 "escalate refused while signed out"
+  : >"$TEST_CTRL/calls"; sup --once tick
+  assert_eq "$(calls)" "" "t-1 left in the queue, no round run"
+  assert_match "$(cat "$T/sup.log")" "dev: 1 bead(s) wait for Claude — it is signed out" "said so"
+  assert_eq "$(cat "$BEAD_LOOP_STATE/repo/failures/t-1")" 1 "t-1 not charged a failure"
+  assert_eq "$(sup --json status "$REPO" | jq -r '.claude_ok, (.queues.dev | map(.id) | join(" "))' | tr '\n' ' ')" "false t-1 " "status: claude_ok false; t-1 still queued"
+  # Another bead can still be worked meanwhile.
+  jq '. + [{id:"t-2", title:"Second", description:"y", status:"open", priority:3, labels:["delegate:local"]}]' "$BD_STATE/issues.json" >"$BD_STATE/i.tmp" && mv "$BD_STATE/i.tmp" "$BD_STATE/issues.json"
+  echo "done" >"$TEST_CTRL/worker"; : >"$TEST_CTRL/calls"; sup --once tick
+  assert_eq "$(cut -d' ' -f3 "$TEST_CTRL/calls" | head -1)" "stub/fast" "the lane took t-2 on stub/fast"
+  assert_match "$(cat "$TEST_CTRL/prompt.1")" "id: t-2" "t-2 was the one worked"
+  rm "$TEST_CTRL/claude-signed-out"; : >"$TEST_CTRL/calls"; sup --once tick
+  assert_eq "$(cut -d' ' -f3,4 "$TEST_CTRL/calls" | head -1)" "claude/opus claude" "signed in: t-1's Claude round runs"
+}
+
 # ---- main ----------------------------------------------------------------------------
 cases=$(declare -F | awk '{print $3}' | grep '^case_')
 [ $# -gt 0 ] && cases=$(printf 'case_%s\n' "$@")

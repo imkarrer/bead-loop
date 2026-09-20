@@ -265,6 +265,31 @@ stage_for() {
   done
 }
 
+# claude_ok: whether a claude/* round can run at all — Claude Code signed in on this box.
+# Asked once per process. A round started while signed out dies in seconds and would
+# cost the bead a failure for nothing, so a lane leaves such a bead in its queue instead
+# (runnable MODEL says whether a model can run now) and says so once.
+CLAUDE_OK=
+claude_ok() {
+  if [ -z "$CLAUDE_OK" ]; then
+    if command -v claude >/dev/null && [ "$(claude auth status 2>/dev/null | jq -r '.loggedIn' 2>/dev/null)" = true ]; then CLAUDE_OK=1; else CLAUDE_OK=0; fi
+  fi
+  [ "$CLAUDE_OK" = 1 ]
+}
+runnable() { case $1 in claude/*) claude_ok ;; *) return 0 ;; esac; }
+# pick_runnable dev|review: the first bead in that queue whose round's model can run now;
+# the ones skipped are logged once per lane.
+pick_runnable() {
+  local which=$1 id n pick='' skipped=0
+  for id in $( [ "$which" = dev ] && dev_queue || review_queue ); do
+    n=$(failures_of "$id"); stage_for "$n" || { pick=$id; break; }
+    if runnable "$([ "$which" = dev ] && echo "$S_MODEL" || echo "${S_REVIEW:-none}")"; then pick=$id; break; fi
+    skipped=$((skipped + 1))
+  done
+  [ "$skipped" = 0 ] || log "$SLUG: $which: $skipped bead(s) wait for Claude — it is signed out on this box (claude auth login)"
+  printf '%s' "$pick"
+}
+
 # last_stage_start: the lowest failure count that lands on the last stage.
 last_stage_start() {
   local total=0 s a n=0
@@ -280,6 +305,7 @@ last_stage_start() {
 escalate() {
   local id=$1 n
   n=$(last_stage_start); stage_for "$n" || die "$SLUG: no stage to escalate to"
+  runnable "$S_MODEL" || die "$SLUG: $S_MODEL cannot run: Claude is signed out on this box — sign in first (the page's Sign in, or claude auth login)"
   printf '%s\n' "$n" >"$RS/failures/$id"
   bdr update "$id" --append-notes "bead-loop $(date -Iminutes): escalated by hand to the last stage (worker $S_MODEL, reviewer ${S_REVIEW:-none})" >/dev/null
   if [ ! -e "$RS/review/$id" ] && [ "$(cat "$RS/lane.dev" 2>/dev/null)" != "$id" ] && [ "$(cat "$RS/lane.review" 2>/dev/null)" != "$id" ]; then
@@ -363,7 +389,7 @@ dev_one() {
     if [ "$(inflight_count)" -ge "$MAX_INFLIGHT" ]; then
       log "$SLUG: dev: $(inflight_count) in flight (max $MAX_INFLIGHT); waiting on CI"; return 1
     fi
-    id=$(dev_queue | head -1)
+    id=$(pick_runnable dev)
     if [ -z "$id" ]; then log "$SLUG: dev: nothing ready with label $LABEL"; return 1; fi
   fi
   local json title branch wt stamp logf prompt final rc n history resumed=0
@@ -471,7 +497,7 @@ $(tail -15 "$logf.gate-2")"; return 0
 review_one() {
   local id=${1:-}
   if [ -z "$id" ]; then
-    id=$(review_queue | head -1)
+    id=$(pick_runnable review)
     [ -n "$id" ] || return 1
   fi
   local json title branch wt stamp logf final verdict rc n
@@ -833,6 +859,7 @@ status_json() {
     --argjson merge "$merge" --argjson failures "$failures" --argjson worktrees "$worktrees" \
     --argjson dev "$dev" --argjson review "$review" --argjson lanes "$lanes" \
     --argjson paused "{\"dev\": $([ -e "$STATE_DIR/pause.dev" ] && echo true || echo false), \"review\": $([ -e "$STATE_DIR/pause.review" ] && echo true || echo false)}" \
+    --argjson claude_ok "$(case " $STAGES " in *claude/*) claude_ok && echo true || echo false ;; *) echo null ;; esac)" \
     --argjson open "$(bdr ready -l "$LABEL" --json -n 0 2>/dev/null | jq -c '. // []' 2>/dev/null || echo '[]')" \
     --argjson inprog "$(bdr list --status in_progress -l "$LABEL" --json -n 0 2>/dev/null | jq -c '. // []' 2>/dev/null || echo '[]')" '
     ($stages | split(" ") | map(split(":") | {worker: .[0], reviewer: .[1], failures: (.[2] | tonumber)})) as $st
@@ -849,7 +876,7 @@ status_json() {
     | ($lanes | [.[]?.id]) as $laneids
     | {slug: $slug, repo: $repo, label: $label, base: $base, merge: $merge_mode, attach: $attach, max_inflight: $max_inflight,
        stages: $st, on_exhaust: $on_exhaust,
-       lanes: ($lanes | with_entries(.value += (bead($byid[.value.id] // {id: .value.id})))), paused: $paused,
+       lanes: ($lanes | with_entries(.value += (bead($byid[.value.id] // {id: .value.id})))), paused: $paused, claude_ok: $claude_ok,
        queues: {
          dev:    ($dev | map(select(. as $i | $laneids + ($merge | map(.id)) + ($review | map(.id)) | index($i) | not) | bead($byid[.] // {id: .}))),
          review: ($review | map(select(.id as $i | $laneids | index($i) | not) | . + bead($byid[.id] // {id: .id}))),
