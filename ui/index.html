@@ -113,6 +113,10 @@
   .reply code.cmd { font: 12px var(--mono); color: var(--bright); background: var(--base03); padding: 3px 7px; border-radius: 4px; user-select: all; }
 
 
+  /* the log's heading carries its one option, at the right */
+  .card h3.log { display: flex; align-items: center; }
+  .card h3.log .opt { margin-left: auto; display: flex; align-items: center; gap: 6px; text-transform: none; letter-spacing: 0; font-weight: 400; font-size: 12.5px; cursor: pointer; }
+  .card h3.log .opt input { margin: 0; accent-color: var(--accent); }
   pre.log { margin: 0; font: 12.5px/1.6 var(--mono); white-space: pre-wrap; max-height: 44vh; overflow: auto; color: var(--ink); }
   pre.log .t { color: var(--muted); }
   pre.log .good { color: var(--green); } pre.log .warn { color: var(--yellow); } pre.log .bad { color: var(--orange); }
@@ -351,16 +355,24 @@ function logClass(m) {
   if (/^(Starting|Finished|Stopped|Started) |\.service:/.test(m)) return 'sys';
   return '';
 }
+// systemd's own lines — Starting, Finished, Stopped, the unit's accounting — are the
+// journal's, not the loop's: hidden unless asked, and the asking is remembered per browser.
+let showSys = false;
+try { showSys = localStorage.getItem('showSys') === '1'; } catch { /* no storage: the default, every load */ }
+window.setSys = (on) => { showSys = !!on; try { localStorage.setItem('showSys', showSys ? '1' : '0'); } catch { /* not remembered, still applied */ } render(); };
 
 function render() {
   if (!last) return;
   header(last);
+  const lines = last.log.map((l) => { const m = l.msg.replace(/^\d\d:\d\d:\d\d /, ''); return { t: l.t, m, cls: logClass(m) }; }).filter((l) => showSys || l.cls !== 'sys');
   const log = last.log.length === 0 ? '<div class="empty">no journal (not running under systemd?)</div>'
-    : `<pre class="log" id="log">${last.log.map((l) => { const m = l.msg.replace(/^\d\d:\d\d:\d\d /, ""); return `<span class="t">${clock(l.t)}</span>  <span class="${logClass(m)}">${esc(m)}</span>`; }).join("\n")}</pre>`;
+    : lines.length === 0 ? '<div class="empty">only systemd’s own lines so far</div>'
+    : `<pre class="log" id="log">${lines.map((l) => `<span class="t">${clock(l.t)}</span>  <span class="${l.cls}">${esc(l.m)}</span>`).join("\n")}</pre>`;
+  const sysBox = `<label class="opt" title="systemd’s Starting/Finished/Stopped lines for the unit"><input type="checkbox" ${showSys ? 'checked' : ''} onchange="setSys(this.checked)">systemd lines</label>`;
   $('main').innerHTML = (last.error ? `<div class="banner">status failed: ${esc(last.error)}</div>` : '')
     + (last.repos.length === 0 ? '<section class="card"><div class="empty">no repos: set <span class="mono">repos</span> in ~/.config/bead-loop/config.toml</div></section>' : '')
     + last.repos.map((r) => repo(r, last.now, last.service.available && (last.service.active === 'active' || last.service.active === 'activating'))).join("")
-    + `<section class="card"><h3>Supervisor log</h3>${log}</section>`;
+    + `<section class="card"><h3 class="log">Supervisor log${sysBox}</h3>${log}</section>`;
   const el = $('log'); if (el) el.scrollTop = el.scrollHeight;
   $('foot').textContent = `state as of ${clock(last.now)} · pushed on every change`;
 }
