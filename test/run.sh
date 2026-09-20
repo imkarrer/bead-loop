@@ -526,6 +526,8 @@ case_status_json_and_ui() {
   assert_match "$log" '<span class="pick">repo: dev: bead t-2 to stub/worker</span>' "the loop's line shown"
   assert_eq "$(printf '%s' "$log" | grep -c 'class="sys"')" 0 "systemd's lines hidden"
   assert_match "$(timeout 5 "$REAL_CURL" -sN -m 4 "http://127.0.0.1:$port/api/events" | head -1)" '^data: {"now":[0-9]*,"repos":\[{"slug":"repo"' "the event stream opens with the state"
+  # Every button the page renders for this state must be a button: the onclick parses as JS.
+  node "$HERE/ui-onclicks.js" "$T/state.json" >"$T/onclicks.txt" 2>&1 && ok || bad "onclick attributes: $(tail -3 "$T/onclicks.txt" | tr '\n' ' ')"
   # The second page gets the last state replayed at once, with a fresh now in front: still one JSON object.
   assert_eq "$(timeout 5 "$REAL_CURL" -sN -m 4 "http://127.0.0.1:$port/api/events" | head -1 | sed 's/^data: //' | jq -r '.repos[0].slug, (.now | type)' | tr '\n' ' ')" "repo number " "the replayed state is valid JSON"
   assert_match "$("$REAL_CURL" -s -m 3 -X POST -H 'content-type: application/json' -d '{"name":"review","paused":true}' "http://127.0.0.1:$port/api/lane")" '"paused":true' "pause a lane from the page"

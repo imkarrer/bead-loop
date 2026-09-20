@@ -14,7 +14,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: syntax
-        run: bash -n bin/bead-supervisor install.sh test/run.sh test/lint-skills.sh test/bin/* && node --check bin/bead-loop-ui
+        run: bash -n bin/bead-supervisor install.sh test/run.sh test/lint-skills.sh test/bin/* && node --check bin/bead-loop-ui test/ui-onclicks.js
       - name: shellcheck
         run: shellcheck -S warning bin/bead-supervisor install.sh test/run.sh test/lint-skills.sh test/bin/*
       - name: yq
