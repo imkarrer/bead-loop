@@ -136,9 +136,11 @@ first put them last, and the one dev lane was the GPU's.)
 The loop reads the world afresh on every round (both config files, bd, the state dir), so
 an edit takes effect on the next round. The binary watches its own path: after a deploy
 puts a new one there, the running loop re-execs it at the next moment both lanes are
-idle. `systemctl stop` aborts the model sessions the lanes are on; the next start
-**recovers** first — stale lane markers go, orphan sessions are aborted, and a dev round
-the stop cut short is back in the dev queue with no failure charged.
+idle. `systemctl stop` aborts the model sessions the lanes are on — and a worker, gate or
+reviewer that comes back under the stop is cut short, never judged: no failure, no note,
+the branch kept. The next start **recovers** first — stale lane markers go, orphan sessions
+are aborted, and a dev round the stop cut short is back in the dev queue with no failure
+charged.
 
 `bead-supervisor tick` is the same lanes for one pass: reconcile, both lanes until both
 queues drain and both lanes idle, reconcile again, exit — for hand runs and the test

@@ -463,6 +463,32 @@ case_sigterm_aborts_server_session() {
   assert_match "$(cat "$TEST_CTRL/curl.log")" "http://oc.test:4096/session/ses_hang/abort" "the session on the server was aborted"
   assert_match "$(cat "$T/sup.log")" "aborting session ses_hang" "logged"
 }
+case_stop_charges_no_failure() {
+  # A stop (a deploy recycles the stack) aborts the session and signals the client; the
+  # client comes back non-zero and the lane, still running until the signal thread exits,
+  # judged that as the round's failure: one charged, a note, the branch removed. Now the
+  # signal thread raises a flag before it aborts anything, and a round that ends under it
+  # is cut short, not failed: the bead stays in_progress with its worktree and branch —
+  # what recover reopens with no failure at the next start. The stub server takes a
+  # second to abort (abort-delay), as the real one does, so the lane has its chance.
+  setup true auto '' 'attach = "http://oc.test:4096"'; echo hang >"$TEST_CTRL/worker"
+  echo '{"ses_hang":{"type":"busy"}}' >"$TEST_CTRL/session-status.json"; echo 1 >"$TEST_CTRL/abort-delay"
+  setsid "$SUP" --once tick 2>>"$T/sup.log" & pid=$!
+  until grep -q '^bead-worker' "$TEST_CTRL/calls" 2>/dev/null; do sleep 0.1; done; sleep 0.3
+  kill -TERM -- -"$pid"
+  rc=0; wait "$pid" || rc=$?
+  assert_eq "$rc" 143 "exits 143 on TERM"
+  assert_match "$(cat "$T/sup.log")" "t-1: round cut short by the stop; nothing charged" "the lane saw the stop, not a failure"
+  assert_eq "$(cat "$BEAD_LOOP_STATE/repo/failures/t-1" 2>/dev/null || echo 0)" 0 "no failure charged"
+  ! grep -q 'round 1' <<<"$(bead .notes)" && ok || bad "no round note on the bead: $(bead .notes)"
+  assert_eq "$(bead .status)" in_progress "the bead is as the stop left it"
+  git -C "$REPO" show-ref -q refs/heads/bead/t-1 && ok || bad "the branch is kept for recover"
+  [ -d "$BEAD_LOOP_STATE/repo/wt/t-1" ] && ok || bad "the worktree is kept for recover"
+  sup recover "$REPO"
+  assert_eq "$(bead .status)" open "recover reopened it"
+  assert_match "$(bead .notes)" "round interrupted by a stop; back in the dev queue, no failure charged" "with the stop's note"
+  assert_eq "$(cat "$BEAD_LOOP_STATE/repo/failures/t-1" 2>/dev/null || echo 0)" 0 "still no failure"
+}
 case_new_attempt_aborts_leftover_session() {
   setup true auto '' 'attach = "http://oc.test:4096"'
   echo '{"ses_old":{"type":"busy"}}' >"$TEST_CTRL/session-status.json"

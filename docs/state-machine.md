@@ -127,7 +127,7 @@ Two flags are orthogonal to the state and do not move a bead:
 | dev | no commit | ready | +1 | removed | exists |
 | dev | gate fails, fix round, gate fails | ready | +1 | removed | exists |
 | dev | gate passes | review | — | kept | exists |
-| dev | loop stopped / crashed | ready ("round interrupted") | — | removed | **new** (recover at start) — today: looks parked |
+| dev | loop stopped / crashed | ready ("round interrupted") | — | kept for the resume | exists (recover at start; a worker, gate or reviewer that comes back under the stop is cut short, never judged — `signals::stopping`) |
 | dev | round crashes (`bd`/`git` error) | ready (held: "round crashed") · human after 3 | — | removed | **new** — today: the lane dies |
 
 ### review → reviewing → …
@@ -143,7 +143,7 @@ Two flags are orthogonal to the state and do not move a bead:
 | reviewing | `APPROVE:`, push, PR opened or updated | merge | — | pushed | exists |
 | reviewing | push refused (non-fast-forward: someone pushed to `bead/ID`) | ready (held: "branch diverged on origin") | — | kept | **new** — today: `set -e`, the lane dies |
 | reviewing | `gh pr create` fails (gh signed out, network) | review (held: "gh: <error>") | — | pushed | **new** — today: the lane dies |
-| reviewing | loop stopped | review | — | kept | exists (`review/ID` survives; the lane retakes it) |
+| reviewing | loop stopped | review | — | kept | exists (`review/ID` survives; the lane retakes it; a reviewer that comes back under the stop is cut short, not a send-back) |
 
 ### merge → …
 

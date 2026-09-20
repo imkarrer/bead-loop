@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Stub opencode for bead-loop tests. `run` only. Behaviour from $TEST_CTRL:
 #   worker      done | blocked | nocommit | uncommitted | hang   (what the implementor leaves behind)
+#   abort-delay seconds the server takes for the next abort, once (curl stub): the stop's race
 #   review      one line per round: approve | reject
 #   brief       shape (default: WHAT HAPPENED / WHY / QUESTION) | plain (no shape) | crash
 #   calls       appended: "<agent> <dir> <model> <attach>" per run, prompt saved to prompt.<n>
@@ -24,7 +25,7 @@ case $agent in
     case $mode in
       blocked) say "I looked."; say "BLOCKED: lib/x.ts:3 has no such flag" ;;
       nocommit) say "DONE: nothing to do" ;;
-      hang) sleep 30 ;;
+      hang) say "working on it"; sleep 30 ;;   # said something, then the clock or a stop ends it
       crash) echo "connection refused" >&2; exit 7 ;;   # the harness died before the model said a word
       uncommitted) echo "work" >"$dir/work.txt"; say "DONE: wrote work.txt (forgot to commit)" ;;
       done)

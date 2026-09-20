@@ -14,7 +14,8 @@ while [ $# -gt 0 ]; do
 done
 echo "$url $dir" >>"$TEST_CTRL/curl.log"
 case $url in
-  */abort)          : ;;
+  */abort)          # a slow server, once: the stop's own abort takes a moment, the lane's after it do not
+                    if [ -f "$TEST_CTRL/abort-delay" ]; then d=$(cat "$TEST_CTRL/abort-delay"); rm -f "$TEST_CTRL/abort-delay"; sleep "$d"; fi ;;
   */session/status) cat "$TEST_CTRL/session-status.json" 2>/dev/null || echo '{}' ;;
   */session)        cat "$TEST_CTRL/sessions.json" 2>/dev/null || echo '[]' ;;
   *) echo "stub curl: $url" >&2; exit 22 ;;

@@ -4,6 +4,7 @@
 //! the lane markers, forwards the signal to the children still running (a plain `kill`
 //! of the supervisor alone reaches them too), and exits 143 — the bash's `on_signal`.
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Mutex;
 
 struct Lane {
@@ -16,6 +17,26 @@ struct Lane {
 
 static LANES: Mutex<Vec<Lane>> = Mutex::new(Vec::new());
 static CHILDREN: Mutex<Vec<u32>> = Mutex::new(Vec::new());
+/// Set first thing on TERM/INT, before a session is aborted: a lane whose worker,
+/// gate or reviewer then comes back non-zero is looking at the stop, not the bead.
+static STOPPING: AtomicBool = AtomicBool::new(false);
+/// Lanes that have come back through `cut_short` since the flag went up.
+static ACKED: AtomicUsize = AtomicUsize::new(0);
+
+/// Whether the loop is on its way out (the signal thread is aborting sessions).
+pub fn stopping() -> bool {
+    STOPPING.load(Ordering::SeqCst)
+}
+
+/// A lane on a round saw the stop and left its bead as it was.
+pub fn ack_stop() {
+    ACKED.fetch_add(1, Ordering::SeqCst);
+}
+
+#[cfg(test)]
+pub fn set_stopping(on: bool) {
+    STOPPING.store(on, Ordering::SeqCst);
+}
 
 /// What a lane is on right now: its worktree (a session may be running there) and its
 /// marker file. `key` names the lane in this process (dev, review, or a hand-run work).
@@ -71,12 +92,14 @@ pub fn install() {
 }
 
 fn on_signal() -> ! {
+    STOPPING.store(true, Ordering::SeqCst);
     // Abort what the model server is doing for us, then the lane markers, then the
     // children (timeout, opencode, claude) that a group kill would have reached anyway.
     let lanes: Vec<(String, String, Option<PathBuf>, Option<PathBuf>)> = LANES
         .lock()
         .map(|g| g.iter().map(|l| (l.attach.clone(), l.slug.clone(), l.wt.clone(), l.lane_file.clone())).collect())
         .unwrap_or_default();
+    let lanes_on_rounds = lanes.iter().filter(|l| l.2.is_some()).count();
     for (attach, slug, wt, lane_file) in lanes {
         if let Some(wt) = wt {
             crate::harness::abort_sessions_on(&attach, &slug, &wt);
@@ -88,6 +111,15 @@ fn on_signal() -> ! {
     let children: Vec<u32> = CHILDREN.lock().map(|g| g.clone()).unwrap_or_default();
     for pid in children {
         unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM) };
+    }
+    // Then a moment for each lane that was on a round to come back through its aborted
+    // client or gate and say "cut short" (round.rs) — so the log tells the truth and no
+    // lane is mid-judgement when the process goes. Bounded: a lane stuck in git waits
+    // for nobody.
+    let on_rounds = lanes_on_rounds;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    while ACKED.load(Ordering::SeqCst) < on_rounds && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(20));
     }
     std::process::exit(143)
 }
