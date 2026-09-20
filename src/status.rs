@@ -164,7 +164,7 @@ pub fn status_json(repo: &Repo) -> Value {
     // lanes
     let mut lanes = Map::new();
     let mut laneids = Vec::new();
-    for name in ["dev", "review"] {
+    for name in ["dev", "review", "claude"] {
         if let Some(id) = repo.lane_bead(name) {
             let mut m = bead_json(repo, &byid, &id);
             m.insert("since".into(), json!(mtime(&repo.lane_path(name))));
@@ -254,7 +254,7 @@ pub fn status_json(repo: &Repo) -> Value {
         "stages": stages, "on_exhaust": repo.on_exhaust,
         "conflict_worker": if repo.conflict_worker.is_empty() { Value::Null } else { json!(repo.conflict_worker) },
         "lanes": lanes,
-        "paused": {"dev": repo.paused("dev"), "review": repo.paused("review")},
+        "paused": {"dev": repo.paused("dev"), "review": repo.paused("review"), "claude": repo.paused("claude")},
         "claude_ok": if has_claude { json!(claude_ok()) } else { Value::Null },
         "priority": priority,
         "queues": {"dev": dev, "review": review, "merge": merge},
@@ -310,7 +310,15 @@ pub fn status_one(repo: &Repo) -> String {
         stages.join(" → "),
         if j["priority"].as_bool().unwrap_or(false) { "  [priority]" } else { "" }
     ));
-    for (name, label) in [("dev", "  dev lane:    "), ("review", "  review lane: ")] {
+    let has_claude = j["stages"]
+        .as_array()
+        .map(|a| a.iter().any(|st| s(st, "worker").starts_with("claude/") || s(st, "reviewer").starts_with("claude/")))
+        .unwrap_or(false);
+    let mut lane_rows = vec![("dev", "  dev lane:    "), ("review", "  review lane: ")];
+    if has_claude {
+        lane_rows.push(("claude", "  claude lane: "));
+    }
+    for (name, label) in lane_rows {
         let l = &j["lanes"][name];
         let what = if l.is_object() {
             format!("{} {} ({})", s(l, "id"), s(l, "title"), age(l["since"].as_i64().unwrap_or(0)))

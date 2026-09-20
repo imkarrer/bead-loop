@@ -43,7 +43,9 @@ case ${1:-} in
   suite)
     [ -x "$target/debug/bead-supervisor" ] || { echo "--- :rust: build"; cargo build --quiet; }
     echo "--- :repeat: the state machine, against $target/debug/bead-supervisor"
-    SUP=$target/debug/bead-supervisor test/run.sh
+    # SUP for the suite; BEAD_SUPERVISOR for the UI server the suite starts (the binary
+    # is in the cache dir here, not under the checkout's target/).
+    SUP=$target/debug/bead-supervisor BEAD_SUPERVISOR=$target/debug/bead-supervisor test/run.sh
     ;;
   *) echo "usage: scripts/ci.sh rust|scripts|suite" >&2; exit 2 ;;
 esac

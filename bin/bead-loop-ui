@@ -222,7 +222,7 @@ const actions = {
   async wake() { await supervisor(['wake']); return { woke: true }; },
   // lane {name, paused}: the lane starts no new round until resumed; the other goes on.
   async lane({ name, paused }) {
-    if (name !== 'dev' && name !== 'review') throw new Error('lane is dev or review');
+    if (name !== 'dev' && name !== 'review' && name !== 'claude') throw new Error('lane is dev, review or claude');
     await supervisor([paused ? 'pause' : 'resume', name]);
     return { lane: name, paused: !!paused };
   },

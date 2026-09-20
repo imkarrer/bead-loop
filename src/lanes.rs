@@ -28,6 +28,27 @@ pub struct Ctx {
     pub state_dir: PathBuf,
     /// tick semantics: leave when the queues are drained and the other lane idle
     pub until_idle: bool,
+    /// a stage somewhere names claude/*: a third lane takes those rounds, and the dev
+    /// and review lanes leave them alone
+    pub claude_lane: bool,
+}
+
+/// The lanes this loop runs: dev and review always, claude when a stage names it.
+pub fn lane_names(ctx: &Ctx) -> Vec<&'static str> {
+    if ctx.claude_lane {
+        vec!["dev", "review", "claude"]
+    } else {
+        vec!["dev", "review"]
+    }
+}
+
+/// Whether any repo's stages name a claude/* worker or reviewer (or conflict_worker).
+pub fn has_claude_stage(repos: &[PathBuf], model_flag: Option<&str>) -> bool {
+    repos.iter().any(|r| {
+        let repo = Repo::load(r, model_flag);
+        repo.conflict_worker.starts_with("claude/")
+            || repo.stages.iter().any(|s| s.worker.starts_with("claude/") || s.reviewer.starts_with("claude/"))
+    })
 }
 
 fn lane_wait() -> f64 {
@@ -171,8 +192,46 @@ pub fn wait_for_work(ctx: &Ctx, max: f64) {
 /// `lane NAME`: one lane's passes over every repo. With `until_idle` it leaves when its
 /// queue is empty and the other lane has looked idle three checks running (the other may
 /// still send something this way); otherwise it blocks on the bell and goes on.
+/// One pass of the Claude lane over a repo: finishing before starting — a review round
+/// whose reviewer is claude/*, else a worker round whose worker is; and after a worker
+/// round, the bead's review round too when that is Claude's as well, so the bead's
+/// rounds stay together (a `--once` tick then carries a Claude bead to its PR, as the
+/// dev+review pair did before the lane existed).
+fn claude_pass(repo: &Repo, opts: &Opts) -> Pass {
+    if review_one(repo, opts, None, Some(true)) == Pass::Worked {
+        return Pass::Worked;
+    }
+    let mut last = None;
+    if dev_one(repo, opts, None, &mut last, Some(true)) == Pass::Worked {
+        if let Some(id) = last {
+            if repo.review_path(&id).exists() {
+                // Claude's own reviewer, or none at all (straight to PR): nothing here waits
+                // on a local model, so it is this lane's to finish.
+                let reviewer = repo.stage_for(repo.failures_of(&id)).map(|s| s.review).unwrap_or_default();
+                if reviewer.starts_with("claude/") || reviewer.is_empty() {
+                    review_one(repo, opts, Some(&id), None);
+                }
+            }
+        }
+        return Pass::Worked;
+    }
+    Pass::Nothing
+}
+
+/// Any lane but `name` mid-pass or on a round: the reason a lane with an empty queue
+/// does not leave a tick yet.
+fn others_busy(ctx: &Ctx, name: &str) -> bool {
+    lane_names(ctx).into_iter().filter(|n| *n != name).any(|n| other_busy(ctx, n))
+}
+
 pub fn lane(ctx: &Ctx, name: &str, pass_counter: Arc<AtomicUsize>) {
-    let other = if name == "dev" { "review" } else { "dev" };
+    // Which rounds this lane takes: with a Claude lane, dev and review leave claude/*
+    // rounds to it; without one, they take everything.
+    let only: Option<bool> = match name {
+        "claude" => Some(true),
+        _ if ctx.claude_lane => Some(false),
+        _ => None,
+    };
     let _lock = match try_lock(&ctx.state_dir.join(format!("lock.{name}"))) {
         Some(l) => l,
         None => {
@@ -199,12 +258,20 @@ pub fn lane(ctx: &Ctx, name: &str, pass_counter: Arc<AtomicUsize>) {
         said_paused = false;
         let pass = pass_counter.fetch_add(1, Ordering::SeqCst);
         let mut moved = false;
-        let me: &'static str = if name == "dev" { "dev" } else { "review" };
+        let me: &'static str = match name {
+            "dev" => "dev",
+            "claude" => "claude",
+            _ => "review",
+        };
         set_passing(me, true);
         for r in repos_in_order(&ctx.repos, &ctx.state_dir, pass) {
             let repo = Repo::load(&r, ctx.opts.model_flag.as_deref());
             let mut last = None;
-            let p = if name == "dev" { dev_one(&repo, &ctx.opts, None, &mut last) } else { review_one(&repo, &ctx.opts, None) };
+            let p = match name {
+                "dev" => dev_one(&repo, &ctx.opts, None, &mut last, only),
+                "claude" => claude_pass(&repo, &ctx.opts),
+                _ => review_one(&repo, &ctx.opts, None, only),
+            };
             if p == Pass::Worked {
                 moved = true;
                 if ctx.once {
@@ -226,7 +293,7 @@ pub fn lane(ctx: &Ctx, name: &str, pass_counter: Arc<AtomicUsize>) {
             // lane looks idle between its rounds too — and at the very start, before it has
             // claimed anything — so this lane leaves only after seeing it idle three checks
             // in a row, LANE_WAIT apart.
-            if other_busy(ctx, other) {
+            if others_busy(ctx, name) {
                 idle = 0;
             } else {
                 idle += 1;
@@ -255,16 +322,21 @@ pub fn tick(ctx: &Ctx) {
     loop {
         let counter = Arc::new(AtomicUsize::new(0));
         if ctx.serial {
-            lane(ctx, "dev", counter.clone());
-            lane(ctx, "review", counter);
+            for name in lane_names(ctx) {
+                lane(ctx, name, counter.clone());
+            }
         } else {
-            let c1 = ctx.clone();
-            let k1 = counter.clone();
-            let d = std::thread::spawn(move || lane(&c1, "dev", k1));
-            let c2 = ctx.clone();
-            let r = std::thread::spawn(move || lane(&c2, "review", counter));
-            let _ = d.join();
-            let _ = r.join();
+            let handles: Vec<_> = lane_names(ctx)
+                .into_iter()
+                .map(|name| {
+                    let c = ctx.clone();
+                    let k = counter.clone();
+                    std::thread::spawn(move || lane(&c, name, k))
+                })
+                .collect();
+            for h in handles {
+                let _ = h.join();
+            }
         }
         round += 1;
         // Both lanes left. If one left work the other should have taken (a race at startup,
@@ -284,7 +356,7 @@ pub fn tick(ctx: &Ctx) {
 pub fn recover(ctx: &Ctx) {
     for r in &ctx.repos {
         let repo = Repo::load(r, ctx.opts.model_flag.as_deref());
-        for name in ["dev", "review"] {
+        for name in ["dev", "review", "claude"] {
             if repo.lane_busy(name) {
                 log(&format!("{}: stale lane.{name} from a stop; cleared", repo.slug));
                 repo.lane_clear(name);
@@ -342,7 +414,7 @@ fn watcher(ctx: &Ctx) {
 
 /// `run`: the resident loop.
 pub fn run(ctx: &Ctx) -> ! {
-    log(&format!("bead-loop resident: {} repo(s); lanes dev, review; merge watcher", ctx.repos.len()));
+    log(&format!("bead-loop resident: {} repo(s); lanes {}; merge watcher", ctx.repos.len(), lane_names(ctx).join(", ")));
     recover(ctx);
     crate::merge::set_quiet(true);
     let exe = std::env::current_exe().ok();
@@ -366,8 +438,7 @@ pub fn run(ctx: &Ctx) -> ! {
             })
             .expect("lane thread")
     };
-    let _dev = supervise("dev", ctx.clone(), counter.clone());
-    let _rev = supervise("review", ctx.clone(), counter);
+    let _lanes: Vec<_> = lane_names(ctx).into_iter().map(|name| supervise(name, ctx.clone(), counter.clone())).collect();
     let wctx = ctx.clone();
     let _w = std::thread::Builder::new()
         .name("watcher".into())
@@ -388,7 +459,7 @@ pub fn run(ctx: &Ctx) -> ! {
             if now_stamp != (m, len) && now_stamp.0 != 0 {
                 let busy = ctx.repos.iter().any(|r| {
                     let repo = Repo::load(r, ctx.opts.model_flag.as_deref());
-                    repo.lane_busy("dev") || repo.lane_busy("review")
+                    repo.lane_busy("dev") || repo.lane_busy("review") || repo.lane_busy("claude")
                 });
                 if !busy {
                     log("binary changed on disk and the lanes are idle: re-exec");

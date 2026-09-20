@@ -102,6 +102,17 @@ The lanes walk the repos **round-robin** — each pass starts one repo later tha
 so no repo is always last — and a repo made the **priority** (`bead-supervisor priority
 REPO`, or ★ on the page) goes first on every pass until you clear it.
 
+A stage that names `claude/*` gets a lane of its own, the **Claude lane**: it takes every
+round whose model is Claude's — a worker round for a bead on that stage, a reviewer round
+whose reviewer is Claude, a rebase round when `conflict_worker` is — and the dev and
+review lanes leave those alone. A bead escalated to Claude runs at once, on Anthropic,
+while the GPU and the CPU go on with theirs; it never queues behind them. The Claude lane
+keeps a bead's rounds together (worker, then its Claude reviewer), and pauses on its own
+(`pause claude`). With Claude signed out it waits, saying so, and takes the beads the
+moment Sign in completes. (Before this lane existed, two beads escalated to Claude sat
+in the dev queue for a day behind fresh beads: fewest failures first put them last, and
+the one dev lane was the GPU's.)
+
 The loop reads the world afresh on every round (both config files, bd, the state dir), so
 an edit takes effect on the next round. The binary watches its own path: after a deploy
 puts a new one there, the running loop re-execs it at the next moment both lanes are

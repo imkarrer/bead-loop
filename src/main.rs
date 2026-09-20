@@ -6,9 +6,10 @@
 //!   bead-supervisor tick [REPO...]        one pass to idle: reconcile, both lanes side by side until both queues
 //!                                         drain and both lanes idle, reconcile again, exit
 //!   bead-supervisor work REPO [BEAD_ID]   one bead through dev and review now (top of the dev queue, or the id given)
-//!   bead-supervisor lane dev|review       one lane by itself, until its queue is empty
-//!   bead-supervisor pause dev|review      the lane starts no new round until `resume` (the other lane goes on)
-//!   bead-supervisor resume dev|review
+//!   bead-supervisor lane dev|review|claude   one lane by itself, until its queue is empty (claude: the lane a
+//!                                         claude/* stage gets, so a bead on it never waits behind the GPU)
+//!   bead-supervisor pause dev|review|claude  the lane starts no new round until `resume` (the others go on)
+//!   bead-supervisor resume dev|review|claude
 //!   bead-supervisor priority REPO|none    the repo the lanes look at first on every pass (else round-robin)
 //!   bead-supervisor wake                  ring the bell: every lane looks at its queue now
 //!   bead-supervisor escalate REPO ID      put the bead on the last stage (Claude, usually) and back in the dev
@@ -113,7 +114,9 @@ fn main() {
             }
         },
     };
-    let ctx = lanes::Ctx { repos: repos.clone(), opts: opts.clone(), once, serial, state_dir: state_dir.clone(), until_idle: true };
+    let claude_lane = matches!(cmd.as_str(), "tick" | "run" | "lane") && lanes::has_claude_stage(&repos, opts.model_flag.as_deref());
+    let ctx =
+        lanes::Ctx { repos: repos.clone(), opts: opts.clone(), once, serial, state_dir: state_dir.clone(), until_idle: true, claude_lane };
     let repo_at = |i: usize| -> Repo {
         if repos.len() <= i {
             die("REPO is required");
@@ -129,18 +132,18 @@ fn main() {
             round::work(&repo, &opts, rest.get(1).map(String::as_str));
         }
         "lane" => match lane_name.as_deref() {
-            Some(n @ ("dev" | "review")) => lanes::lane(&ctx, n, std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0))),
+            Some(n @ ("dev" | "review" | "claude")) => lanes::lane(&ctx, n, std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0))),
             _ => die("lane dev or lane review"),
         },
         "pause" => match lane_name.as_deref() {
-            Some(n @ ("dev" | "review")) => {
+            Some(n @ ("dev" | "review" | "claude")) => {
                 util::write_file(&state_dir.join(format!("pause.{n}")), "");
                 log(&format!("{n} lane paused: it starts no new round until resume"));
             }
             _ => die("pause dev or pause review"),
         },
         "resume" => match lane_name.as_deref() {
-            Some(n @ ("dev" | "review")) => {
+            Some(n @ ("dev" | "review" | "claude")) => {
                 let _ = std::fs::remove_file(state_dir.join(format!("pause.{n}")));
                 util::touch(&state_dir.join("wake"));
                 log(&format!("{n} lane resumed; the next pass picks it up"));

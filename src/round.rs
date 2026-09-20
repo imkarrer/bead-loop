@@ -132,7 +132,12 @@ fn hold_expired(repo: &Repo, id: &str) -> bool {
 
 /// `pick_runnable dev|review`: the first bead in that queue whose round's model can run
 /// now and whose hold (if any) has aged; the ones skipped are logged once per pass.
-pub fn pick_runnable(repo: &Repo, which: &str) -> Option<String> {
+///
+/// `only`: which server's rounds this lane takes — `Some(true)` only rounds whose model
+/// is `claude/*` (the Claude lane), `Some(false)` only the rest (the dev and review lanes
+/// when a Claude lane exists), `None` any (a hand-run `work`, or a loop with no Claude
+/// stage). A bead on the Claude stage never waits behind the GPU this way.
+pub fn pick_runnable(repo: &Repo, which: &str, only: Option<bool>) -> Option<String> {
     let queue = if which == "dev" { dev_queue(repo) } else { review_queue(repo) };
     let mut skipped_claude = 0;
     let mut pick = None;
@@ -141,26 +146,42 @@ pub fn pick_runnable(repo: &Repo, which: &str) -> Option<String> {
             continue;
         }
         let n = repo.failures_of(&id);
-        match repo.stage_for(n) {
+        // The model this round runs on: the stage's worker or reviewer — or, for a bead
+        // sent back with a conflict, the rebase worker (conflict_worker, else the last
+        // stage's). A bead whose stages are exhausted is the dev lane's to park.
+        let model = match repo.stage_for(n) {
             None => {
+                if only == Some(true) {
+                    continue;
+                }
                 pick = Some(id);
                 break;
             }
             Some(st) => {
-                let model = if which == "dev" {
-                    st.model.clone()
+                if which == "dev" {
+                    if repo.mark(&id, "conflict").exists() {
+                        conflict_model(repo).unwrap_or(st.model)
+                    } else {
+                        st.model
+                    }
                 } else if st.review.is_empty() {
                     "none".into()
                 } else {
-                    st.review.clone()
-                };
-                if runnable(&model) {
-                    pick = Some(id);
-                    break;
+                    st.review
                 }
-                skipped_claude += 1;
             }
+        };
+        let is_claude = model.starts_with("claude/");
+        match only {
+            Some(true) if !is_claude => continue,
+            Some(false) if is_claude => continue,
+            _ => {}
         }
+        if runnable(&model) {
+            pick = Some(id);
+            break;
+        }
+        skipped_claude += 1;
     }
     if skipped_claude > 0 {
         log(&format!(
@@ -264,25 +285,38 @@ fn apply_harness_label(repo: &Repo, id: &str, json: &Value, model: &mut String) 
 }
 
 /// `dev_one [ID]`
-pub fn dev_one(repo: &Repo, opts: &Opts, id: Option<&str>, last_id: &mut Option<String>) -> Pass {
+/// The worker of a conflict (rebase) round: `conflict_worker`, else the last stage's.
+pub fn conflict_model(repo: &Repo) -> Option<String> {
+    if !repo.conflict_worker.is_empty() {
+        return Some(repo.conflict_worker.clone());
+    }
+    repo.stage_for(repo.last_stage_start()).map(|s| s.model)
+}
+
+pub fn dev_one(repo: &Repo, opts: &Opts, id: Option<&str>, last_id: &mut Option<String>, only: Option<bool>) -> Pass {
     let id = match id {
         Some(i) => i.to_string(),
         None => {
             // The two idle lines: every pass in a tick (the bash did), once per change in
             // the resident loop, which passes every heartbeat.
+            let lane = if only == Some(true) { "claude" } else { "dev" };
             if repo.inflight_count() >= repo.max_inflight {
                 crate::merge::say(
-                    &format!("{}/dev-idle", repo.slug),
-                    format!("{}: dev: {} in flight (max {}); waiting on CI", repo.slug, repo.inflight_count(), repo.max_inflight),
+                    &format!("{}/{lane}-idle", repo.slug),
+                    format!("{}: {lane}: {} in flight (max {}); waiting on CI", repo.slug, repo.inflight_count(), repo.max_inflight),
                 );
                 return Pass::Nothing;
             }
-            match pick_runnable(repo, "dev") {
+            match pick_runnable(repo, "dev", only) {
                 Some(i) => i,
                 None => {
                     crate::merge::say(
-                        &format!("{}/dev-idle", repo.slug),
-                        format!("{}: dev: nothing ready with label {}", repo.slug, repo.label),
+                        &format!("{}/{lane}-idle", repo.slug),
+                        if only == Some(true) {
+                            format!("{}: claude: nothing on the Claude stage", repo.slug)
+                        } else {
+                            format!("{}: dev: nothing ready with label {}", repo.slug, repo.label)
+                        },
                     );
                     return Pass::Nothing;
                 }
@@ -499,10 +533,10 @@ fn last_line_starting(text: &str, prefix: &str) -> Option<String> {
 }
 
 /// `review_one [ID]`
-pub fn review_one(repo: &Repo, opts: &Opts, id: Option<&str>) -> Pass {
+pub fn review_one(repo: &Repo, opts: &Opts, id: Option<&str>, only: Option<bool>) -> Pass {
     let id = match id {
         Some(i) => i.to_string(),
-        None => match pick_runnable(repo, "review") {
+        None => match pick_runnable(repo, "review", only) {
             Some(i) => i,
             None => return Pass::Nothing,
         },
@@ -676,10 +710,10 @@ pub fn review_one(repo: &Repo, opts: &Opts, id: Option<&str>) -> Pass {
 /// and a hand-run check want. A bead the dev lane sends back stops there.
 pub fn work(repo: &Repo, opts: &Opts, id: Option<&str>) {
     let mut last = None;
-    if dev_one(repo, opts, id, &mut last) == Pass::Worked {
+    if dev_one(repo, opts, id, &mut last, None) == Pass::Worked {
         if let Some(id) = last {
             if repo.review_path(&id).exists() {
-                review_one(repo, opts, Some(&id));
+                review_one(repo, opts, Some(&id), None);
             }
         }
     }
