@@ -42,7 +42,7 @@ pub fn escalate(repo: &Repo, id: &str) {
         id,
         &format!("bead-loop {}: escalated by hand to the last stage (worker {}, reviewer {reviewer})", date_iminutes(), st.model),
     );
-    let on_lane = repo.lane_bead("dev").as_deref() == Some(id) || repo.lane_bead("review").as_deref() == Some(id);
+    let on_lane = repo.lane_files().iter().any(|n| repo.lane_bead(n).as_deref() == Some(id));
     if !repo.review_path(id).exists() && !on_lane {
         bd_status(repo, id, "open");
     }

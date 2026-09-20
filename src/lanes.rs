@@ -217,7 +217,7 @@ fn lane_pass(repo: &Repo, opts: &Opts, spec: &LaneSpec) -> Pass {
             if repo.review_path(&id).exists() {
                 let reviewer = repo.stage_for(repo.failures_of(&id)).map(|s| s.review).unwrap_or_default();
                 if reviewer.is_empty() || spec.takes(&reviewer) {
-                    review_one(repo, opts, Some(&id), None);
+                    review_one(repo, opts, Some(&id), Some(spec));
                 }
             }
         }
