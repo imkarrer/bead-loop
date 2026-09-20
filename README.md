@@ -195,7 +195,8 @@ The levers, each one command you would otherwise type: **Tick now**, **Stop tick
 (that lane starts no new round; the other goes on — drain review, or hold the CPU box),
 **Work with Claude** on any bead (to the last stage and back into the dev queue now, ahead
 of its failure count; `bead-supervisor escalate REPO ID`), and **Sign in** in the header when
-`claude` is signed out (a `claude/*` round would fail on the spot): it runs `claude auth login`
+`claude` is signed out — a banner, since a `claude/*` round cannot run then: such beads wait in
+their queue (marked so) rather than burn a failure, and Work with Claude is off. Sign in runs `claude auth login`
 for you — open the link it shows, sign in, paste the code back into the page — so the
 command centre never needs a terminal for it,
 **Abort** on

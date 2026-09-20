@@ -106,10 +106,12 @@ let login = null;  // the claude auth login in progress, if any
 async function claudeStatus(repos) {
   if (!repos.some((r) => r.stages.some((st) => /^claude\//.test(st.worker) || /^claude\//.test(st.reviewer || '')))) return null;
   if (Date.now() - claudeAuth.at < 60000) return claudeAuth.v;
+  // `claude auth status` exits 1 when signed out, with the JSON on stdout all the same:
+  // read the JSON first, and treat a failure without JSON as claude missing.
   const r = await run('claude', ['auth', 'status'], { timeout: 10000 });
   let v;
-  if (!r.ok) v = { available: false, loggedIn: false, error: r.stderr.trim().split('\n').pop() || 'claude not on PATH' };
-  else { try { const j = JSON.parse(r.stdout); v = { available: true, loggedIn: !!j.loggedIn, method: j.authMethod || null }; } catch { v = { available: true, loggedIn: false, error: 'unreadable auth status' }; } }
+  try { const j = JSON.parse(r.stdout); v = { available: true, loggedIn: !!j.loggedIn, method: j.authMethod || null }; }
+  catch { v = { available: false, loggedIn: false, error: r.stderr.trim().split('\n').pop() || (r.code === 'ENOENT' ? 'claude not on PATH' : `claude auth status exited ${r.code}`) }; }
   claudeAuth = { at: Date.now(), v };
   return v;
 }
