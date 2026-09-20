@@ -241,6 +241,20 @@ event stream; nobody presses refresh):
   a link into it, Abort — or why it is idle (nothing queued for it in any repo; N queued
   and starting; Claude signed out), and Pause / Resume. With `[[lanes]]` there is one
   panel per configured lane (gpu, cpu, claude…).
+- **The scoreboard**: how well the workflow works, over the last 24h, 7d, 30d or all of
+  it — six tiles, in the order of the questions: **Landed** (beads the loop merged and
+  closed, and per day), **First try** (landed with no send-back), **Without Claude**
+  (landed by a local model: the point of the local stack), **Rounds per landing**
+  (median and mean), **Time to land** (first claim to merge), **Needed you**
+  (escalations, answers, holds). Under them: **where rounds go back** (send-backs by
+  reason — no commit, gate, review, CI red, blocked, timed out, crashed), **by model**
+  (what each landed and lost, and why), **model hours** by role as a share of the window
+  with the **empty rounds** (a session the server never answered — Claude signed out, a
+  model server down — retried by the loop: a leak to see), and the beads **finished**,
+  newest first, with rounds, who landed it, how long it took. Nothing new is written for
+  this: it is read from what the beads already carry (`started_at`, the round notes,
+  the close reason) and the session logs in the state dir, once a minute
+  (`bead-supervisor --json stats`).
 - **Per repo**, then: the queues and Needs you below, and **★ make priority** on the
   repo's heading, which puts it first on every pass.
 - **The three queues in their order**: **dev** (#1 is next; each bead's failures and the
@@ -288,6 +302,7 @@ Same thing in a terminal:
 bead-supervisor watch                                     # the screen below, every 5 s (BEAD_LOOP_WATCH=N)
 bead-supervisor status                                    # the same, once
 bead-supervisor --json status                             # one JSON object per repo: what the UI reads
+bead-supervisor stats                                     # the scoreboard, one line per window (--json for the page's)
 ```
 
 ```

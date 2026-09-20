@@ -4,8 +4,8 @@
 //   bead-loop-ui                 serve http://127.0.0.1:4097 (BEAD_LOOP_UI_PORT, BEAD_LOOP_UI_HOST)
 //
 // Reads: `bead-supervisor --json status` (the one description of a repo's state),
-// journalctl for the supervisor's log, systemctl for the resident loop and its keeper
-// timer. Levers, each one command the operator would otherwise type:
+// `--json stats` (the scoreboard, once a minute), journalctl for the supervisor's log,
+// systemctl for the resident loop and its keeper timer. Levers, each one command the operator would otherwise type:
 //   abort a session on the opencode server, ring the bell (wake), stop the loop (its
 //   TERM handler aborts the sessions it is on), start/stop the keeper timer, reopen a
 //   parked bead, pause/resume one lane, make a repo the priority, gpu-mode game/work
@@ -98,6 +98,19 @@ function withPrs(repos) {
   if ([...prCache.values()].some((h) => h.pr === undefined || Date.now() - h.at >= PR_TTL_MS)) setImmediate(() => refreshPrs().then(() => broadcast()).catch(() => {}));
   return repos;
 }
+// The scoreboard: `bead-supervisor --json stats` reads every bead the loop touched and
+// every session log, a few seconds of bd — so it is refreshed off the request path, once
+// a minute (BEAD_LOOP_UI_STATS_TTL_MS), and the page gets the last one until then.
+const STATS_TTL_MS = Number(process.env.BEAD_LOOP_UI_STATS_TTL_MS || 60000);
+let stats = { at: 0, v: null, running: null };
+function statsNow() {
+  if (stats.running || Date.now() - stats.at < STATS_TTL_MS) return stats.v;
+  stats.running = run(SUPERVISOR, ['--json', 'stats'], { timeout: 120000 }).then((r) => {
+    stats.at = Date.now();
+    if (r.ok) { try { stats.v = JSON.parse(r.stdout); } catch { /* keep the last one */ } }
+  }).finally(() => { stats.running = null; if (clients.size) setImmediate(broadcast); });
+  return stats.v;
+}
 const timed = (label, p, into) => { const t0 = Date.now(); return p.finally(() => { into[label] = Date.now() - t0; }); };
 // Whether headless Claude Code can run: a claude/* stage fails on the spot when the
 // login has lapsed, and nothing else on the page would say so. `claude auth status` is
@@ -126,7 +139,7 @@ async function state() {
   const repos = withPrs(jsonLines(status.stdout));
   return {
     now: Math.floor(Date.now() / 1000),
-    repos, claude: await claudeStatus(repos),
+    repos, claude: await claudeStatus(repos), stats: statsNow(),
     login: login && !login.done ? { url: login.url, started: Math.floor(login.at / 1000) } : null,
     error: status.ok ? null : status.stderr.trim().split('\n').pop(),
     timer, service, log, gpu,
