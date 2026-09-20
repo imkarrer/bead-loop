@@ -569,7 +569,7 @@ pub fn dev_one(repo: &Repo, opts: &Opts, id: Option<&str>, last_id: &mut Option<
     let title_w = format!("{id} · worker · round {}", n + 1);
     let worker_log = std::path::PathBuf::from(format!("{}.worker.jsonl", logf.display()));
     let r = match &rejoin {
-        Some(sid) => crate::harness::rejoin_session(repo, sid, &worker_log, timeout),
+        Some(sid) => crate::harness::rejoin_session(repo, sid, &wt, &worker_log, timeout),
         None => run_agent(repo, "bead-worker", &model, &wt, &worker_log, &prompt, &title_w, timeout, Some(&json)),
     };
     cut_short(repo, &id);
@@ -718,7 +718,7 @@ pub fn review_one(repo: &Repo, opts: &Opts, id: Option<&str>, lane: Option<&Lane
         ));
         let review_log = std::path::PathBuf::from(format!("{}.review.jsonl", logf.display()));
         let r = match &rejoin {
-            Some(sid) => crate::harness::rejoin_session(repo, sid, &review_log, timeout),
+            Some(sid) => crate::harness::rejoin_session(repo, sid, &wt, &review_log, timeout),
             None => {
                 let stat = git_out(&wt, &["diff", &format!("origin/{}...HEAD", repo.base), "--stat"]);
                 let diff = git_out(&wt, &["diff", &format!("origin/{}...HEAD", repo.base)]);

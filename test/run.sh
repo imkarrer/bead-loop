@@ -520,8 +520,7 @@ case_restart_rejoins_the_worker_session() {
   # The session finishes on the server while the lane waits on it: its work in the
   # worktree, its DONE among its messages, then the server shows it idle.
   echo work >"$R/wt/t-1/work.txt"
-  jq -cn '[{info:{role:"user"},parts:[{type:"text",text:"Work the bead"}]},{info:{role:"assistant"},parts:[{type:"text",text:"I did it."},{type:"tool"},{type:"text",text:"DONE: work.txt written"}]}]' >"$TEST_CTRL/messages.json"
-  ( sleep 0.6; echo '{}' >"$TEST_CTRL/session-status.json" ) &
+  ( sleep 0.6; jq -cn '[{info:{role:"user"},parts:[{type:"text",text:"Work the bead"}]},{info:{role:"assistant"},parts:[{type:"text",text:"I did it."},{type:"tool"},{type:"text",text:"DONE: work.txt written"}]}]' >"$TEST_CTRL/messages.json"; echo '{}' >"$TEST_CTRL/session-status.json" ) &   # its last words land as it finishes
   BEAD_LOOP_REJOIN_POLL=0.1 sup --once tick; wait
   assert_match "$(cat "$T/sup.log")" "dev: bead t-1 .*rejoining session ses_live" "the lane rejoined rather than started"
   assert_match "$(cat "$T/sup.log")" "rejoined session ses_live: finished after" "and waited for it"
@@ -556,8 +555,7 @@ case_restart_rejoins_the_reviewer_session() {
   sup recover "$REPO"
   assert_match "$(cat "$T/sup.log")" "t-1: reviewer session ses_rev still running on the server after the stop; rejoining it" "recover found it"
   assert_eq "$(cat "$R/rejoin/t-1" 2>/dev/null)" "ses_rev reviewer" "the rejoin marker"
-  jq -cn '[{info:{role:"assistant"},parts:[{type:"text",text:"APPROVE: checked every criterion"}]}]' >"$TEST_CTRL/messages.json"
-  ( sleep 0.6; echo '{}' >"$TEST_CTRL/session-status.json" ) &
+  ( sleep 0.6; jq -cn '[{info:{role:"assistant"},parts:[{type:"text",text:"APPROVE: checked every criterion"}]}]' >"$TEST_CTRL/messages.json"; echo '{}' >"$TEST_CTRL/session-status.json" ) &
   BEAD_LOOP_REJOIN_POLL=0.1 sup --once tick; wait
   assert_match "$(cat "$T/sup.log")" "review: t-1 by stub/reviewer (0 failures, rejoining session ses_rev)" "the review lane rejoined"
   assert_eq "$(calls)" "bead-worker bead-reviewer" "one reviewer call in all"
