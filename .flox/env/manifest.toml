@@ -46,7 +46,7 @@ on-activate = '''
 # `flox services start` runs them; `flox services logs --follow ui` watches one.
 # opencode-web is what `attach = "http://127.0.0.1:4096"` in the global config points at.
 [services.opencode-web]
-command = '''OPENCODE_DISABLE_CLAUDE_CODE_SKILLS=1 exec opencode web --port 4096 --hostname 127.0.0.1'''
+command = '''OPENCODE_DISABLE_CLAUDE_CODE_SKILLS=1 exec opencode serve --port 4096 --hostname 127.0.0.1'''
 
 [services.ui]
 command = '''exec "$FLOX_ENV_PROJECT/bin/bead-loop-ui"'''

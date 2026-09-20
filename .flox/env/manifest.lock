@@ -69,7 +69,7 @@
         "command": "exec bead-supervisor run"
       },
       "opencode-web": {
-        "command": "OPENCODE_DISABLE_CLAUDE_CODE_SKILLS=1 exec opencode web --port 4096 --hostname 127.0.0.1"
+        "command": "OPENCODE_DISABLE_CLAUDE_CODE_SKILLS=1 exec opencode serve --port 4096 --hostname 127.0.0.1"
       },
       "ui": {
         "command": "exec \"$FLOX_ENV_PROJECT/bin/bead-loop-ui\""
