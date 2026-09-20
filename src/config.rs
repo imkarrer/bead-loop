@@ -55,10 +55,7 @@ fn scalar(v: &Value) -> String {
 
 impl Layers {
     pub fn load(global_path: &Path, repo_path: Option<&Path>) -> Layers {
-        Layers {
-            global: toml_json(global_path),
-            repo: repo_path.map(toml_json).unwrap_or(Value::Object(Default::default())),
-        }
+        Layers { global: toml_json(global_path), repo: repo_path.map(toml_json).unwrap_or(Value::Object(Default::default())) }
     }
 
     /// `cfg KEY [DEFAULT]`: the repo file, then the global one, then DEFAULT.
@@ -121,16 +118,12 @@ impl Layers {
 
 /// The global config's path: `$BEAD_LOOP_CONFIG/config.toml`, default `~/.config/bead-loop`.
 pub fn config_dir() -> PathBuf {
-    std::env::var_os("BEAD_LOOP_CONFIG")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| home().join(".config/bead-loop"))
+    std::env::var_os("BEAD_LOOP_CONFIG").map(PathBuf::from).unwrap_or_else(|| home().join(".config/bead-loop"))
 }
 
 /// The state dir: `$BEAD_LOOP_STATE`, default `~/.local/state/bead-loop`.
 pub fn state_dir() -> PathBuf {
-    let d = std::env::var_os("BEAD_LOOP_STATE")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| home().join(".local/state/bead-loop"));
+    let d = std::env::var_os("BEAD_LOOP_STATE").map(PathBuf::from).unwrap_or_else(|| home().join(".local/state/bead-loop"));
     let _ = std::fs::create_dir_all(&d);
     d
 }
@@ -260,7 +253,6 @@ impl Repo {
             state_dir,
         }
     }
-
 }
 
 /// `need NAME`: die when a tool the config asks for is not installed.
@@ -273,9 +265,12 @@ pub fn need(name: &str) {
 /// origin's HEAD branch, from the clone's `refs/remotes/origin/HEAD`, else `git remote
 /// show origin`; empty when neither says.
 fn origin_head(repo: &Path) -> String {
-    let o = crate::util::output(
-        crate::util::cmd("git").args(["-C"]).arg(repo).args(["symbolic-ref", "-q", "--short", "refs/remotes/origin/HEAD"]),
-    );
+    let o = crate::util::output(crate::util::cmd("git").args(["-C"]).arg(repo).args([
+        "symbolic-ref",
+        "-q",
+        "--short",
+        "refs/remotes/origin/HEAD",
+    ]));
     if let Ok(o) = o {
         if o.status.success() {
             let s = crate::util::stdout_str(&o).trim().to_string();
@@ -317,15 +312,13 @@ mod tests {
 
     #[test]
     fn attempts_is_an_alias_of_failures() {
-        let l = layers(
-            "[[stages]]\nworker = \"a\"\nattempts = 2\n[[stages]]\nworker = \"b\"\nreviewer = \"c\"\nfailures = 1\ntimeout = 7",
-            "",
-        );
+        let l =
+            layers("[[stages]]\nworker = \"a\"\nattempts = 2\n[[stages]]\nworker = \"b\"\nreviewer = \"c\"\nfailures = 1\ntimeout = 7", "");
         let s = l.stages();
         assert_eq!(s[0].failures, 2);
         assert_eq!(s[0].reviewer, "");
         assert_eq!(s[1].timeout, Some(7));
-        assert_eq!(s[1].word(), "b|c|1|7");
+        assert_eq!((s[1].worker.as_str(), s[1].reviewer.as_str(), s[1].failures), ("b", "c", 1));
     }
 
     #[test]

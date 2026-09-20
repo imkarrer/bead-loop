@@ -533,7 +533,11 @@ case_status_json_and_ui() {
   assert_match "$("$REAL_CURL" -s -m 3 -X POST -H 'content-type: application/json' -d '{"name":"review","paused":true}' "http://127.0.0.1:$port/api/lane")" '"paused":true' "pause a lane from the page"
   assert_file "$BEAD_LOOP_STATE/pause.review" "the marker the lane checks"
   assert_eq "$("$REAL_CURL" -sf -m 3 "http://127.0.0.1:$port/api/state" | jq -r '.repos[0].paused.review')" true "state says so"
-  assert_match "$("$REAL_CURL" -s -m 3 -X POST -H 'sec-fetch-site: cross-site' "http://127.0.0.1:$port/api/tick")" "same-origin only" "cross-site lever refused"
+  assert_match "$("$REAL_CURL" -s -m 3 -X POST -H 'sec-fetch-site: cross-site' "http://127.0.0.1:$port/api/wake")" "same-origin only" "cross-site lever refused"
+  assert_match "$("$REAL_CURL" -s -m 3 -X POST -H 'content-type: application/json' -d "{\"repo\":\"$REPO\"}" "http://127.0.0.1:$port/api/priority")" "\"priority\":\"$REPO\"" "priority repo from the page"
+  assert_eq "$("$REAL_CURL" -sf -m 3 "http://127.0.0.1:$port/api/state" | jq -r '.repos[0].priority')" true "state says so"
+  assert_match "$("$REAL_CURL" -s -m 3 -X POST -H 'content-type: application/json' -d '{"repo":"/nope"}' "http://127.0.0.1:$port/api/priority")" "unknown repo" "priority only for a configured repo"
+  assert_match "$("$REAL_CURL" -s -m 3 -X POST -H 'content-type: application/json' -d "{\"repo\":\"$REPO\",\"id\":\"t-1\"}" "http://127.0.0.1:$port/api/reopen")" "in the merge queue" "reopen refused on a bead under a PR"
   assert_match "$("$REAL_CURL" -s -m 3 -X POST -H 'content-type: application/json' -d '{"attach":"http://elsewhere","session":"s"}' "http://127.0.0.1:$port/api/abort")" "unknown server" "abort only against a configured server"
   assert_match "$("$REAL_CURL" -s -m 3 -X POST -H 'content-type: application/json' -d '{"repo":"/nope","id":"t-5"}' "http://127.0.0.1:$port/api/reopen")" "unknown repo" "reopen only in a configured repo"
   assert_match "$("$REAL_CURL" -s -m 3 -X POST -H 'content-type: application/json' -d "{\"repo\":\"$REPO\",\"id\":\"t-5\"}" "http://127.0.0.1:$port/api/escalate")" '"escalated":"t-5"' "work with Claude from the page"
@@ -753,7 +757,7 @@ case_harness_down_is_held() {
   assert_match "$(cat "$BEAD_LOOP_STATE/repo/held/t-1")" "worker stub/worker exited 7 with no output" "held with the reason"
   assert_match "$(cat "$BEAD_LOOP_STATE/repo/held/t-1")" "connection refused" "and the harness's last words"
   assert_nobranch bead/t-1 "nothing pushed"
-  echo done >"$TEST_CTRL/worker"; : >"$TEST_CTRL/calls"; BEAD_LOOP_HOLD_BACKOFF=0 sup --once tick
+  echo "done" >"$TEST_CTRL/worker"; : >"$TEST_CTRL/calls"; BEAD_LOOP_HOLD_BACKOFF=0 sup --once tick
   assert_eq "$(calls)" "bead-worker bead-reviewer" "server back: worked"
   # A timeout is the model's own: it ran for the whole budget and said nothing useful.
   setup true auto '' "$(stages stub/fast::1:1)"; echo hang >"$TEST_CTRL/worker"; sup --once tick

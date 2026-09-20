@@ -132,7 +132,12 @@ fn queued_work(ctx: &Ctx) -> bool {
 /// A snapshot of everything the bell watches: the wake file, each repo's queue
 /// directories and its `.beads/` (a bead labelled or reopened by hand), the pause files.
 fn world(ctx: &Ctx) -> Vec<i64> {
-    let mut v = vec![mtime(&ctx.state_dir.join("wake")), mtime(&ctx.state_dir.join("pause.dev")), mtime(&ctx.state_dir.join("pause.review")), mtime(&ctx.state_dir.join("priority"))];
+    let mut v = vec![
+        mtime(&ctx.state_dir.join("wake")),
+        mtime(&ctx.state_dir.join("pause.dev")),
+        mtime(&ctx.state_dir.join("pause.review")),
+        mtime(&ctx.state_dir.join("priority")),
+    ];
     for r in &ctx.repos {
         let slug = r.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
         let rs = ctx.state_dir.join(&slug);
@@ -299,9 +304,17 @@ pub fn recover(ctx: &Ctx) {
                 }
                 // in_progress + a worktree + in no queue = a round the stop interrupted
                 let inprog = crate::shell::bd_in_progress_json(&repo);
-                let is_inprog = inprog.as_array().map(|a| a.iter().any(|b| b.get("id").and_then(|i| i.as_str()) == Some(&id))).unwrap_or(false);
+                let is_inprog =
+                    inprog.as_array().map(|a| a.iter().any(|b| b.get("id").and_then(|i| i.as_str()) == Some(&id))).unwrap_or(false);
                 if is_inprog {
-                    crate::shell::bd_note(&repo, &id, &format!("bead-loop {}: round interrupted by a stop; back in the dev queue, no failure charged", crate::util::date_iminutes()));
+                    crate::shell::bd_note(
+                        &repo,
+                        &id,
+                        &format!(
+                            "bead-loop {}: round interrupted by a stop; back in the dev queue, no failure charged",
+                            crate::util::date_iminutes()
+                        ),
+                    );
                     crate::shell::bd_status(&repo, &id, "open");
                     log(&format!("{}: {id}: round interrupted by the last stop; back in the dev queue", repo.slug));
                 }

@@ -1,13 +1,10 @@
 flowchart LR
-  T([systemd user timer<br/>3 min after the last tick ended]) --> R
-
-  subgraph tick [bead-supervisor tick — bash, deterministic; two lanes side by side until both queues drain]
+  subgraph run [bead-supervisor run — one resident process, Rust; three loops on one bell]
     direction LR
-    R[reconcile the merge queue] --> DQ
 
     subgraph devlane [dev lane — GPU, the fast model]
       direction TB
-      DQ[[dev queue<br/>bd ready -l LABEL<br/>fewest failures first]] --> C[claim · worktree<br/>fresh, or the branch sent back]
+      DQ[[dev queue<br/>bd ready -l LABEL<br/>no open blocker · fewest failures first]] --> C[claim · worktree<br/>fresh, or the branch sent back]
       C --> W[worker<br/>implements, commits]
       W -- DONE + commit --> G[gate<br/>typecheck · lint · test]
       G -- fail, once --> W
@@ -19,25 +16,39 @@ flowchart LR
       V -- APPROVE --> PR[push · PR<br/>or the same PR, updated]
     end
 
+    subgraph watcher [merge watcher — gh every 30 s while a PR is open]
+      direction TB
+      MQ[[merge queue<br/>PRs in CI on GitHub]]
+    end
+
     G -- pass --> RQ
+    PR --> MQ
+    MQ -- green: merge<br/>or the pipeline on the label --> M[squash-merge<br/>bd close ID]
+    MQ -- red · conflicts --> F
+    MQ -- closed unmerged --> H
     W -- BLOCKED / no commit --> F
     G -- fail twice --> F
     V -- REJECT --> F
     F[failure +1<br/>note on the bead] -- stages left --> DQ
-    F -- exhausted, or BLOCKED at the last stage --> H[parked in_progress<br/>for you]
+    F -- exhausted, or BLOCKED at the last stage --> H[parked<br/>for you]
+    W -. setup failed · harness down .-> HD
+    V -. harness down .-> HD
+    MQ -. no checks · protection · pipeline silent · CI stuck .-> HD
+    HD[held, in its queue<br/>no failure · the reason · retried] -. the world changes .-> DQ
   end
+
+  B((the bell<br/>any queue changes · wake · answer · escalate · sign-in)) -.-> devlane
+  B -.-> reviewlane
+  B -.-> watcher
 
   W -.- GPU[(devbox/coder<br/>Qwen3-Coder-30B<br/>RTX 4080, this box)]
   V -.- CPU[(acbox/coder<br/>Qwen3-Coder-Next 80B<br/>ac-box, CPU)]
 
-  PR --> MQ[[merge queue<br/>PRs in CI on GitHub]]
-  MQ -- green: the tick merges,<br/>or the pipeline on the label --> M[squash-merge<br/>bd close ID]
-  MQ -- red --> F
-  MQ -- closed unmerged --> H
-
   classDef model fill:#f3f0ff,stroke:#7c5cff,color:#222
   classDef stop fill:#fff3f0,stroke:#e0503c,color:#222
   classDef queue fill:#eef7f7,stroke:#2aa198,color:#222
+  classDef hold fill:#fffbe6,stroke:#b58900,color:#222
   class GPU,CPU model
   class H stop
+  class HD hold
   class DQ,RQ,MQ queue

@@ -10,12 +10,14 @@
 use crate::config::Repo;
 use crate::harness::{abort_sessions, run_agent, runnable};
 use crate::shell::{
-    bd_claim, bd_comment, bd_note, bd_show, bd_status, branch_exists, git, git_must, git_ok, git_out, gh, local_branch_exists,
+    bd_claim, bd_comment, bd_note, bd_show, bd_status, branch_exists, gh, git, git_must, git_ok, git_out, local_branch_exists,
     worktree_remove,
 };
 use crate::signals;
 use crate::state::{dev_queue, review_queue, StageHit};
-use crate::util::{append_file, cut_bytes, date_iminutes, die, first_line, log, read_to_string, stamp, stderr_str, stdout_str, tail_lines, write_file};
+use crate::util::{
+    append_file, cut_bytes, date_iminutes, die, first_line, log, read_to_string, stamp, stderr_str, stdout_str, tail_lines, write_file,
+};
 use serde_json::Value;
 use std::path::Path;
 
@@ -53,7 +55,11 @@ pub fn render_bead(json: &Value) -> String {
     let itype = b.get("issue_type").and_then(|v| v.as_str()).unwrap_or("task");
     let ac = {
         let a = s("acceptance_criteria");
-        if a.is_empty() { "(none given: the description is the criterion)".to_string() } else { a }
+        if a.is_empty() {
+            "(none given: the description is the criterion)".to_string()
+        } else {
+            a
+        }
     };
     let mut out = format!(
         "id: {}\ntitle: {}\ntype: {}   priority: P{}\n\nDESCRIPTION:\n{}\n\nACCEPTANCE CRITERIA:\n{}",
@@ -77,10 +83,8 @@ pub fn render_bead(json: &Value) -> String {
 /// with .beads/ restored. False when the branch has no commits over base.
 pub fn settle_worktree(repo: &Repo, wt: &Path, msg: &str) -> bool {
     let _ = git(wt, &["checkout", "-q", "--", ".beads"]);
-    if !git_out(wt, &["status", "--porcelain"]).trim().is_empty() {
-        if git_ok(wt, &["add", "-A"]) {
-            let _ = git(wt, &["commit", "-q", "-m", msg]);
-        }
+    if !git_out(wt, &["status", "--porcelain"]).trim().is_empty() && git_ok(wt, &["add", "-A"]) {
+        let _ = git(wt, &["commit", "-q", "-m", msg]);
     }
     !git_out(wt, &["rev-list", &format!("origin/{}..HEAD", repo.base)]).trim().is_empty()
 }
@@ -143,7 +147,13 @@ pub fn pick_runnable(repo: &Repo, which: &str) -> Option<String> {
                 break;
             }
             Some(st) => {
-                let model = if which == "dev" { st.model.clone() } else if st.review.is_empty() { "none".into() } else { st.review.clone() };
+                let model = if which == "dev" {
+                    st.model.clone()
+                } else if st.review.is_empty() {
+                    "none".into()
+                } else {
+                    st.review.clone()
+                };
                 if runnable(&model) {
                     pick = Some(id);
                     break;
@@ -270,7 +280,10 @@ pub fn dev_one(repo: &Repo, opts: &Opts, id: Option<&str>, last_id: &mut Option<
             match pick_runnable(repo, "dev") {
                 Some(i) => i,
                 None => {
-                    crate::merge::say(&format!("{}/dev-idle", repo.slug), format!("{}: dev: nothing ready with label {}", repo.slug, repo.label));
+                    crate::merge::say(
+                        &format!("{}/dev-idle", repo.slug),
+                        format!("{}: dev: nothing ready with label {}", repo.slug, repo.label),
+                    );
                     return Pass::Nothing;
                 }
             }
@@ -308,10 +321,7 @@ pub fn dev_one(repo: &Repo, opts: &Opts, id: Option<&str>, last_id: &mut Option<
             model = opts.model_flag.clone().unwrap_or(last.model);
         }
         if !runnable(&model) {
-            log(&format!(
-                "{}: {id}: conflict round needs {model}, which cannot run now (Claude signed out); waiting",
-                repo.slug
-            ));
+            log(&format!("{}: {id}: conflict round needs {model}, which cannot run now (Claude signed out); waiting", repo.slug));
             bd_status(repo, &id, "open");
             return Pass::Nothing;
         }
@@ -410,7 +420,15 @@ pub fn dev_one(repo: &Repo, opts: &Opts, id: Option<&str>, last_id: &mut Option<
             hold(repo, &id, Some(&wt), &format!("worker {model} exited {} with no output (harness or server down?). {err}", r.rc));
             return Pass::Worked;
         }
-        send_back(repo, &id, &wt, false, &format!("worker exited {} (timeout={timeout} s). Log: {}", r.rc, worker_log.display()), &model, st.last);
+        send_back(
+            repo,
+            &id,
+            &wt,
+            false,
+            &format!("worker exited {} (timeout={timeout} s). Log: {}", r.rc, worker_log.display()),
+            &model,
+            st.last,
+        );
         return Pass::Worked;
     }
     if let Some(b) = last_line_starting(&r.text, "BLOCKED:") {
@@ -432,9 +450,18 @@ pub fn dev_one(repo: &Repo, opts: &Opts, id: Option<&str>, last_id: &mut Option<
             repo.gate
         );
         let fix_log = std::path::PathBuf::from(format!("{}.worker-gate.jsonl", logf.display()));
-        let r2 = run_agent(repo, "bead-worker", &model, &wt, &fix_log, &fix_prompt, &format!("{id} · worker · gate fix"), timeout, Some(&json));
+        let r2 =
+            run_agent(repo, "bead-worker", &model, &wt, &fix_log, &fix_prompt, &format!("{id} · worker · gate fix"), timeout, Some(&json));
         if r2.rc != 0 {
-            send_back(repo, &id, &wt, false, &format!("worker exited {} in gate fix round. Log: {}", r2.rc, fix_log.display()), &model, st.last);
+            send_back(
+                repo,
+                &id,
+                &wt,
+                false,
+                &format!("worker exited {} in gate fix round. Log: {}", r2.rc, fix_log.display()),
+                &model,
+                st.last,
+            );
             return Pass::Worked;
         }
         if let Some(b) = last_line_starting(&r2.text, "BLOCKED:") {
@@ -468,7 +495,7 @@ pub fn dev_one(repo: &Repo, opts: &Opts, id: Option<&str>, last_id: &mut Option<
 
 /// `grep '^PREFIX' | tail -1`
 fn last_line_starting(text: &str, prefix: &str) -> Option<String> {
-    text.lines().filter(|l| l.starts_with(prefix)).last().map(str::to_string)
+    text.lines().rfind(|l| l.starts_with(prefix)).map(str::to_string)
 }
 
 /// `review_one [ID]`
@@ -517,7 +544,17 @@ pub fn review_one(repo: &Repo, opts: &Opts, id: Option<&str>) -> Pass {
             render_bead(&json)
         );
         let review_log = std::path::PathBuf::from(format!("{}.review.jsonl", logf.display()));
-        let r = run_agent(repo, "bead-reviewer", &review_model, &wt, &review_log, &prompt, &format!("{id} · reviewer · round {}", n + 1), timeout, Some(&json));
+        let r = run_agent(
+            repo,
+            "bead-reviewer",
+            &review_model,
+            &wt,
+            &review_log,
+            &prompt,
+            &format!("{id} · reviewer · round {}", n + 1),
+            timeout,
+            Some(&json),
+        );
         if r.rc != 0 {
             if r.empty && r.rc != 124 {
                 let err = tail_lines(&read_to_string(&review_log.with_extension("jsonl.err")).unwrap_or_default(), 5);
@@ -545,7 +582,15 @@ pub fn review_one(repo: &Repo, opts: &Opts, id: Option<&str>) -> Pass {
                 }
                 out.join("\n")
             };
-            send_back(repo, &id, &wt, true, &format!("review ({review_model}) rejected:\n{}", cut_bytes(&from_reject, 4000)), &model, false);
+            send_back(
+                repo,
+                &id,
+                &wt,
+                true,
+                &format!("review ({review_model}) rejected:\n{}", cut_bytes(&from_reject, 4000)),
+                &model,
+                false,
+            );
             return Pass::Worked;
         }
         log(&format!("{}: {id}: review approved", repo.slug));
@@ -579,18 +624,18 @@ pub fn review_one(repo: &Repo, opts: &Opts, id: Option<&str>) -> Pass {
     let reviewer_line = if review_model.is_empty() {
         String::new()
     } else {
-        format!(
-            "Reviewer ({review_model}): {}",
-            cut_bytes(&last_line_starting(&verdict, "APPROVE:").unwrap_or_default(), 500)
-        )
+        format!("Reviewer ({review_model}): {}", cut_bytes(&last_line_starting(&verdict, "APPROVE:").unwrap_or_default(), 500))
     };
     let body = format!(
         "Bead `{id}`: {title}\n\n{ac_quoted}\n\nWorker: {worker_line}\n{reviewer_line}\n\nOpened by bead-loop; the bead closes when this merges.\n"
     );
     // A branch sent back by CI already has its PR: the push updated it.
-    let existing = crate::shell::gh_stdout_any(repo, &["pr", "list", "--state", "open", "--head", &branch, "--json", "url", "--jq", ".[0].url // empty"])
-        .trim()
-        .to_string();
+    let existing = crate::shell::gh_stdout_any(
+        repo,
+        &["pr", "list", "--state", "open", "--head", &branch, "--json", "url", "--jq", ".[0].url // empty"],
+    )
+    .trim()
+    .to_string();
     let url = if !existing.is_empty() {
         log(&format!("{}: {id}: pushed a new round to {existing}", repo.slug));
         bd_comment(repo, &id, &format!("bead-loop: pushed round {} to {existing}", n + 1));

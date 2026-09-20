@@ -216,11 +216,7 @@ pub fn opencode_provider(provider: &str) -> (String, String) {
 /// The files a bead's DESCRIPTION names: every whitespace-separated token with a slash or
 /// a dot, trimmed of punctuation at either end, that exists in the worktree; sorted, unique.
 fn files_named(bead_json: Option<&Value>, dir: &Path) -> Vec<String> {
-    let desc = bead_json
-        .and_then(|j| j.get(0))
-        .and_then(|b| b.get("description"))
-        .and_then(|d| d.as_str())
-        .unwrap_or("");
+    let desc = bead_json.and_then(|j| j.get(0)).and_then(|b| b.get("description")).and_then(|d| d.as_str()).unwrap_or("");
     let mut files: Vec<String> = desc
         .split_whitespace()
         .map(|t| {

@@ -125,6 +125,8 @@
   .banner.signin { margin: 16px 20px 0; background: rgba(181, 137, 0, .12); border-color: var(--warn); }
   .banner.signin ol { margin: 6px 0 0; padding-left: 22px; } .banner.signin li { margin: 4px 0; }
   .banner.signin input { font: 13px var(--mono); padding: 4px 8px; border: 1px solid var(--line-strong); border-radius: 5px; background: var(--base03); color: var(--bright); }
+  h2 .prio { font-size: 12px; font-weight: 400; margin-left: 8px; vertical-align: middle; }
+  h2 .prio.on { color: var(--yellow); border-color: var(--yellow); }
   footer { color: var(--muted); font-size: 12px; text-align: right; padding: 0 20px 20px; }
   .empty { color: var(--muted); font-style: italic; }
 </style>
@@ -199,20 +201,22 @@ function claude(s) {
       <li>Paste the code it shows: <input id="code" class="mono" size="44" placeholder="code" autocomplete="off"> <button onclick="act('claude_code',{code:document.getElementById('code').value})">Finish sign-in</button> <button class="danger" onclick="act('claude_cancel')">Cancel</button></li></ol>`;
   }
 }
+// The loop is resident: bead-supervisor.service stays up, its lanes on the bell when
+// idle; bead-supervisor.timer is its keeper (starts it now, and again a minute after it
+// stops). So the header says whether the loop is up and what it is on, and offers Stop
+// (the keeper brings it back in a minute — a breather) or Off (keeper too), and Wake.
 function header(s) {
   gpu(s); claude(s);
   const t = s.timer, v = s.service, dis = busyAction ? 'disabled' : '';
-  const ticking = v.available && (v.active === 'active' || v.active === 'activating');
-  const next = systemdTime(t.next), since = systemdTime(v.since);
-  // OnUnitInactiveSec: the next elapse is only known once the tick has finished.
-  const when = next ? `next tick ${clock(next)} (in ${ago(s.now, next)})` : ticking ? `next tick ${t.gap ? t.gap + ' ' : ''}after this one ends` : '';
-  $('timer').innerHTML = !t.available ? `<span class="dot"></span><span class="muted">no systemd timer here</span>` : t.active === 'active'
-    ? `<span class="dot on"></span>timer running${when ? ` · ${when}` : ''} <button ${dis} onclick="act('timer',{on:false})">Pause timer</button>`
-    : `<span class="dot"></span>timer paused <button ${dis} onclick="act('timer',{on:true})">Resume timer</button>`;
+  const running = v.available && (v.active === 'active' || v.active === 'activating');
+  const since = systemdTime(v.since);
   const working = s.repos.flatMap((r) => Object.entries(r.lanes).map(([k, l]) => `${k} ${l.id}`)).join(' · ');
-  $('tick').innerHTML = !v.available ? '' : ticking
-    ? `<span class="dot busy"></span>tick running${since ? ` ${ago(since, s.now)}` : ''}${working ? ` — ${esc(working)}` : ''} <button class="danger" ${dis} onclick="act('stop',{},'Stop the running tick? The supervisor aborts the model session it is on and the attempt is not recorded.')">Stop tick</button>`
-    : `<span class="dot ${v.result && v.result !== 'success' ? 'bad' : ''}"></span>tick idle${v.result && v.result !== 'success' ? ` (last: ${esc(v.result)})` : ''} <button ${dis} onclick="act('tick')">Tick now</button>`;
+  $('timer').innerHTML = !v.available ? `<span class="dot"></span><span class="muted">no systemd here</span>` : running
+    ? `<span class="dot on"></span>loop up${since ? ` ${ago(since, s.now)}` : ''}${working ? ` — ${esc(working)}` : ' — lanes on the bell'} <button ${dis} onclick="act('wake')" title="every lane looks at its queue now (it would within a second anyway)">Wake</button> <button class="danger" ${dis} onclick="act('stop',{},'Stop the loop? It aborts the model sessions it is on; the rounds are reopened with no failure when it starts again — in a minute, unless you turn it off.')">Stop</button>`
+    : `<span class="dot ${v.result && v.result !== 'success' ? 'bad' : ''}"></span>loop down${v.result && v.result !== 'success' ? ` (last: ${esc(v.result)})` : ''} <button ${dis} onclick="act('loop',{on:true})">Start</button>`;
+  $('tick').innerHTML = !t.available ? '' : t.active === 'active'
+    ? `<span class="dot on"></span>keeper on <button ${dis} onclick="act('loop',{on:false},'Turn the loop off? It stops now and stays down until you start it.')" title="stop the loop and its keeper">Off</button>`
+    : `<span class="dot"></span>keeper off${running ? ' — the loop will not come back if it stops' : ''} <button ${dis} onclick="act('timer',{on:true})">Keeper on</button>`;
 }
 
 const stateChip = (st) => st === 'busy' ? '<span class="chip busy">busy</span>' : st === 'orphan' ? '<span class="chip bad">orphan</span>' : '<span class="chip">idle</span>';
@@ -247,18 +251,19 @@ const abortBtn = (r, sess, label) => `<button class="danger" ${busyAction ? 'dis
 // loop's own markers. Merged or closed on GitHub means the next reconcile finishes it.
 function prChips(p, now, r) {
   const g = p.pr, out = [];
-  if (g && g.state === 'MERGED') out.push(`<span class="chip ok">merged${g.mergedAt ? ` ${ago(g.mergedAt, now)} ago` : ''}</span> <span class="muted">bead closes on the next tick</span>`);
-  else if (g && g.state === 'CLOSED') out.push('<span class="chip warn">closed unmerged</span> <span class="muted">parked on the next tick</span>');
-  else if (g && g.mergeable === 'CONFLICTING' && !p.adopted) out.push(`<span class="chip warn">conflicts with base</span> <span class="muted">back to dev on the next tick for a rebase by ${esc(r.conflict_worker || (lastStage(r) ? lastStage(r).worker : 'the last stage'))}</span>`);
+  if (g && g.state === 'MERGED') out.push(`<span class="chip ok">merged${g.mergedAt ? ` ${ago(g.mergedAt, now)} ago` : ''}</span> <span class="muted">bead closes on the watcher's next look</span>`);
+  else if (g && g.state === 'CLOSED') out.push('<span class="chip warn">closed unmerged</span> <span class="muted">parked on the watcher\'s next look</span>');
+  else if (g && g.mergeable === 'CONFLICTING' && !p.adopted) out.push(`<span class="chip warn">conflicts with base</span> <span class="muted">back to dev on the watcher's next look for a rebase by ${esc(r.conflict_worker || (lastStage(r) ? lastStage(r).worker : 'the last stage'))}</span>`);
   else if (g && g.mergeable === 'CONFLICTING') out.push('<span class="chip warn">conflicts with base</span> <span class="muted">adopted: whoever opened it rebases</span>');
   else if (g) {
     const bad = g.checks.filter((c) => /FAIL|ERROR|CANCEL/i.test(c.state)), pending = g.checks.filter((c) => /PENDING|IN_PROGRESS|QUEUED|EXPECTED/i.test(c.state));
-    out.push(bad.length ? `<span class="chip bad">CI red</span> <span class="muted">${esc(bad.map((c) => c.name).join(', '))} · back to dev on the next tick</span>`
+    out.push(bad.length ? `<span class="chip bad">CI red</span> <span class="muted">${esc(bad.map((c) => c.name).join(', '))} · back to dev on the watcher's next look</span>`
       : g.checks.length === 0 ? '<span class="chip">no checks yet</span>'
       : pending.length ? `<span class="chip busy">CI running</span> <span class="muted">${pending.length}/${g.checks.length} pending</span>`
-      : '<span class="chip ok">CI green</span> <span class="muted">merges on the next tick</span>');
+      : `<span class="chip ok">CI green</span> <span class="muted">${r.merge === 'auto' ? 'merges on the watcher\'s next look' : r.merge === 'pipeline' ? 'the pipeline merges it' : 'yours to merge'}</span>`);
   } else out.push(p.red ? '<span class="chip bad">CI red</span>' : '<span class="chip">waiting on CI</span>');
   if (p.adopted) out.push('<span class="chip warn" title="opened by someone else, adopted by the loop">adopted</span>');
+  if (p.held) out.push(`<span class="chip warn" title="${esc(p.held.why)}">held · ${esc(p.held.why.slice(0, 80))}</span>`);
   return out.join(' ');
 }
 
@@ -270,9 +275,11 @@ function lanePanel(r, name, now, ticking) {
   const paused = r.paused && r.paused[name];
   const pauseBtn = `<button ${busyAction ? 'disabled' : ''} onclick="act('lane',{name:'${name}',paused:${!paused}})">${paused ? 'Resume lane' : 'Pause lane'}</button>`;
   if (!l) {
+    const capped = r.max_inflight != null && r.queues.merge.filter((p) => !p.adopted).length >= r.max_inflight;
+    const heldOnly = (q) => q.length > 0 && q.every((b) => b.held);
     const why = name === 'dev'
-      ? (r.queues.dev.length === 0 ? 'dev queue empty' : r.queues.merge.filter((p) => !p.adopted).length >= r.max_inflight ? `waiting on CI (${r.max_inflight} in flight is the limit)` : ticking ? 'starting…' : 'until the next tick')
-      : (r.queues.review.length === 0 ? 'review queue empty' : ticking ? 'starting…' : 'until the next tick');
+      ? (r.queues.dev.length === 0 ? 'dev queue empty' : capped ? `waiting on CI (${r.max_inflight} in flight is the limit)` : heldOnly(r.queues.dev) ? 'every bead in the queue is held — see Needs you' : ticking ? 'starting…' : 'the loop is down')
+      : (r.queues.review.length === 0 ? 'review queue empty' : heldOnly(r.queues.review) ? 'every bead in the queue is held — see Needs you' : ticking ? 'starting…' : 'the loop is down');
     return `<div class="lane idle ${name}${paused ? ' paused' : ''}"><div class="label">${name} lane ${paused ? '<span class="chip warn">paused</span>' : ''}<span class="act">${pauseBtn}</span></div><div class="what">${paused ? 'paused — starts no new round until resumed' : `idle — ${esc(why)}`}</div></div>`;
   }
   const wt = r.worktrees.find((x) => x.id === l.id);
@@ -303,7 +310,7 @@ function strays(r, now) {
 const qRow = (i, b, extra) => `<tr><td class="pos">${i + 1}</td><td class="id">${esc(b.id)}</td><td class="title"><span class="t" title="${esc(b.title || '')}">${esc(b.title || '')}</span></td><td class="fit">${failChip(b.failures)}${histToggle(b)}${extra || ''}</td></tr>${histRow(b, 4)}`;
 function queueCol(name, rows, r, now) {
   const empty = { dev: 'nothing ready', review: 'nothing waiting for review', merge: 'no PRs in flight' }[name];
-  const sub = { dev: 'fewest failures first, then bd’s order', review: 'gate passed; the reviewer next', merge: `PRs in CI · dev pauses at ${r.max_inflight}` }[name];
+  const sub = { dev: 'no open blocker, fewest failures first, then bd’s order', review: 'gate passed; the reviewer next', merge: r.max_inflight == null ? 'PRs in CI · no cap: dependencies are the gate' : `PRs in CI · dev pauses at ${r.max_inflight}` }[name];
   let body;
   if (rows.length === 0) body = `<div class="empty">${empty}</div>`;
   else if (name === 'merge') body = `<table>${rows.map((p) => `<tr><td class="id">${esc(p.id)}</td><td class="title"><span class="t"><a href="${esc(p.url)}" target="_blank" rel="noopener">${esc(p.url.replace(/^https?:\/\/github\.com\/[^/]+\//, ''))} ↗</a></span></td></tr><tr class="sub"><td></td><td>${prChips(p, now, r)}</td></tr>`).join('')}</table>`;
@@ -342,12 +349,25 @@ function repo(r, now, ticking) {
         <button ${busyAction ? 'disabled' : ''} onclick="act('answer',{repo:${js(r.repo)},id:${js(b.id)},text:document.getElementById('ans-${esc(b.id)}').value})">Answer &amp; resume</button>
         <span class="muted">or work it with Claude yourself, in its worktree:</span> <code class="cmd">${esc(b.open_cmd)}</code> <button onclick="navigator.clipboard.writeText(${js(b.open_cmd)})" title="copy">Copy</button>
       </div></td></tr>`).join('')}</table>`;
+  // Held: still in its queue, waiting on something outside the loop — the reason, and
+  // where it sits. The loop keeps looking; the flag clears by itself when the world
+  // changes (a server back, CI reporting, a merge). Listed with parked, since both are
+  // yours to look at, but nothing here needs a Reopen.
+  const held = (r.held || []).length === 0 ? '' : `<table>${r.held.map((b) => `
+    <tr><td class="id">${esc(b.id)}</td><td class="title"><span class="t" title="${esc(b.title || '')}">${esc(b.title || '')}</span></td>
+        <td class="fit"><span class="chip warn">held</span> <span class="muted">in ${esc(b.where)} · ${ago(b.since, now)}</span></td>
+        <td class="act">${b.where === 'merge' ? '' : claudeBtn(r, b)}</td></tr>
+    <tr class="sub"><td></td><td colspan="3" class="why">${esc(b.why)}</td></tr>`).join('')}</table>`;
+  // The priority repo: the lanes look at it first on every pass; otherwise round-robin.
+  const prio = r.priority
+    ? `<button ${busyAction ? 'disabled' : ''} class="prio on" onclick="act('priority',{repo:'none'})" title="the lanes look at this repo first on every pass; click to go back to round-robin">★ priority</button>`
+    : `<button ${busyAction ? 'disabled' : ''} class="prio" onclick="act('priority',{repo:${js(r.repo)}})" title="the lanes look at this repo first on every pass">☆ make priority</button>`;
   return `<section class="card" id="repo-${esc(r.slug)}">
-    <h2>${esc(r.slug)} <span class="cfg">${esc(r.label)} · ${esc(r.base)} · merge ${esc(r.merge)} · stages: ${stages} · then ${esc(r.on_exhaust)}${r.attach ? '' : ' · <b>no attach</b>: sessions not visible'}</span></h2>
+    <h2>${esc(r.slug)} ${prio} <span class="cfg">${esc(r.label)} · ${esc(r.base)} · merge ${esc(r.merge)} · stages: ${stages} · then ${esc(r.on_exhaust)}${r.attach ? '' : ' · <b>no attach</b>: sessions not visible'}</span></h2>
     <div class="lanes">${lanePanel(r, 'dev', now, ticking)}${lanePanel(r, 'review', now, ticking)}</div>
     <div class="queues">${queueCol('dev', r.queues.dev, r, now)}${queueCol('review', r.queues.review, r, now)}${queueCol('merge', r.queues.merge, r, now)}${claudeCol(r)}</div>
     ${strays(r, now)}
-    <h3 class="human">Needs you<span class="n">${r.parked.length}</span><span class="note">a question the last stage could not answer, stages exhausted, or a PR closed unmerged — the loop waits here until you act</span></h3>${human}
+    <h3 class="human">Needs you<span class="n">${r.parked.length + (r.held || []).length}</span><span class="note">a question the last stage could not answer, stages exhausted, a PR closed unmerged — or a bead held in its queue by something outside the loop — it waits here until you act, or the world changes</span></h3>${human}${held}
   </section>`;
 }
 

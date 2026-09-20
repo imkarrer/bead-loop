@@ -37,16 +37,17 @@ pub fn escalate(repo: &Repo, id: &str) {
     }
     repo.set_failures(id, n);
     let reviewer = if st.review.is_empty() { "none".to_string() } else { st.review.clone() };
-    bd_note(repo, id, &format!("bead-loop {}: escalated by hand to the last stage (worker {}, reviewer {reviewer})", date_iminutes(), st.model));
+    bd_note(
+        repo,
+        id,
+        &format!("bead-loop {}: escalated by hand to the last stage (worker {}, reviewer {reviewer})", date_iminutes(), st.model),
+    );
     let on_lane = repo.lane_bead("dev").as_deref() == Some(id) || repo.lane_bead("review").as_deref() == Some(id);
     if !repo.review_path(id).exists() && !on_lane {
         bd_status(repo, id, "open");
     }
     repo.release(id);
-    log(&format!(
-        "{}: {id}: escalated to the last stage — worker {}, reviewer {reviewer} — from its next round",
-        repo.slug, st.model
-    ));
+    log(&format!("{}: {id}: escalated to the last stage — worker {}, reviewer {reviewer} — from its next round", repo.slug, st.model));
     repo.wake();
 }
 
@@ -88,14 +89,12 @@ pub fn open_bead(repo: &Repo, id: &str) -> ! {
         if !repo.setup.is_empty() {
             log(&format!("{}: setup: {}", repo.slug, repo.setup));
             let logf = repo.rs.join("logs").join(format!("{id}.open.setup"));
-            let ok = crate::util::output(
-                crate::util::cmd("bash").args(["-c", &repo.setup]).current_dir(&wt),
-            )
-            .map(|o| {
-                let _ = std::fs::write(&logf, [o.stdout.as_slice(), o.stderr.as_slice()].concat());
-                o.status.success()
-            })
-            .unwrap_or(false);
+            let ok = crate::util::output(crate::util::cmd("bash").args(["-c", &repo.setup]).current_dir(&wt))
+                .map(|o| {
+                    let _ = std::fs::write(&logf, [o.stdout.as_slice(), o.stderr.as_slice()].concat());
+                    o.status.success()
+                })
+                .unwrap_or(false);
             if !ok {
                 log(&format!("{}: setup failed; see {}", repo.slug, logf.display()));
             }
@@ -107,8 +106,7 @@ pub fn open_bead(repo: &Repo, id: &str) -> ! {
         .and_then(|n| n.as_str())
         .unwrap_or("")
         .lines()
-        .filter(|l| l.starts_with("bead-loop"))
-        .last()
+        .rfind(|l| l.starts_with("bead-loop"))
         .unwrap_or("")
         .to_string();
     log(&format!("{}: {id}: opening Claude Code in {} on {branch}", repo.slug, wt.display()));

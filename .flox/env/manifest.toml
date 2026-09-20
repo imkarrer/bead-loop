@@ -28,6 +28,7 @@ rustc.pkg-path = "rustc"
 clippy.pkg-path = "clippy"
 rustfmt.pkg-path = "rustfmt"
 gcc.pkg-path = "gcc"            # the linker cargo calls as cc
+buildkite-agent.pkg-path = "buildkite-agent"   # the deploy agent on the loop's box (systemd/buildkite-agent.service)
 
 [vars]
 # Where the UI listens. bin/bead-loop-ui reads these; systemd/bead-loop-ui.service
@@ -37,7 +38,8 @@ BEAD_LOOP_UI_HOST = "127.0.0.1"
 
 [hook]
 on-activate = '''
-  export PATH="$FLOX_ENV_PROJECT/bin:$PATH"
+  # the release binary first, then debug (a checkout being worked on), then bin/ (the UI server)
+  export PATH="$FLOX_ENV_PROJECT/target/release:$FLOX_ENV_PROJECT/target/debug:$FLOX_ENV_PROJECT/bin:$PATH"
   export BEAD_LOOP_HOME="$FLOX_ENV_PROJECT"
 '''
 
@@ -50,14 +52,9 @@ command = '''OPENCODE_DISABLE_CLAUDE_CODE_SKILLS=1 exec opencode web --port 4096
 [services.ui]
 command = '''exec "$FLOX_ENV_PROJECT/bin/bead-loop-ui"'''
 
-# The loop itself, the timer's job on Linux: one tick, ten minutes, again.
+# The loop itself: resident, the same thing bead-supervisor.service runs.
 [services.loop]
-command = '''
-  while :; do
-    "$FLOX_ENV_PROJECT/bin/bead-supervisor" tick || true
-    sleep 600
-  done
-'''
+command = '''exec bead-supervisor run'''
 
 [options]
 systems = ["x86_64-linux", "aarch64-linux", "aarch64-darwin"]

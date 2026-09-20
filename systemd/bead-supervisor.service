@@ -1,9 +1,18 @@
 [Unit]
-Description=bead-loop: work one labelled bead per repo, merge green PRs, close beads
+Description=bead-loop: the resident loop — work labelled beads, merge green PRs, close beads
 After=network-online.target
 
 [Service]
-Type=oneshot
-ExecStart=%h/src/bead-loop/bin/bead-supervisor tick
-# opencode, bd, gh, jq, git come from the login profile.
-Environment=PATH=%h/.nix-profile/bin:/run/current-system/sw/bin:/usr/bin:/bin
+# The loop stays up: lanes block on the bell when their queues are empty, the merge
+# watcher polls GitHub while a PR is in flight. `systemctl stop` aborts the model
+# sessions the lanes are on (the TERM handler) and the next start recovers the rounds
+# it cut short, with no failure charged.
+Type=simple
+ExecStart=%h/.local/bin/bead-supervisor run
+Restart=on-failure
+RestartSec=10
+# opencode, bd, gh, jq, git, claude come from the login profile.
+Environment=PATH=%h/.local/bin:%h/.nix-profile/bin:/run/current-system/sw/bin:/usr/bin:/bin
+
+[Install]
+WantedBy=default.target

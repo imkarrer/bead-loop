@@ -4,11 +4,12 @@
 //   bead-loop-ui                 serve http://127.0.0.1:4097 (BEAD_LOOP_UI_PORT, BEAD_LOOP_UI_HOST)
 //
 // Reads: `bead-supervisor --json status` (the one description of a repo's state),
-// journalctl for the supervisor's log, systemctl for the timer and the running tick.
-// Levers, each one command the operator would otherwise type:
-//   abort a session on the opencode server, run a tick now, stop the running tick
-//   (the supervisor's TERM handler aborts its session), pause/resume the timer,
-//   reopen a parked bead, pause/resume one lane, gpu-mode game/work where the box has it.
+// journalctl for the supervisor's log, systemctl for the resident loop and its keeper
+// timer. Levers, each one command the operator would otherwise type:
+//   abort a session on the opencode server, ring the bell (wake), stop the loop (its
+//   TERM handler aborts the sessions it is on), start/stop the keeper timer, reopen a
+//   parked bead, pause/resume one lane, make a repo the priority, gpu-mode game/work
+//   where the box has it.
 // The page holds an EventSource on /api/events and is pushed every change; nobody
 // presses refresh. No dependencies beyond node; the page is ui/index.html.
 'use strict';
@@ -18,7 +19,10 @@ const path = require('node:path');
 const { execFile, spawn } = require('node:child_process');
 
 const HOME = path.resolve(__dirname, '..');
-const SUPERVISOR = path.join(HOME, 'bin', 'bead-supervisor');
+// The supervisor: BEAD_SUPERVISOR, else this checkout's release or debug build, else PATH.
+const SUPERVISOR = process.env.BEAD_SUPERVISOR
+  || [path.join(HOME, 'target', 'release', 'bead-supervisor'), path.join(HOME, 'target', 'debug', 'bead-supervisor')].find((p) => fs.existsSync(p))
+  || 'bead-supervisor';
 const PAGE = path.join(HOME, 'ui', 'index.html');
 const PORT = Number(process.env.BEAD_LOOP_UI_PORT || 4097);
 const HOST = process.env.BEAD_LOOP_UI_HOST || '127.0.0.1';
@@ -35,7 +39,6 @@ async function unitState(name) {
   const r = await run('systemctl', ['--user', 'show', name, '-p', 'ActiveState,SubState,ExecMainStartTimestamp,LastTriggerUSec,NextElapseUSecRealtime,Result,TimersMonotonic']);
   if (!r.ok) return { available: false };
   const p = Object.fromEntries(r.stdout.split('\n').filter(Boolean).map((l) => l.split(/=(.*)/s).slice(0, 2)));
-  // TimersMonotonic={ OnUnitInactiveUSec=3min ; next_elapse=... }: the gap after a tick ends.
   const gap = (r.stdout.match(/OnUnitInactiveUSec=([^ ;]+)/) || [])[1] || null;
   return { available: true, active: p.ActiveState, sub: p.SubState, next: p.NextElapseUSecRealtime || null,
            since: p.ExecMainStartTimestamp || p.LastTriggerUSec || null, result: p.Result || null, gap };
@@ -58,11 +61,9 @@ async function gpuMode() {
   const read = (f) => { try { return fs.readFileSync(path.join(GPU_MODE_STATE, f), 'utf8').trim(); } catch { return null; } };
   return { available: true, mode: read('mode') || 'work', by: read('by') || '-' };
 }
-// What GitHub says about a PR in flight, beside what the loop believes. The loop's
-// inflight marker is refreshed only by reconcile, at the start of a tick, and one
-// attempt can hold a tick for an hour — a PR merged a minute after adoption would sit
-// on the page as "waiting on CI" until then. So the page asks gh itself, one call per
-// PR per minute, and says "merged · the bead closes on the next tick" when it has.
+// What GitHub says about a PR in flight, beside what the loop believes. The loop's merge
+// watcher asks every 30 s while a PR is open; the page asks once a minute on its own so
+// a PR merged elsewhere shows as merged before the watcher's next look.
 const PR_TTL_MS = Number(process.env.BEAD_LOOP_UI_PR_TTL_MS || 60000);
 // Refreshed off the request path: gh is a network call, and a slow one would hold up
 // every page. state() reads the cache; a miss shows as the loop's own marker until the
@@ -138,9 +139,8 @@ async function state() {
 // or a lever was pulled, and sends it only when something differs — so a page that is
 // open shows a stage transition within a second or two of it happening, and an idle
 // loop costs one `status` every few seconds, not one per page.
-// Cadence: a compute costs most of a second of CPU (bash, jq, bd, yq, curl), so never
-// more than one per MIN_GAP_MS however many nudges arrive, and none at all while no page
-// is open.
+// Cadence: never more than one compute per MIN_GAP_MS however many nudges arrive, and
+// none at all while no page is open.
 const POLL_MS = Number(process.env.BEAD_LOOP_UI_POLL_MS || 5000);
 const MIN_GAP_MS = Number(process.env.BEAD_LOOP_UI_MIN_GAP_MS || 2500);
 const clients = new Set();
@@ -154,7 +154,6 @@ async function broadcast() {
     const s = await state();
     lastState = s;
     const body = JSON.stringify(s);
-    // `now` alone changes every time; compare the rest.
     // `now` is the first key and changes every time; the rest is what is compared, and
     // what a new page is replayed (with a fresh `now` put back in front).
     const rest = body.replace(/^\{"now":\d+,/, '{');
@@ -203,6 +202,11 @@ async function knownRepos() {
   const r = await run(SUPERVISOR, ['--json', 'status']);
   return jsonLines(r.stdout);
 }
+async function supervisor(args) {
+  const r = await run(SUPERVISOR, args);
+  if (!r.ok) throw new Error(r.stderr.trim().split('\n').pop() || `supervisor exited ${r.code}`);
+  return r;
+}
 const actions = {
   // abort {attach, session}: the server keeps a session running after its client is
   // gone; this is the same POST the supervisor makes when it notices.
@@ -214,16 +218,31 @@ const actions = {
     if (!res.ok) throw new Error(`server said ${res.status}`);
     return { aborted: session };
   },
-  async tick() { return systemctl('start', '--no-block', `${UNIT}.service`); },
+  // wake: ring the bell — every lane looks at its queue now (it would within a second anyway).
+  async wake() { await supervisor(['wake']); return { woke: true }; },
   // lane {name, paused}: the lane starts no new round until resumed; the other goes on.
   async lane({ name, paused }) {
     if (name !== 'dev' && name !== 'review') throw new Error('lane is dev or review');
-    const r = await run(SUPERVISOR, [paused ? 'pause' : 'resume', name]);
-    if (!r.ok) throw new Error(r.stderr.trim() || `supervisor exited ${r.code}`);
+    await supervisor([paused ? 'pause' : 'resume', name]);
     return { lane: name, paused: !!paused };
   },
+  // stop: the loop's TERM handler aborts the sessions it is on; the keeper timer starts it
+  // again in a minute unless the timer is stopped too (loop {on:false}).
   async stop() { return systemctl('stop', `${UNIT}.service`); },
+  // loop {on}: the loop and its keeper together — off is a real stop, on brings it back now.
+  async loop({ on }) {
+    if (on) return systemctl('start', `${UNIT}.timer`);
+    await systemctl('stop', `${UNIT}.timer`);
+    return systemctl('stop', `${UNIT}.service`);
+  },
   async timer({ on }) { return systemctl(on ? 'start' : 'stop', `${UNIT}.timer`); },
+  // priority {repo}: the repo the lanes look at first on every pass; 'none' clears it.
+  async priority({ repo }) {
+    const repos = await knownRepos();
+    if (repo !== 'none' && !repos.some((r) => r.repo === repo)) throw new Error('unknown repo');
+    await supervisor(['priority', repo]);
+    return { priority: repo };
+  },
   // gpu {mode}: game | work. `sudo -n`: no password prompt, a clear error instead.
   async gpu({ mode }) {
     if (mode !== 'game' && mode !== 'work') throw new Error('mode is game or work');
@@ -232,14 +251,12 @@ const actions = {
     return { mode };
   },
   // escalate {repo, id}: work this with Claude — the bead goes to the last stage and back
-  // into the dev queue, and a tick starts so it is picked up now.
+  // into the dev queue; the supervisor rings the bell itself.
   async escalate({ repo, id }) {
     if (!ID.test(String(id || ''))) throw new Error('bad bead id');
     const repos = await knownRepos();
     if (!repos.some((r) => r.repo === repo)) throw new Error('unknown repo');
-    const r = await run(SUPERVISOR, ['escalate', repo, id]);
-    if (!r.ok) throw new Error(r.stderr.trim().split('\n').pop() || `supervisor exited ${r.code}`);
-    await systemctl('start', '--no-block', `${UNIT}.service`).catch(() => {});
+    await supervisor(['escalate', repo, id]);
     return { escalated: id };
   },
   // Signing Claude in from the page. `claude auth login` prints a sign-in url and waits
@@ -264,28 +281,32 @@ const actions = {
     await new Promise((r) => { const t = setInterval(() => { if (login.done) { clearInterval(t); r(); } }, 200); setTimeout(() => { clearInterval(t); r(); }, 20000); });
     if (!login.done) throw new Error('claude did not finish signing in; try the code again or start over');
     if (login.result !== 'ok') throw new Error(login.result);
+    // Signed in: the loop's beads waiting on Claude can go now.
+    await run(SUPERVISOR, ['wake']);
     return { loggedIn: true };
   },
   async claude_cancel() { if (login && !login.done) login.child.kill(); login = null; return { cancelled: true }; },
   // answer {repo, id, text}: the reply to a bead in the human queue — noted on the bead,
-  // back to the dev queue at the stage it stopped on, and a tick starts.
+  // back to the dev queue at the stage it stopped on; the supervisor rings the bell.
   async answer({ repo, id, text }) {
     if (!ID.test(String(id || ''))) throw new Error('bad bead id');
     if (!String(text || '').trim()) throw new Error('write the answer first');
     const repos = await knownRepos();
     if (!repos.some((r) => r.repo === repo)) throw new Error('unknown repo');
-    const r = await run(SUPERVISOR, ['answer', repo, id, String(text).trim()]);
-    if (!r.ok) throw new Error(r.stderr.trim().split('\n').pop() || `supervisor exited ${r.code}`);
-    await systemctl('start', '--no-block', `${UNIT}.service`).catch(() => {});
+    await supervisor(['answer', repo, id, String(text).trim()]);
     return { answered: id };
   },
-  // reopen {repo, id}: a parked bead back in the queue, `bd update ID --status open`.
+  // reopen {repo, id}: a parked bead back in the queue, `bd update ID --status open`,
+  // then the bell. A bead under a PR is refused: the merge queue is what moves it.
   async reopen({ repo, id }) {
     if (!ID.test(String(id || ''))) throw new Error('bad bead id');
     const repos = await knownRepos();
-    if (!repos.some((r) => r.repo === repo)) throw new Error('unknown repo');
+    const rp = repos.find((r) => r.repo === repo);
+    if (!rp) throw new Error('unknown repo');
+    if (rp.queues.merge.some((p) => p.id === id)) throw new Error(`${id} is in the merge queue; close its PR first, or wait for it`);
     const r = await run('bd', ['update', id, '--status', 'open'], { cwd: repo });
     if (!r.ok) throw new Error(r.stderr.trim() || `bd exited ${r.code}`);
+    await run(SUPERVISOR, ['wake']);
     return { reopened: id };
   },
 };

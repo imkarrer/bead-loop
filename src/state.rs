@@ -30,9 +30,7 @@ pub struct StageHit {
 impl Repo {
     // ---- files ------------------------------------------------------------------
     pub fn failures_of(&self, id: &str) -> u64 {
-        read_to_string(&self.rs.join("failures").join(id))
-            .and_then(|s| s.trim().parse().ok())
-            .unwrap_or(0)
+        read_to_string(&self.rs.join("failures").join(id)).and_then(|s| s.trim().parse().ok()).unwrap_or(0)
     }
     pub fn set_failures(&self, id: &str, n: u64) {
         write_file(&self.rs.join("failures").join(id), &format!("{n}\n"));
@@ -109,12 +107,7 @@ impl Repo {
     /// PRs this loop opened and is waiting on: adopted ones cost CI, not the model.
     pub fn inflight_ids(&self) -> Vec<String> {
         let mut v: Vec<String> = std::fs::read_dir(self.rs.join("inflight"))
-            .map(|rd| {
-                rd.flatten()
-                    .filter_map(|e| e.file_name().into_string().ok())
-                    .filter(|n| !n.starts_with('.'))
-                    .collect()
-            })
+            .map(|rd| rd.flatten().filter_map(|e| e.file_name().into_string().ok()).filter(|n| !n.starts_with('.')).collect())
             .unwrap_or_default();
         v.sort();
         v

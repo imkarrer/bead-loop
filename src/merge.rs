@@ -54,11 +54,8 @@ fn check_state(c: &Value) -> String {
 
 /// `red | nocheck | green | pending` from `statusCheckRollup`.
 pub fn verdict(view: &Value) -> &'static str {
-    let checks: Vec<String> = view
-        .get("statusCheckRollup")
-        .and_then(|v| v.as_array())
-        .map(|a| a.iter().map(check_state).collect())
-        .unwrap_or_default();
+    let checks: Vec<String> =
+        view.get("statusCheckRollup").and_then(|v| v.as_array()).map(|a| a.iter().map(check_state).collect()).unwrap_or_default();
     if checks.iter().any(|c| RED.contains(&c.as_str())) {
         "red"
     } else if checks.is_empty() {
@@ -92,10 +89,12 @@ pub fn close_merged(repo: &Repo, id: &str, url: &str, view: &Value) {
         .and_then(|v| v.as_array())
         .map(|a| {
             a.iter()
-                .map(|c| format!("{}={}", c.get("context").or_else(|| c.get("name")).and_then(|v| v.as_str()).unwrap_or("null"), {
-                    let s = c.get("conclusion").or_else(|| c.get("state")).and_then(|v| v.as_str()).unwrap_or("null");
-                    s
-                }))
+                .map(|c| {
+                    format!("{}={}", c.get("context").or_else(|| c.get("name")).and_then(|v| v.as_str()).unwrap_or("null"), {
+                        let s = c.get("conclusion").or_else(|| c.get("state")).and_then(|v| v.as_str()).unwrap_or("null");
+                        s
+                    })
+                })
                 .collect()
         })
         .unwrap_or_default();
@@ -317,14 +316,24 @@ fn reconcile_open(repo: &Repo, id: &str, f: &std::path::Path, url: &str, num: &s
                     log(&format!("{}: {id}: green but merge refused ({ms})", repo.slug));
                     // Nothing the loop does changes a BLOCKED/UNSTABLE state: a review or
                     // a check that branch protection wants. Yours.
-                    held_in_merge(repo, id, &format!("{url} is green but GitHub refuses the merge ({ms}): branch protection wants something the loop cannot give"));
+                    held_in_merge(
+                        repo,
+                        id,
+                        &format!(
+                            "{url} is green but GitHub refuses the merge ({ms}): branch protection wants something the loop cannot give"
+                        ),
+                    );
                 }
             } else if repo.merge == "pipeline" {
                 say(id, format!("{}: {id}: green, merge is pipeline, waiting for the pipeline: {url}", repo.slug));
                 // Green for this long and still open: the pipeline is not merging it.
                 let since = green_since(repo, id);
                 if now() - since >= PIPELINE_TIMEOUT {
-                    held_in_merge(repo, id, &format!("{url} has been green for {} min and the pipeline has not merged it", (now() - since) / 60));
+                    held_in_merge(
+                        repo,
+                        id,
+                        &format!("{url} has been green for {} min and the pipeline has not merged it", (now() - since) / 60),
+                    );
                 }
             } else {
                 say(id, format!("{}: {id}: green, merge is manual, waiting for you: {url}", repo.slug));
@@ -357,7 +366,9 @@ fn reconcile_open(repo: &Repo, id: &str, f: &std::path::Path, url: &str, num: &s
                 bd_note(
                     repo,
                     id,
-                    &format!("bead-loop: {url} reports no CI checks, so nothing proves it green; merge it yourself or set merge = \"manual\""),
+                    &format!(
+                        "bead-loop: {url} reports no CI checks, so nothing proves it green; merge it yourself or set merge = \"manual\""
+                    ),
                 );
                 touch(&repo.mark(id, "nocheck"));
                 log(&format!("{}: {id}: no checks on {url}", repo.slug));

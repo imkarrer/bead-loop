@@ -18,21 +18,17 @@ pub fn sessions_json(repo: &Repo, dir: &Path) -> Value {
         return json!([]);
     }
     let d = dir.to_string_lossy().into_owned();
-    let busy: Value = curl_get(&format!("{}/session/status", repo.attach), Some(&d), 3)
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or(json!({}));
-    let list: Value = curl_get(&format!("{}/session", repo.attach), Some(&d), 3)
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or(json!([]));
+    let busy: Value =
+        curl_get(&format!("{}/session/status", repo.attach), Some(&d), 3).and_then(|s| serde_json::from_str(&s).ok()).unwrap_or(json!({}));
+    let list: Value =
+        curl_get(&format!("{}/session", repo.attach), Some(&d), 3).and_then(|s| serde_json::from_str(&s).ok()).unwrap_or(json!([]));
     let clients: i64 = output(cmd("pgrep").args(["-fc", "--", &format!("opencode run --dir {d} ")]))
         .ok()
         .and_then(|o| stdout_str(&o).trim().parse().ok())
         .unwrap_or(0);
     let url = format!("{}/{}", repo.attach, base64url(&d));
-    let mut top: Vec<&Value> = list
-        .as_array()
-        .map(|a| a.iter().filter(|s| s.get("parentID").map(|p| p.is_null()).unwrap_or(true)).collect())
-        .unwrap_or_default();
+    let mut top: Vec<&Value> =
+        list.as_array().map(|a| a.iter().filter(|s| s.get("parentID").map(|p| p.is_null()).unwrap_or(true)).collect()).unwrap_or_default();
     let updated = |s: &Value| s.pointer("/time/updated").and_then(|v| v.as_f64()).unwrap_or(0.0);
     top.sort_by(|a, b| updated(b).partial_cmp(&updated(a)).unwrap_or(std::cmp::Ordering::Equal));
     let rows: Vec<Value> = top
@@ -59,7 +55,7 @@ pub fn sessions_json(repo: &Repo, dir: &Path) -> Value {
 
 /// The `why` of a parked bead: the last note the loop left, split into when and what.
 fn why_of(notes: &str) -> Value {
-    let line = match notes.lines().filter(|l| l.starts_with("bead-loop")).last() {
+    let line = match notes.lines().rfind(|l| l.starts_with("bead-loop")) {
         Some(l) => l,
         None => return Value::Null,
     };
@@ -161,10 +157,7 @@ pub fn status_json(repo: &Repo) -> Value {
             m.insert("adopted".into(), json!(repo.mark(id, "adopted").exists()));
             m.insert("failures".into(), json!(repo.failures_of(id)));
             m.insert("title".into(), json!(byid.get(id).and_then(|b| b.get("title")).and_then(|t| t.as_str()).unwrap_or("")));
-            m.insert(
-                "held".into(),
-                repo.held_why(id).map(|w| json!({"why": w, "since": repo.held_since(id)})).unwrap_or(Value::Null),
-            );
+            m.insert("held".into(), repo.held_why(id).map(|w| json!({"why": w, "since": repo.held_since(id)})).unwrap_or(Value::Null));
             Value::Object(m)
         })
         .collect();
@@ -249,13 +242,11 @@ pub fn status_json(repo: &Repo) -> Value {
                 .collect()
         })
         .unwrap_or_default();
-    let stages: Vec<Value> = repo
-        .stages
-        .iter()
-        .map(|s| json!({"worker": s.worker, "reviewer": s.reviewer, "failures": s.failures}))
-        .collect();
+    let stages: Vec<Value> =
+        repo.stages.iter().map(|s| json!({"worker": s.worker, "reviewer": s.reviewer, "failures": s.failures})).collect();
     let has_claude = repo.stages.iter().any(|s| s.worker.starts_with("claude/") || s.reviewer.starts_with("claude/"));
-    let priority = crate::lanes::priority_repo(&repo.state_dir).map(|p| p == repo.repo || p.to_string_lossy() == repo.slug).unwrap_or(false);
+    let priority =
+        crate::lanes::priority_repo(&repo.state_dir).map(|p| p == repo.repo || p.to_string_lossy() == repo.slug).unwrap_or(false);
     json!({
         "slug": repo.slug, "repo": repo.repo.to_string_lossy(), "label": repo.label, "base": repo.base,
         "merge": repo.merge, "attach": repo.attach,
@@ -278,7 +269,7 @@ fn pad(s: &str, n: usize) -> String {
     let mut t: String = s.chars().take(n).collect();
     let len = t.chars().count();
     if len < n {
-        t.extend(std::iter::repeat(' ').take(n - len));
+        t.extend(std::iter::repeat_n(' ', n - len));
     }
     t
 }
@@ -307,12 +298,7 @@ pub fn status_one(repo: &Repo) -> String {
         .into_iter()
         .flatten()
         .map(|st| {
-            format!(
-                "{}⇢{}×{}",
-                s(st, "worker"),
-                if s(st, "reviewer").is_empty() { "none" } else { s(st, "reviewer") },
-                st["failures"]
-            )
+            format!("{}⇢{}×{}", s(st, "worker"), if s(st, "reviewer").is_empty() { "none" } else { s(st, "reviewer") }, st["failures"])
         })
         .collect();
     out.push_str(&format!(
@@ -398,7 +384,10 @@ pub fn status_one(repo: &Repo) -> String {
                 s(sess, "url")
             ));
             if st == "orphan" {
-                out.push_str(&format!("          no client on this box; stop it:  curl -X POST {attach}/session/{}/abort\n", s(sess, "id")));
+                out.push_str(&format!(
+                    "          no client on this box; stop it:  curl -X POST {attach}/session/{}/abort\n",
+                    s(sess, "id")
+                ));
             }
         }
     }
@@ -410,7 +399,8 @@ pub fn watch_loop(repos: &[std::path::PathBuf], interval: u64, model_flag: Optio
     loop {
         print!("\x1b[H\x1b[J{}   bead-supervisor watch (every {interval}s, ctrl-c to stop)\n\n", crate::util::clock());
         if crate::util::have("journalctl") {
-            if let Ok(o) = output(cmd("journalctl").args(["--user", "-u", "bead-loop.service", "-o", "cat", "-n", "8", "--no-pager"])) {
+            if let Ok(o) = output(cmd("journalctl").args(["--user", "-u", "bead-supervisor.service", "-o", "cat", "-n", "8", "--no-pager"]))
+            {
                 let cols: usize = std::env::var("COLUMNS").ok().and_then(|c| c.parse().ok()).unwrap_or(200);
                 for l in stdout_str(&o).lines() {
                     println!("{}", l.chars().take(cols).collect::<String>());
@@ -441,7 +431,7 @@ pub fn log_follow(repo: &Repo, id: Option<&str>) {
                 .collect()
         })
         .unwrap_or_default();
-    files.sort_by(|a, b| b.0.cmp(&a.0));
+    files.sort_by_key(|a| std::cmp::Reverse(a.0));
     let f = match files.first() {
         Some((_, p)) => p.clone(),
         None => crate::util::die(&format!("{}: no session logs{}", repo.slug, id.map(|i| format!(" for {i}")).unwrap_or_default())),
@@ -465,9 +455,15 @@ pub fn log_follow(repo: &Repo, id: Option<&str>) {
                     .iter()
                     .find_map(|k| inp.get(k).and_then(|x| x.as_str()).map(str::to_string))
                     .unwrap_or_default();
-                println!("[{}] {}", v.pointer("/part/tool").and_then(|t| t.as_str()).unwrap_or(""), arg.chars().take(160).collect::<String>());
+                println!(
+                    "[{}] {}",
+                    v.pointer("/part/tool").and_then(|t| t.as_str()).unwrap_or(""),
+                    arg.chars().take(160).collect::<String>()
+                );
             }
-            Some("text") => println!("> {}", v.pointer("/part/text").and_then(|t| t.as_str()).unwrap_or("").chars().take(400).collect::<String>()),
+            Some("text") => {
+                println!("> {}", v.pointer("/part/text").and_then(|t| t.as_str()).unwrap_or("").chars().take(400).collect::<String>())
+            }
             Some("step_finish") => println!(
                 "-- step: {}  tokens in={} out={}",
                 v.pointer("/part/reason").and_then(|t| t.as_str()).unwrap_or(""),

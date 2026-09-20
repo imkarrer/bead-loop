@@ -53,15 +53,7 @@ pub fn date_iminutes() -> String {
 /// `date +%Y%m%dT%H%M%S`: the stamp in a round's log file names.
 pub fn stamp() -> String {
     let tm = tm_now();
-    format!(
-        "{:04}{:02}{:02}T{:02}{:02}{:02}",
-        tm.tm_year + 1900,
-        tm.tm_mon + 1,
-        tm.tm_mday,
-        tm.tm_hour,
-        tm.tm_min,
-        tm.tm_sec
-    )
+    format!("{:04}{:02}{:02}T{:02}{:02}{:02}", tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec)
 }
 
 /// Seconds since the epoch.
@@ -185,9 +177,7 @@ pub fn expand_tilde(s: &str) -> PathBuf {
 
 /// `command -v NAME`
 pub fn have(name: &str) -> bool {
-    std::env::var_os("PATH")
-        .map(|p| std::env::split_paths(&p).any(|d| d.join(name).is_file()))
-        .unwrap_or(false)
+    std::env::var_os("PATH").map(|p| std::env::split_paths(&p).any(|d| d.join(name).is_file())).unwrap_or(false)
 }
 
 /// base64url without padding, the way the opencode web UI names a directory.
@@ -196,9 +186,7 @@ pub fn base64url(s: &str) -> String {
     let b = s.as_bytes();
     let mut out = String::new();
     for chunk in b.chunks(3) {
-        let n = ((chunk[0] as u32) << 16)
-            | ((chunk.get(1).copied().unwrap_or(0) as u32) << 8)
-            | chunk.get(2).copied().unwrap_or(0) as u32;
+        let n = ((chunk[0] as u32) << 16) | ((chunk.get(1).copied().unwrap_or(0) as u32) << 8) | chunk.get(2).copied().unwrap_or(0) as u32;
         out.push(T[(n >> 18) as usize & 63] as char);
         out.push(T[(n >> 12) as usize & 63] as char);
         if chunk.len() > 1 {
