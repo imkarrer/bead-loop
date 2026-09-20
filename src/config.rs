@@ -177,6 +177,8 @@ pub struct Repo {
     pub stages: Vec<Stage>,
     pub on_exhaust: String,
     pub conflict_worker: String,
+    /// who writes the brief when a bead is parked: the last stage's worker unless set; `none` for no brief
+    pub brief_model: String,
     pub adopt: bool,
     pub max_inflight: u64,
     pub worker_timeout: u64,
@@ -231,6 +233,7 @@ impl Repo {
             gate: cfg.str("gate", ""),
             on_exhaust: cfg.str("on_exhaust", "park"),
             conflict_worker: cfg.str("conflict_worker", ""),
+            brief_model: cfg.str("brief_model", ""),
             adopt: cfg.bool("adopt", true),
             max_inflight: cfg.u64("max_inflight", u64::MAX),
             worker_timeout: cfg.u64("worker_timeout", 3600),
@@ -251,7 +254,7 @@ impl Repo {
 /// same counter, file by file (a status run may have made failures/ first), then the
 /// old directory goes.
 pub fn make_state_dirs(rs: &Path) {
-    for d in ["inflight", "logs", "wt", "review", "failures", "held"] {
+    for d in ["inflight", "logs", "wt", "review", "failures", "held", "parked"] {
         let _ = std::fs::create_dir_all(rs.join(d));
     }
     let old = rs.join("attempts");
@@ -302,6 +305,7 @@ pub fn test_repo(root: &Path, stages: &[&str]) -> Repo {
         gate: String::new(),
         on_exhaust: "park".into(),
         conflict_worker: String::new(),
+        brief_model: String::new(),
         adopt: true,
         max_inflight: u64::MAX,
         worker_timeout: 60,

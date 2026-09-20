@@ -10,6 +10,8 @@ merge = "auto"                         # auto: the merge watcher squash-merges o
 review_model = "acbox/coder"           # the senior model that judges the diff before the push; unset = no review
 on_exhaust = "repeat"                  # repeat: cycle the stages until it lands | park: leave it for you (default)
 # conflict_worker = "claude/sonnet"   # who rebases a PR that conflicts with the base (default: the last stage's worker)
+# brief_model = "claude/sonnet"       # who writes the brief when a bead is parked for you — what each round tried, why it
+                                       # failed, the question to answer (default: the last stage's worker; "none" for no brief)
 # adopt = true                         # open bead/* PRs from anyone join the loop and merge on green
 # max_inflight = 2                     # PRs in the merge queue before the dev lane pauses; unset = no cap, bd's
                                        # dependencies are the only gate (the queues absorb the rest)

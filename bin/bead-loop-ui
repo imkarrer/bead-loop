@@ -5,7 +5,8 @@
 //
 // Reads: `bead-supervisor --json status` (the one description of a repo's state),
 // `--json stats` (the scoreboard, once a minute), journalctl for the supervisor's log,
-// systemctl for the resident loop and its keeper timer. Levers, each one command the operator would otherwise type:
+// systemctl for the resident loop and its keeper timer, and — asked for one by name — a
+// round's log file from the repo's state dir. Levers, each one command the operator would otherwise type:
 //   abort a session on the opencode server, ring the bell (wake), stop the loop (its
 //   TERM handler aborts the sessions it is on), start/stop the keeper timer, reopen a
 //   parked bead, pause/resume one lane, make a repo the priority, gpu-mode game/work
@@ -347,6 +348,22 @@ async function systemctl(...args) {
   return { ran: `systemctl --user ${args.join(' ')}` };
 }
 
+// A round's log file, by name, from the repo's logs dir (`logs_dir` in the status): the
+// worker's or reviewer's session, the gate's output, the brief. The name is a basename
+// the status handed the page, nothing else resolves; a file over 4 MB is sent from its end.
+async function logFile(repo, file) {
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(String(file || '')) || file.includes('..')) throw new Error('bad log name');
+  const rp = (await knownRepos()).find((r) => r.repo === repo);
+  if (!rp || !rp.logs_dir) throw new Error('unknown repo');
+  const p = path.join(rp.logs_dir, file);
+  const st = await fs.promises.stat(p).catch(() => null);
+  if (!st || !st.isFile()) throw new Error('no such log');
+  const cap = 4 << 20;
+  if (st.size <= cap) return fs.promises.readFile(p, 'utf8');
+  const fh = await fs.promises.open(p, 'r');
+  try { const buf = Buffer.alloc(cap); await fh.read(buf, 0, cap, st.size - cap); return `… (${st.size - cap} bytes before this)\n` + buf.toString('utf8'); } finally { await fh.close(); }
+}
+
 // ---- http -------------------------------------------------------------------------------
 const send = (res, code, body, type = 'application/json') => {
   res.writeHead(code, { 'content-type': type + '; charset=utf-8', 'cache-control': 'no-store' });
@@ -363,6 +380,7 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'GET' && url.pathname === '/') return send(res, 200, fs.readFileSync(PAGE, 'utf8'), 'text/html');
     if (req.method === 'GET' && url.pathname === '/api/state') return send(res, 200, await state());
     if (req.method === 'GET' && url.pathname === '/api/events') return subscribe(res);
+    if (req.method === 'GET' && url.pathname === '/api/log') return send(res, 200, await logFile(url.searchParams.get('repo'), url.searchParams.get('file')), 'text/plain');
     if (req.method === 'POST' && url.pathname.startsWith('/api/')) {
       // Only the page itself may pull a lever: a browser sends Sec-Fetch-Site on every
       // request, and anything cross-site (another tab, another origin) is refused.

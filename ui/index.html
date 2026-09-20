@@ -69,6 +69,23 @@
   button.hist:hover { color: var(--accent); }
   pre.hist { margin: 2px 0 8px; font: 12px/1.55 var(--mono); color: var(--muted); white-space: pre-wrap; }
   tr.sub td { border-top: 0; padding-top: 0; } tr.sub td pre.hist { margin-top: 0; }
+  /* the rounds: one block each — who, when, what stopped it in full, and its logs to open in place */
+  .rounds { margin: 2px 0 8px; display: grid; gap: 8px; max-width: 900px; }
+  .round { border-left: 2px solid var(--line-strong); padding: 2px 0 2px 10px; }
+  .round .head { font: 500 12px var(--mono); color: var(--bright); display: flex; gap: 10px; flex-wrap: wrap; align-items: baseline; }
+  .round .head .muted { font-weight: 400; }
+  .round pre.note { margin: 3px 0 4px; font: 12px/1.5 var(--mono); color: var(--ink); white-space: pre-wrap; }
+  .round .logs { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; font-size: 12px; color: var(--muted); }
+  button.link { font: 500 12px var(--mono); padding: 0 6px; border-color: var(--line); color: var(--muted); line-height: 18px; }
+  button.link:hover, button.link.on { color: var(--accent); border-color: var(--accent); }
+  pre.logview { margin: 4px 0 2px; font: 11.5px/1.5 var(--mono); color: var(--ink); white-space: pre-wrap; max-height: 40vh; overflow: auto; background: var(--base03); padding: 8px 10px; border-radius: 6px; }
+  pre.logview .t { color: var(--muted); } pre.logview .tool { color: var(--blue); } pre.logview .said { color: var(--base1); }
+  /* the question a parked bead stops on: the one thing on the page that is yours to answer */
+  .ask { border-left: 3px solid var(--yellow); padding: 6px 12px; margin: 4px 0 8px; background: rgba(181, 137, 0, .07); border-radius: 0 6px 6px 0; max-width: 900px; }
+  .ask .head { font-size: 11.5px; text-transform: uppercase; letter-spacing: .1em; color: var(--yellow); font-weight: 600; }
+  .ask .head .muted { text-transform: none; letter-spacing: 0; font-weight: 400; margin-left: 8px; }
+  .ask pre.text { margin: 4px 0 2px; color: var(--base2); font-size: 13px; }
+  .fold { margin: 2px 0; }
 
   table { border-collapse: collapse; width: 100%; }
   td, th { text-align: left; padding: 7px 12px 7px 0; vertical-align: top; border-top: 1px solid var(--line); }
@@ -258,8 +275,45 @@ const failChip = (n) => n ? `<span class="chip n" title="sent back to dev ${n} t
 const openHist = new Set();
 window.toggleHist = (id) => { if (!openHist.delete(id)) openHist.add(id); render(); };
 const histToggle = (b) => !b.failures ? '' : ` <button class="hist" onclick="toggleHist('${esc(b.id)}')" title="what each round left">${openHist.has(b.id) ? '▾' : '▸'} ${b.failures} round${b.failures > 1 ? 's' : ''}</button>`;
-const histList = (b) => !openHist.has(b.id) ? '' : `<pre class="hist">${(b.history || []).length ? b.history.map(esc).join('\n') : 'no notes kept for these rounds'}</pre>`;
-const histRow = (b, span) => openHist.has(b.id) ? `<tr class="sub"><td></td><td colspan="${span}">${histList(b)}</td></tr>` : '';
+// Each round as the loop recorded it: who ran it, on which stage, when, the whole note
+// (the BLOCKED line, the rejection with its work order, the gate's output) and the
+// round's log files — each opens in place, fetched from the server once. Rounds from
+// before the record are one line each (round, model, note).
+const logLabel = (f) => /\.worker-gate\.jsonl$/.test(f) ? 'worker · gate fix' : /\.worker\.jsonl$/.test(f) ? 'worker' : /\.review\.jsonl$/.test(f) ? 'reviewer' : /\.brief\.jsonl$/.test(f) ? 'brief' : /\.gate-2$/.test(f) ? 'gate, again' : /\.gate$/.test(f) ? 'gate' : /\.setup$/.test(f) ? 'setup' : f.replace(/^[^.]*\.[0-9T]*\./, '');
+const openLog = new Set(), logText = new Map();
+window.toggleLog = async (repo, file) => {
+  const k = `${repo}\n${file}`;
+  if (openLog.delete(k)) return render();
+  openLog.add(k); render();
+  if (!logText.has(k)) {
+    try { const r = await fetch(`/api/log?${new URLSearchParams({ repo, file })}`); logText.set(k, r.ok ? await r.text() : `(${(await r.json()).error || r.statusText})`); }
+    catch (e) { logText.set(k, `(${e.message})`); }
+    render();
+  }
+};
+// An opencode session log is JSON lines; shown as the supervisor's `log` shows it — one
+// line per tool call or text. A Claude Code log is one JSON object with the result. The
+// gate's and setup's output is text as it came.
+function renderLog(text, file) {
+  if (!/\.jsonl$/.test(file)) return esc(text);
+  try { const v = JSON.parse(text); if (v && typeof v.result === 'string') return `<span class="said">${esc(v.result)}</span>`; } catch { /* lines, then */ }
+  return text.split('\n').map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean).map((v) => {
+    const p = v.part || {};
+    if (v.type === 'tool_use') { const i = (p.state && p.state.input) || {}; const a = ['command', 'filePath', 'path', 'pattern', 'description'].map((k) => i[k]).find((x) => typeof x === 'string') || ''; return `<span class="tool">[${esc(p.tool || '')}]</span> ${esc(a.slice(0, 300))}`; }
+    if (v.type === 'text') return `<span class="said">&gt; ${esc(p.text || '')}</span>`;
+    if (v.type === 'step_finish') return `<span class="t">-- step: ${esc(p.reason || '')}  tokens in=${esc(p.tokens && p.tokens.input)} out=${esc(p.tokens && p.tokens.output)}</span>`;
+    return null;
+  }).filter(Boolean).join('\n') || '(nothing the log renders)';
+}
+const logBtns = (r, files) => (files || []).map((f) => { const k = `${r.repo}\n${f}`; return `<button class="link ${openLog.has(k) ? 'on' : ''}" onclick="toggleLog(${js(r.repo)},${js(f)})" title="${esc(f)}">${openLog.has(k) ? '▾' : '▸'} ${esc(logLabel(f))}</button>`; }).join('');
+const logViews = (r, files) => (files || []).filter((f) => openLog.has(`${r.repo}\n${f}`)).map((f) => { const t = logText.get(`${r.repo}\n${f}`); return `<pre class="logview">${t == null ? '<span class="t">loading…</span>' : renderLog(t, f)}</pre>`; }).join('');
+const roundBlock = (r, x) => `<div class="round"><div class="head">${x.round != null ? `round ${esc(x.round)}` : ''}${x.model ? ` <span class="chip worker">${esc(x.model)}</span>` : ''}${x.stage ? `<span class="muted">stage ${esc(x.stage)}</span>` : ''}${x.when ? `<span class="muted">${esc(String(x.when).replace('T', ' ').slice(0, 16))}</span>` : ''}</div><pre class="note">${esc(x.note || '')}</pre>${(x.logs || []).length ? `<div class="logs">logs: ${logBtns(r, x.logs)}</div>${logViews(r, x.logs)}` : ''}</div>`;
+const histList = (b, r) => !openHist.has(b.id) ? '' : (b.history || []).length ? `<div class="rounds">${b.history.map((x) => roundBlock(r, x)).join('')}</div>` : '<pre class="hist">no notes kept for these rounds</pre>';
+const histRow = (b, span, r) => openHist.has(b.id) ? `<tr class="sub"><td></td><td colspan="${span}">${histList(b, r)}</td></tr>` : '';
+// Folds: the brief and the bead's notes under a parked bead, closed by default, remembered per bead.
+const openFold = new Set();
+window.toggleFold = (k) => { if (!openFold.delete(k)) openFold.add(k); render(); };
+const fold = (k, label, body) => `<div class="fold"><button class="hist" onclick="toggleFold(${js(k)})">${openFold.has(k) ? '▾' : '▸'} ${esc(label)}</button>${openFold.has(k) ? body : ''}</div>`;
 const stageChip = (st, r) => !st ? '<span class="chip bad" title="stages exhausted">exhausted</span>'
   : `<span class="chip ${st.index > 1 ? 'warn' : ''}" title="stage ${st.index}: worker ${esc(st.worker)}${st.reviewer ? ', reviewer ' + esc(st.reviewer) : ''}">${st.index > 1 ? `S${st.index} · ` : ''}${esc(st.worker)}</span>`
     + ((r && r.claude_ok === false && /^claude\//.test(st.worker + ' ' + (st.reviewer || ''))) ? ' <span class="chip bad" title="a claude/* round cannot run while Claude is signed out; the lane takes other beads meanwhile">waits for Claude sign-in</span>' : '');
@@ -366,14 +420,14 @@ function strays(r, now) {
 }
 
 // The queues, in the order the lanes take them. Position is the information: #1 is next.
-const qRow = (i, b, extra) => `<tr><td class="pos">${i + 1}</td><td class="id">${esc(b.id)}</td><td class="title"><span class="t" title="${esc(b.title || '')}">${esc(b.title || '')}</span></td><td class="fit">${failChip(b.failures)}${histToggle(b)}${extra || ''}</td></tr>${histRow(b, 4)}`;
+const qRow = (i, b, extra, r) => `<tr><td class="pos">${i + 1}</td><td class="id">${esc(b.id)}</td><td class="title"><span class="t" title="${esc(b.title || '')}">${esc(b.title || '')}</span></td><td class="fit">${failChip(b.failures)}${histToggle(b)}${extra || ''}</td></tr>${histRow(b, 4, r)}`;
 function queueCol(name, rows, r, now) {
   const empty = { dev: 'nothing ready', review: 'nothing waiting for review', merge: 'no PRs in flight' }[name];
   const sub = { dev: 'no open blocker, fewest failures first, then bd’s order', review: 'gate passed; the reviewer next', merge: r.max_inflight == null ? 'PRs in CI · no cap: dependencies are the gate' : `PRs in CI · dev pauses at ${r.max_inflight}` }[name];
   let body;
   if (rows.length === 0) body = `<div class="empty">${empty}</div>`;
   else if (name === 'merge') body = `<table>${rows.map((p) => `<tr><td class="id">${esc(p.id)}</td><td class="title"><span class="t"><a href="${esc(p.url)}" target="_blank" rel="noopener">${esc(p.url.replace(/^https?:\/\/github\.com\/[^/]+\//, ''))} ↗</a></span></td></tr><tr class="sub"><td></td><td>${prChips(p, now, r)}</td></tr>`).join('')}</table>`;
-  else body = `<table>${rows.map((b, i) => qRow(i, b, (name === 'dev' ? ` ${stageChip(b.stage, r)}` : ` <span class="muted">${ago(b.since, now)}</span>${stageChip(b.stage, r).includes('waits for') ? ' <span class="chip bad">waits for Claude sign-in</span>' : ''}`) + `</td><td class="act">${claudeBtn(r, b)}`)).join('')}</table>`;
+  else body = `<table>${rows.map((b, i) => qRow(i, b, (name === 'dev' ? ` ${stageChip(b.stage, r)}` : ` <span class="muted">${ago(b.since, now)}</span>${stageChip(b.stage, r).includes('waits for') ? ' <span class="chip bad">waits for Claude sign-in</span>' : ''}`) + `</td><td class="act">${claudeBtn(r, b)}`, r)).join('')}</table>`;
   return `<div class="q ${name}"><h3>${name} queue<span class="n">${rows.length}</span></h3><div class="sub">${sub}</div>${body}</div>`;
 }
 // The Claude column: every bead whose current stage names a claude/* worker or reviewer,
@@ -388,7 +442,7 @@ function claudeCol(r) {
     ...r.queues.review.map((b, i) => ({ b, where: `review queue #${i + 1}` })),
   ].filter((x) => onClaude(x.b));
   const body = rows.length === 0 ? '<div class="empty">no bead on the Claude stage</div>'
-    : `<table>${rows.map(({ b, where }) => `<tr><td class="id">${esc(b.id)}</td><td class="title"><span class="t" title="${esc(b.title || '')}">${esc(b.title || '')}</span></td><td class="fit">${failChip(b.failures)}${histToggle(b)} <span class="muted">${esc(where)}</span></td></tr>${histRow(b, 2)}`).join('')}</table>`;
+    : `<table>${rows.map(({ b, where }) => `<tr><td class="id">${esc(b.id)}</td><td class="title"><span class="t" title="${esc(b.title || '')}">${esc(b.title || '')}</span></td><td class="fit">${failChip(b.failures)}${histToggle(b)} <span class="muted">${esc(where)}</span></td></tr>${histRow(b, 2, r)}`).join('')}</table>`;
   return `<div class="q claude"><h3>Claude<span class="n">${rows.length}</span></h3><div class="sub">the last stage; runs on the dev and review lanes</div>${body}</div>`;
 }
 
@@ -469,17 +523,29 @@ function scoreboard(s) {
 
 function repo(r, now, ticking) {
   const stages = r.stages.map((s, i) => `<span title="stage ${i + 1}: takes the next ${s.failures} failure${s.failures > 1 ? 's' : ''}"><span class="mono">${esc(s.worker)}</span>${s.reviewer ? ` ⇢ <span class="mono">${esc(s.reviewer)}</span>` : ''} ×${s.failures}</span>`).join(' &nbsp;→&nbsp; ');
-  // The human queue: each bead with the question it stopped on — the BLOCKED line, the
-  // last rejection, the failing check — in full, since it is what you decide on, and the
-  // ways out: an answer (noted on the bead, back to the dev queue at the same stage), a
-  // Claude Code session in its worktree with you, the last stage, or a plain reopen.
+  // The human queue: each bead with the question it stopped on, first — the loop's
+  // brief asks it (what happened, why, what you have to decide), or, without a brief, the
+  // loop's own from the reason — then what happened (the brief), the rounds with their
+  // logs (the toggle by the count), the bead's notes, and the ways out: an answer (noted
+  // on the bead, back to the dev queue at the same stage), a Claude Code session in its
+  // worktree with you, the last stage, or a plain reopen.
+  const reasonChip = (b) => { const p = b.parked; return !p ? (b.question ? '<span class="chip warn">question</span>' : b.stage ? '<span class="chip" title="in_progress with no record from the loop: parked by hand, or a round a stop cut short">stopped</span>' : '<span class="chip bad">exhausted</span>')
+    : p.reason === 'blocked' ? '<span class="chip warn" title="the last stage said BLOCKED: a claim in the bead is false, or a decision is yours">question</span>' : p.reason === 'exhausted' ? '<span class="chip bad" title="every stage has had its failures">exhausted</span>' : p.reason === 'pr_closed' ? '<span class="chip warn" title="its PR was closed on GitHub without merging">PR closed</span>' : `<span class="chip">${esc(p.reason)}</span>`; };
+  const askBlock = (b) => {
+    const p = b.parked;
+    if (!p) return `<div class="ask"><div class="head">Stopped on<span class="muted">no record from the loop — parked by hand, or before it kept one</span></div><pre class="text">${b.why ? `${b.why.when ? `${esc(b.why.when.replace('T', ' ').slice(0, 16))}${b.why.round ? ' ·' + esc(b.why.round) : ''} — ` : ''}${esc(b.why.what)}` : 'no note from the loop'}</pre></div>`;
+    const meta = [p.when ? `parked ${esc(String(p.when).replace('T', ' ').slice(0, 16))}` : '', p.stage ? `stopped on stage ${esc(p.stage.index)} (${esc(p.stage.worker)})` : '', p.brief_model ? `brief by ${esc(p.brief_model)}` : 'no brief: the loop\'s own question'].filter(Boolean).join(' · ');
+    return `<div class="ask"><div class="head">The question<span class="muted">${meta}</span></div><pre class="text">${esc(p.question || '')}</pre></div>`
+      + (p.brief ? fold(`brief:${b.id}`, 'what happened, and why', `<pre class="text">${esc(p.brief)}</pre>`) : '')
+      + (p.stopped_on && !p.brief ? fold(`stop:${b.id}`, 'what it stopped on', `<pre class="text">${esc(p.stopped_on)}</pre>`) : '');
+  };
   const human = r.parked.length === 0 ? '<div class="empty">nothing waiting on you</div>' : `<table>${r.parked.map((b) => `
     <tr><td class="id">${esc(b.id)}</td><td class="title"><span class="t" title="${esc(b.title || '')}">${esc(b.title || '')}</span></td>
-        <td class="fit">${b.question ? '<span class="chip warn">question</span>' : b.stage ? '<span class="chip">stopped</span>' : '<span class="chip bad">exhausted</span>'} ${failChip(b.failures)}${histToggle(b)}</td>
-        <td class="act">${claudeBtn(r, b)} <button ${busyAction ? 'disabled' : ''} onclick="act('reopen',{repo:${js(r.repo)},id:${js(b.id)}})" title="back in the dev queue as is">Reopen</button></td></tr>${histRow(b, 3)}
-    <tr class="sub"><td></td><td colspan="3" class="why">${b.why ? `${b.why.when ? `<span class="muted">${esc(b.why.when.replace('T', ' ').slice(0, 16))}${b.why.round ? ' ·' + esc(b.why.round) : ''} — </span>` : ''}${esc(b.why.what)}` : '<span class="muted">no note from the loop — parked by hand, or before the loop kept notes</span>'}
+        <td class="fit">${reasonChip(b)} ${failChip(b.failures)}${histToggle(b)}</td>
+        <td class="act">${claudeBtn(r, b)} <button ${busyAction ? 'disabled' : ''} onclick="act('reopen',{repo:${js(r.repo)},id:${js(b.id)}})" title="back in the dev queue as is">Reopen</button></td></tr>
+    <tr class="sub"><td></td><td colspan="3" class="why">${askBlock(b)}${histList(b, r)}${b.notes ? fold(`notes:${b.id}`, 'the bead\'s notes', `<pre class="hist">${esc(b.notes)}</pre>`) : ''}
       <div class="reply">
-        <textarea id="ans-${esc(b.id)}" rows="2" placeholder="Your answer, or what to do differently — goes on the bead; the next round reads it"></textarea>
+        <textarea id="ans-${esc(b.id)}" rows="2" placeholder="Your answer, or the context it lacked — goes on the bead under the question; the next round reads both"></textarea>
         <button ${busyAction ? 'disabled' : ''} onclick="act('answer',{repo:${js(r.repo)},id:${js(b.id)},text:document.getElementById('ans-${esc(b.id)}').value})">Answer &amp; resume</button>
         <span class="muted">or work it with Claude yourself, in its worktree:</span> <code class="cmd">${esc(b.open_cmd)}</code> <button onclick="navigator.clipboard.writeText(${js(b.open_cmd)})" title="copy">Copy</button>
       </div></td></tr>`).join('')}</table>`;

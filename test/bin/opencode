@@ -2,6 +2,7 @@
 # Stub opencode for bead-loop tests. `run` only. Behaviour from $TEST_CTRL:
 #   worker      done | blocked | nocommit | uncommitted | hang   (what the implementor leaves behind)
 #   review      one line per round: approve | reject
+#   brief       shape (default: WHAT HAPPENED / WHY / QUESTION) | plain (no shape) | crash
 #   calls       appended: "<agent> <dir> <model> <attach>" per run, prompt saved to prompt.<n>
 set -euo pipefail
 [ "$1" = run ] || { echo "stub opencode: only run" >&2; exit 2; }
@@ -39,5 +40,13 @@ case $agent in
       approve) say "APPROVE: checked every criterion" ;;
       crash) echo "connection refused" >&2; exit 7 ;;   # the reviewer's server is down
       *) say "REJECT: work.txt:1 wrong, fix it"; say "$(printf "For the worker:\n- What is wrong: work.txt:1 says round 1\n- What to do: append the word fixed\n- How to check: grep -c fixed work.txt prints 1")" ;;
+    esac ;;
+  bead-briefer)
+    # The brief of a parked bead: the model reads the rounds and asks the owner. The
+    # prompt it got is on file for the test (prompt.N); what it answers is the control's.
+    case $(cat "$TEST_CTRL/brief" 2>/dev/null || echo shape) in
+      plain) say "I read the rounds; it looks like the flag is missing." ;;
+      crash) echo "connection refused" >&2; exit 7 ;;
+      *) say "$(printf "WHAT HAPPENED:\nround 1 tried the flag and stopped.\nWHY:\nlib/x.ts has no such flag: the bead is wrong.\nQUESTION:\nIs the flag called --dry-run (add it to the bead), or should the criterion go?")" ;;
     esac ;;
 esac

@@ -274,13 +274,14 @@ pub fn reconcile(repo: &Repo) {
         match state {
             "MERGED" => close_merged(repo, &id, &url, &view),
             "CLOSED" => {
-                bd_note(repo, &id, &format!("bead-loop: {url} was closed without merging; left in_progress for you"));
                 let _ = std::fs::remove_file(&f);
                 for m in ["red", "nocheck", "adopted", "held"] {
                     let _ = std::fs::remove_file(repo.mark(&id, m));
                 }
                 repo.release(&id);
                 log(&format!("{}: {id}: PR closed unmerged, parked for you", repo.slug));
+                // The question goes on the bead with the url (the brief, when there is one).
+                crate::park::park(repo, &id, crate::park::Reason::PrClosed(url.clone()), None);
                 repo.wake();
             }
             "OPEN" => reconcile_open(repo, &id, &f, &url, &num, &view),
@@ -368,7 +369,7 @@ fn reconcile_open(repo: &Repo, id: &str, f: &std::path::Path, url: &str, num: &s
                 touch(&repo.mark(id, "fixing"));
                 let model = repo.stage_for(repo.failures_of(id)).map(|s| s.model).unwrap_or_else(|| repo.model.clone());
                 log(&format!("{}: {id}: CI red on {url} ({checks})", repo.slug));
-                send_back(repo, id, &repo.wt(id), true, &format!("CI red on {url}: {checks}"), &model, false);
+                send_back(repo, id, &repo.wt(id), true, &format!("CI red on {url}: {checks}"), &model, false, None);
             }
         }
         "nocheck" => {

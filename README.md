@@ -72,6 +72,7 @@ flowchart LR
 | Supervisor | `bead-supervisor`, one Rust binary (`src/`), resident | `bead-supervisor.service` on this box, kept up by `bead-supervisor.timer` |
 | Implementor | opencode agent `bead-worker` | `devbox/coder` — Qwen3-Coder-30B on the RTX 4080; `claude/sonnet` as the last stage |
 | Reviewer | opencode agent `bead-reviewer`, read-only | `acbox/coder` — Qwen3-Coder-Next 80B Q8 on ac-box's CPU |
+| Briefer | agent `bead-briefer`, read-only; one call when a bead is parked | `brief_model`: the last stage's worker (`claude/sonnet` here) |
 
 Both models are opencode providers in `~/.config/opencode/opencode.json`; any
 `provider/model` works in their place. The fast model implements; the slow, stronger
@@ -153,6 +154,7 @@ skills/beads/             bd syntax                        -> ~/.config/opencode
 skills/bead-workflow/     one bead, start to finish        -> ~/.config/opencode/skills/bead-workflow
 agents/bead-worker.md     implementor agent                -> ~/.config/opencode/agents/
 agents/bead-reviewer.md   reviewer agent                   -> ~/.config/opencode/agents/
+agents/bead-briefer.md    the brief of a parked bead       -> ~/.config/opencode/agents/
 bin/bead-loop-ui          the web UI server (node)         -> ~/.local/bin/
 ui/index.html             the page it serves
 systemd/                  the loop's service and its keeper timer, opencode-web and bead-loop-ui services,
@@ -218,6 +220,7 @@ the global one; the global one wins over the default. Anything may go in either.
 | `[[stages]]` | one stage of `model`/`review_model`, `failures = 3` | `worker`, `reviewer`, `failures` (1: how many send-backs this stage absorbs before the next takes over; `attempts` still reads), `timeout` (`worker_timeout`), in order |
 | `on_exhaust` | `"park"` | after the last stage: `park` for you, or `repeat` the stages |
 | `conflict_worker` | the last stage's worker | who rebases a PR that conflicts with the base (see the outcome table); a rebase is judgement, so the strong model by default |
+| `brief_model` | the last stage's worker | who writes the **brief** when a bead is parked for you — what each round tried, why it was sent back, the question you have to answer (see Needs you); `none` for no brief, the loop's own question then |
 | `merge` | `"auto"` | `auto`: the watcher merges on green · `pipeline`: the loop labels, CI merges · `manual`: PR only, the bead held for you once green |
 | `merge_label` | `"automerge"` | the label `pipeline` puts on each PR |
 | `adopt` | `true` | open `bead/*` PRs from anyone join the loop |
@@ -263,12 +266,23 @@ event stream; nobody presses refresh):
   stage that puts it on), **review** (how long each has waited), **merge** (each PR with
   GitHub's word on it — CI running m/n, red with the failing check, green, merged,
   conflicting — asked once a minute). Then **Needs you** — the human queue: each bead
-  **parked** with the question it stopped on (the `BLOCKED:` line, the last rejection,
-  the failing check), in full, and the ways out: **Answer & resume** (your reply goes on
-  the bead, the bead returns to the dev queue at the stage it stopped on with that round
-  forgiven, the next round reads the answer), **Work with Claude** (the last stage, now),
-  **Reopen** (as is), or the one-line command that opens an interactive Claude Code
-  session in the bead's worktree with the bead and the question as the first prompt.
+  **parked**, with **the question** first: what you have to decide or supply so that the
+  next round lands. The loop writes it before it raises the bead with you — a **brief**,
+  one call to `brief_model` (the last stage's worker unless set) that reads every round's
+  note and the end of every round's log and answers *what happened*, *why* (the bead is
+  wrong about X; the bead is underspecified; the environment; the model) and *the
+  question*, with the options and what each would mean. Without a brief (no model, Claude
+  signed out, the call failing) the loop's own question stands: the `BLOCKED:` line and
+  what you can do about it, or the count of rounds and the last send-back. Under the
+  question, folded: the brief in full, **the rounds** — each one with its worker, its
+  stage, when, the whole note it left (the rejection with its work order, the gate's
+  output) and its **logs** (the worker's session, the gate, the reviewer, the brief), each
+  opening in place — and the bead's notes. Then the ways out: **Answer & resume** (your
+  reply goes on the bead under the question, the bead returns to the dev queue at the
+  stage it stopped on with that round forgiven, the next round reads both), **Work with
+  Claude** (the last stage, now), **Reopen** (as is), or the one-line command that opens
+  an interactive Claude Code session in the bead's worktree with the bead, the question
+  and the brief as the first prompt.
   Under those, each bead **held** — still in its queue, waiting on something outside the
   loop, with the reason and where it sits; nothing to press, it clears itself when the
   world changes. And, first of all, each **decision**: a bead of type `decision` (or
@@ -359,11 +373,14 @@ The web UI itself, <http://127.0.0.1:4096> (`opencode-web.service`): with
 runs inside that server and streams there live, titled by bead, with the diff.
 
 State lives in `~/.local/state/bead-loop/<repo>/`: `inflight/<id>` (the PR url),
-`logs/<id>.<stamp>.*` (setup, worker, gate, reviewer output per attempt), `wt/<id>`
+`logs/<id>.<stamp>.*` (setup, worker, gate, reviewer, brief output per attempt), `wt/<id>`
 (the worktree while a bead is on a lane or waiting for review), `review/<id>` (the review
-queue: the worker's last words), `failures/<id>` (+ `.notes`, the history), `held/<id>`
-(the reason a bead waits), `lane.<name>` (the bead the lane of that name is on); and
-beside them `wake` (the bell), `priority`, `pause.dev` / `pause.review`.
+queue: the worker's last words), `failures/<id>` (+ `.rounds.jsonl`, the history: one
+record per send-back — round, worker, stage, when, the whole note, the round's log files;
+`.notes`, one line per round, is what beads from before have), `parked/<id>` (the loop's
+record of the parking: the reason, the stage it stopped on, the question, the brief),
+`held/<id>` (the reason a bead waits), `lane.<name>` (the bead the lane of that name is
+on); and beside them `wake` (the bell), `priority`, `pause.dev` / `pause.review`.
 
 ## Run
 
@@ -447,7 +464,10 @@ way of the ones that do not. The next round's worker reads the notes of the earl
 Three things put a bead in the **human queue** as *parked* (`in_progress`, no more rounds
 until you act): the stages are exhausted with `on_exhaust = "park"`, or the *last* stage
 says `BLOCKED:` — a claim in the bead is false, or a decision is yours — and a PR closed
-unmerged. The UI shows the question and takes the answer; `bead-supervisor answer` and
+unmerged. Before it raises the bead with you, the loop writes the **brief** — `brief_model`
+reads the rounds and their logs and puts the question on the bead (see Needs you) — so
+what reaches you is a question, not a stack of notes. The UI shows the question, the
+brief, the rounds with their logs, and takes the answer; `bead-supervisor answer` and
 `open` are the same from a terminal. A bead *held* is in the human queue too, beside them,
 with nothing to press.
 
@@ -469,7 +489,7 @@ turns it off.
 
 | Outcome | Bead | Branch / PR |
 | --- | --- | --- |
-| Worker `BLOCKED:` | note with the worker's line, +1 failure; dev queue, parked if this was the last stage | removed |
+| Worker `BLOCKED:` | note with the worker's line, +1 failure; dev queue — parked if this was the last stage, with the brief's question | removed (after the brief) |
 | No commit, or the session timed out | note, +1 failure; dev queue | removed |
 | Setup fails | **held**, no failure: the reason on the bead once; retried after the backoff | removed |
 | Harness exits with nothing said (server down) | **held**, no failure; the lane takes the next bead | removed (dev) / kept (review) |
@@ -488,8 +508,8 @@ turns it off.
 | No checks reported | one note, **held**: merge it yourself or set `manual` | waits |
 | PR conflicts with the base | note, **no failure**; dev queue — the next round is a rebase by `conflict_worker`, told to keep both sides | kept; the push updates the PR |
 | Adopted PR conflicts | left alone | whoever opened it rebases |
-| Failures exhausted (`on_exhaust = "park"`) | in_progress, for you | removed |
-| PR closed unmerged | in_progress, note | gone |
+| Failures exhausted (`on_exhaust = "park"`) | in_progress, for you, with the brief's question | removed (after the brief) |
+| PR closed unmerged | in_progress, note with the url and the brief's question | gone |
 | The loop stopped mid dev round | reopened at the next start, **no failure** (recover) | removed |
 
 `in_progress` covers every state past the dev queue — on a lane, waiting for review, in

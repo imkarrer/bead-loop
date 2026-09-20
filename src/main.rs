@@ -38,6 +38,7 @@ mod harness;
 mod human;
 mod lanes;
 mod merge;
+mod park;
 mod round;
 mod shell;
 mod signals;
