@@ -93,6 +93,9 @@ restart() {  # restart UNIT
 systemctl --user daemon-reload
 if changed agents skills systemd/opencode-web.service; then restart opencode-web.service; else echo "opencode-web.service kept: agents, skills and its unit are as deployed (the sessions live)"; fi
 if changed bin ui systemd/bead-loop-ui.service; then restart bead-loop-ui.service; else echo "bead-loop-ui.service kept: bin, ui and its unit are as deployed"; fi
+# A restart, not a stop: the loop leaves its sessions running on the (kept) server and
+# the next process rejoins them (recover) — the marker says which this is.
+touch "${BEAD_LOOP_STATE:-$HOME/.local/state/bead-loop}/restart"
 restart bead-supervisor.service
 systemctl --user is-active -q bead-supervisor.timer || systemctl --user start bead-supervisor.timer || true
 sleep 2

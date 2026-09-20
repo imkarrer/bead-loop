@@ -357,15 +357,36 @@ pub fn recover(ctx: &Ctx) {
                 if !dir.is_dir() {
                     continue;
                 }
-                crate::harness::abort_sessions(&repo, &dir);
                 let id = e.file_name().to_string_lossy().into_owned();
-                if repo.review_path(&id).exists() || repo.inflight_path(&id).exists() {
+                repo.rejoin_clear(&id);
+                if repo.inflight_path(&id).exists() {
+                    crate::harness::abort_sessions(&repo, &dir);
                     continue;
                 }
-                // in_progress + a worktree + in no queue = a round the stop interrupted
+                let in_review = repo.review_path(&id).exists();
                 let inprog = crate::shell::bd_in_progress_json(&repo);
                 let is_inprog =
                     inprog.as_array().map(|a| a.iter().any(|b| b.get("id").and_then(|i| i.as_str()) == Some(&id))).unwrap_or(false);
+                // The server outlived the loop (a deploy restarts the binary alone): a session
+                // still running here is the round going on for nobody. Rejoin it — the bead
+                // back in its queue with a marker, and the lane that takes it waits on the
+                // session instead of starting one — rather than abort it and start over.
+                if in_review || is_inprog {
+                    if let Some(sid) = crate::harness::running_session(&repo, &dir) {
+                        let kind = if in_review { "reviewer" } else { "worker" };
+                        repo.rejoin_set(&id, &sid, kind);
+                        if !in_review {
+                            crate::shell::bd_status(&repo, &id, "open");
+                        }
+                        log(&format!("{}: {id}: {kind} session {sid} still running on the server after the stop; rejoining it", repo.slug));
+                        continue;
+                    }
+                }
+                crate::harness::abort_sessions(&repo, &dir);
+                if in_review {
+                    continue;
+                }
+                // in_progress + a worktree + in no queue = a round the stop interrupted
                 if is_inprog {
                     crate::shell::bd_note(
                         &repo,

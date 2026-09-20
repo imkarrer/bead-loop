@@ -138,9 +138,14 @@ an edit takes effect on the next round. The binary watches its own path: after a
 puts a new one there, the running loop re-execs it at the next moment both lanes are
 idle. `systemctl stop` aborts the model sessions the lanes are on — and a worker, gate or
 reviewer that comes back under the stop is cut short, never judged: no failure, no note,
-the branch kept. The next start **recovers** first — stale lane markers go, orphan sessions
-are aborted, and a dev round the stop cut short is back in the dev queue with no failure
-charged.
+the branch kept. A **restart** (the deploy's: it drops `$STATE_DIR/restart` first) aborts
+nothing: the sessions go on inside `opencode-web.service`, and the next process **rejoins**
+them — `recover` finds a session still running under a bead's worktree, puts the bead
+back in its queue first with a `rejoin/ID` marker, and the lane that takes it waits on
+that session instead of starting one, reading what it said off the server as the round's
+text. A deploy that changes only `src/` costs no round. The next start **recovers** first
+— stale lane markers go, orphan sessions are aborted (or rejoined), and a dev round the
+stop cut short is back in the dev queue with no failure charged.
 
 `bead-supervisor tick` is the same lanes for one pass: reconcile, both lanes until both
 queues drain and both lanes idle, reconcile again, exit — for hand runs and the test
@@ -582,7 +587,8 @@ that commit (the tested binary, byte for byte; no compiler on the box), put the 
 the commit, `install.sh` with that binary, and restart what changed: the loop always; the
 opencode server (where the model sessions live) only when `agents/`, `skills/` or its unit
 moved; the UI only when `bin/`, `ui/` or its unit did — a change to `src/` leaves every
-session running. A merge is running here within two minutes of its release. The clone is the deploy's alone
+session running, and the new loop rejoins them. A merge is running here within two minutes of
+its release. The clone is the deploy's alone
 — nothing else writes there, so a reset is always safe — and `~/src/bead-loop`, the
 project the loop works (where `bd` writes `.beads/` and the bead worktrees hang), is not
 read by the deploy at all: development never blocks it. The binary links the flox env's

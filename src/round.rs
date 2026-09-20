@@ -497,12 +497,18 @@ pub fn dev_one(repo: &Repo, opts: &Opts, id: Option<&str>, last_id: &mut Option<
     // restarted: the worker fixes its commit. A dev-side failure deleted the branch.
     let resumed = branch_exists(repo, &branch);
     let prompt = dev_prompt(&json, &branch, &repo.base, resumed, &rebase, &hist);
+    // A worker session of this bead still running on the server since the last process
+    // (recover found it): the round is that session, waited on, not a new one — and the
+    // worktree it works in is left alone. Without the worktree there is nothing to rejoin.
+    let rejoin = repo.rejoin_of(&id).filter(|(_, kind)| kind == "worker").map(|(sid, _)| sid).filter(|_| wt.is_dir());
+    repo.rejoin_clear(&id);
     log(&format!(
-        "{}: dev: bead {id} — {title} ({n} failures, worker {model}, reviewer {}{}{})",
+        "{}: dev: bead {id} — {title} ({n} failures, worker {model}, reviewer {}{}{}{})",
         repo.slug,
         if review_model.is_empty() { "none" } else { &review_model },
         if resumed { ", resuming the branch" } else { "" },
-        if conflict { ", rebase" } else { "" }
+        if conflict { ", rebase" } else { "" },
+        rejoin.as_deref().map(|s| format!(", rejoining session {s}")).unwrap_or_default()
     ));
     if opts.dry_run {
         println!(
@@ -533,9 +539,11 @@ pub fn dev_one(repo: &Repo, opts: &Opts, id: Option<&str>, last_id: &mut Option<
         hold(repo, &id, None, &format!("git fetch origin {} failed", repo.base));
         return Pass::Worked;
     }
-    abort_sessions(repo, &wt); // a killed earlier round may have left one running here
+    if rejoin.is_none() {
+        abort_sessions(repo, &wt); // a killed earlier round may have left one running here
+    }
     signals::set_current(lane_name, &repo.attach, &repo.slug, Some(wt.clone()), Some(repo.lane_path(lane_name)));
-    let kept = wt.is_dir() && resumed && git_ok(&wt, &["rev-parse", "-q", "--verify", "HEAD"]);
+    let kept = rejoin.is_some() || (wt.is_dir() && resumed && git_ok(&wt, &["rev-parse", "-q", "--verify", "HEAD"]));
     if !kept {
         if wt.exists() {
             worktree_remove(repo, &wt);
@@ -560,7 +568,10 @@ pub fn dev_one(repo: &Repo, opts: &Opts, id: Option<&str>, last_id: &mut Option<
 
     let title_w = format!("{id} · worker · round {}", n + 1);
     let worker_log = std::path::PathBuf::from(format!("{}.worker.jsonl", logf.display()));
-    let r = run_agent(repo, "bead-worker", &model, &wt, &worker_log, &prompt, &title_w, timeout, Some(&json));
+    let r = match &rejoin {
+        Some(sid) => crate::harness::rejoin_session(repo, sid, &worker_log, timeout),
+        None => run_agent(repo, "bead-worker", &model, &wt, &worker_log, &prompt, &title_w, timeout, Some(&json)),
+    };
     cut_short(repo, &id);
     if r.rc != 0 {
         if r.empty && r.rc != 124 {
@@ -696,23 +707,36 @@ pub fn review_one(repo: &Repo, opts: &Opts, id: Option<&str>, lane: Option<&Lane
     signals::set_current(lane_name, &repo.attach, &repo.slug, Some(wt.clone()), Some(repo.lane_path(lane_name)));
     let mut verdict = String::new();
     if !review_model.is_empty() {
-        log(&format!("{}: review: {id} by {review_model} ({n} failures)", repo.slug));
-        let stat = git_out(&wt, &["diff", &format!("origin/{}...HEAD", repo.base), "--stat"]);
-        let diff = git_out(&wt, &["diff", &format!("origin/{}...HEAD", repo.base)]);
-        let diff = cut_bytes(&diff, 60000);
-        let prompt = review_prompt(&json, &repo.base, &final_text, &stat, diff);
+        // A reviewer session of this bead still running on the server since the last
+        // process (recover found it): waited on, not started again.
+        let rejoin = repo.rejoin_of(&id).filter(|(_, kind)| kind == "reviewer").map(|(sid, _)| sid);
+        repo.rejoin_clear(&id);
+        log(&format!(
+            "{}: review: {id} by {review_model} ({n} failures{})",
+            repo.slug,
+            rejoin.as_deref().map(|s| format!(", rejoining session {s}")).unwrap_or_default()
+        ));
         let review_log = std::path::PathBuf::from(format!("{}.review.jsonl", logf.display()));
-        let r = run_agent(
-            repo,
-            "bead-reviewer",
-            &review_model,
-            &wt,
-            &review_log,
-            &prompt,
-            &format!("{id} · reviewer · round {}", n + 1),
-            timeout,
-            Some(&json),
-        );
+        let r = match &rejoin {
+            Some(sid) => crate::harness::rejoin_session(repo, sid, &review_log, timeout),
+            None => {
+                let stat = git_out(&wt, &["diff", &format!("origin/{}...HEAD", repo.base), "--stat"]);
+                let diff = git_out(&wt, &["diff", &format!("origin/{}...HEAD", repo.base)]);
+                let diff = cut_bytes(&diff, 60000);
+                let prompt = review_prompt(&json, &repo.base, &final_text, &stat, diff);
+                run_agent(
+                    repo,
+                    "bead-reviewer",
+                    &review_model,
+                    &wt,
+                    &review_log,
+                    &prompt,
+                    &format!("{id} · reviewer · round {}", n + 1),
+                    timeout,
+                    Some(&json),
+                )
+            }
+        };
         cut_short(repo, &id);
         if r.rc != 0 {
             if r.empty && r.rc != 124 {

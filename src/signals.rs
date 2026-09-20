@@ -100,8 +100,16 @@ fn on_signal() -> ! {
         .map(|g| g.iter().map(|l| (l.attach.clone(), l.slug.clone(), l.wt.clone(), l.lane_file.clone())).collect())
         .unwrap_or_default();
     let lanes_on_rounds = lanes.iter().filter(|l| l.2.is_some()).count();
+    // A restart (the deploy: `$STATE_DIR/restart` dropped just before it) keeps the
+    // sessions: the server outlives this process, and the next one rejoins them
+    // (lanes.rs recover). Any other stop — a hand stop, gpu-mode — aborts them, so the
+    // model server is freed.
+    let restart = std::fs::remove_file(crate::config::state_dir().join("restart")).is_ok();
+    if restart && lanes_on_rounds > 0 {
+        crate::util::log(&format!("restart: {lanes_on_rounds} session(s) left running on the server for the next process to rejoin"));
+    }
     for (attach, slug, wt, lane_file) in lanes {
-        if let Some(wt) = wt {
+        if let (Some(wt), false) = (wt, restart) {
             crate::harness::abort_sessions_on(&attach, &slug, &wt);
         }
         if let Some(f) = lane_file {

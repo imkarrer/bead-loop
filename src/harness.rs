@@ -134,7 +134,13 @@ pub fn run_agent(
         rc = run_to_files(&mut c, stdout, stderr);
         // The client is gone (timeout, a kill); with attach the server would keep working
         // the session for nobody. Its log may still be empty, so ask the server by directory.
-        if rc != 0 {
+        // Under a stop the signal thread decides (a restart keeps the session to rejoin).
+        // A client killed by a signal (128+; `timeout` itself exits 124) usually died of
+        // the same TERM that is a step from raising the flag: a moment before deciding.
+        if rc >= 128 && !signals::stopping() {
+            crate::util::sleep_secs(0.3);
+        }
+        if rc != 0 && !signals::stopping() {
             abort_sessions(repo, dir);
         }
         let raw = read_to_string(logf).unwrap_or_default();
@@ -269,18 +275,110 @@ pub fn abort_sessions(repo: &Repo, dir: &Path) {
 }
 
 pub fn abort_sessions_on(attach: &str, slug: &str, dir: &Path) {
+    for sid in sessions_on(attach, dir) {
+        log(&format!("{slug}: aborting session {sid} on {attach}"));
+        crate::shell::curl_post(&format!("{attach}/session/{sid}/abort"), 5);
+    }
+}
+
+/// The sessions the server is running under `dir`, from `GET /session/status`
+/// (`{"ses_x": {"type": "busy"}}` per running one), sorted.
+fn sessions_on(attach: &str, dir: &Path) -> Vec<String> {
     if attach.is_empty() || !crate::util::have("curl") {
-        return;
+        return Vec::new();
     }
     let dir_s = dir.to_string_lossy();
     let status = crate::shell::curl_get(&format!("{attach}/session/status"), Some(&dir_s), 5).unwrap_or_default();
     let v: Value = serde_json::from_str(&status).unwrap_or(Value::Null);
     let mut ids: Vec<String> = v.as_object().map(|o| o.keys().cloned().collect()).unwrap_or_default();
     ids.sort();
-    for sid in ids {
-        log(&format!("{slug}: aborting session {sid} on {attach}"));
-        crate::shell::curl_post(&format!("{attach}/session/{sid}/abort"), 5);
+    ids
+}
+
+/// A session still running under this worktree, if any: what a restart finds when the
+/// server outlived the loop — to rejoin, not abort.
+pub fn running_session(repo: &Repo, dir: &Path) -> Option<String> {
+    sessions_on(&repo.attach, dir).into_iter().next()
+}
+
+fn rejoin_poll() -> f64 {
+    std::env::var("BEAD_LOOP_REJOIN_POLL").ok().and_then(|s| s.parse().ok()).unwrap_or(5.0)
+}
+
+/// Wait on a session the server is already running (a worker or reviewer round the last
+/// loop process started and a restart left on the server), then read what it said. The
+/// same `AgentRun` `run_agent` returns — the log file gets the text parts in the client's
+/// jsonl shape, so nothing after the round can tell the difference. The round's timeout
+/// counts from the session's start (`GET /session/SID`, time.created); past it the
+/// session is aborted and the run is 124, as `timeout` would have made it. Under a stop
+/// the run is 143 (the caller cuts the round short; the session goes on for the next
+/// process to rejoin).
+pub fn rejoin_session(repo: &Repo, sid: &str, logf: &Path, timeout: u64) -> AgentRun {
+    let attach = repo.attach.as_str();
+    let started_ms = crate::shell::curl_get(&format!("{attach}/session/{sid}"), None, 5)
+        .and_then(|s| serde_json::from_str::<Value>(&s).ok())
+        .and_then(|v| v.pointer("/time/created").and_then(|t| t.as_i64()))
+        .unwrap_or_else(|| crate::util::now() * 1000);
+    let deadline = started_ms / 1000 + timeout as i64;
+    let mut rc = 0;
+    loop {
+        if signals::stopping() {
+            rc = 143;
+            break;
+        }
+        let status = crate::shell::curl_get(&format!("{attach}/session/status"), None, 5).unwrap_or_default();
+        let v: Value = serde_json::from_str(&status).unwrap_or(Value::Null);
+        let busy = v.get(sid).is_some();
+        if !busy {
+            break;
+        }
+        if crate::util::now() >= deadline {
+            log(&format!("{}: session {sid} past its {timeout} s; aborting it", repo.slug));
+            crate::shell::curl_post(&format!("{attach}/session/{sid}/abort"), 5);
+            rc = 124;
+            break;
+        }
+        crate::util::sleep_secs(rejoin_poll());
     }
+    // What the model said, in the order it said it: the assistant messages' text parts.
+    let msgs = crate::shell::curl_get(&format!("{attach}/session/{sid}/message"), None, 10).unwrap_or_default();
+    let v: Value = serde_json::from_str(&msgs).unwrap_or(Value::Null);
+    let texts: Vec<String> = v
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|m| m.pointer("/info/role").and_then(|r| r.as_str()) == Some("assistant"))
+        .flat_map(|m| m.get("parts").and_then(|p| p.as_array()).cloned().unwrap_or_default())
+        .filter(|p| p.get("type").and_then(|t| t.as_str()) == Some("text"))
+        .filter_map(|p| p.get("text").and_then(|t| t.as_str()).map(str::to_string))
+        .filter(|t| !t.is_empty())
+        .collect();
+    let lines: String = texts
+        .iter()
+        .map(|t| {
+            serde_json::json!({"type": "text", "part": {"text": t}}).to_string()
+                + "
+"
+        })
+        .collect();
+    let _ = std::fs::write(logf, lines.as_bytes());
+    let full = texts.join(
+        "
+",
+    );
+    let empty = full.is_empty();
+    log(&format!(
+        "{}: rejoined session {sid}: {} after {} s{}",
+        repo.slug,
+        match rc {
+            0 => "finished",
+            124 => "timed out",
+            _ => "still running (stop)",
+        },
+        crate::util::now() - started_ms / 1000,
+        if empty { ", no text" } else { "" }
+    ));
+    AgentRun { text: tail_lines(&full, 20), full, rc, empty }
 }
 
 // ---- can this model run right now? ------------------------------------------------

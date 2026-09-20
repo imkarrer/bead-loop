@@ -484,10 +484,85 @@ case_stop_charges_no_failure() {
   assert_eq "$(bead .status)" in_progress "the bead is as the stop left it"
   git -C "$REPO" show-ref -q refs/heads/bead/t-1 && ok || bad "the branch is kept for recover"
   [ -d "$BEAD_LOOP_STATE/repo/wt/t-1" ] && ok || bad "the worktree is kept for recover"
+  echo '{}' >"$TEST_CTRL/session-status.json"   # the abort took: the server shows nothing running
   sup recover "$REPO"
   assert_eq "$(bead .status)" open "recover reopened it"
   assert_match "$(bead .notes)" "round interrupted by a stop; back in the dev queue, no failure charged" "with the stop's note"
   assert_eq "$(cat "$BEAD_LOOP_STATE/repo/failures/t-1" 2>/dev/null || echo 0)" 0 "still no failure"
+}
+case_restart_rejoins_the_worker_session() {
+  # A deploy restarts the loop alone: the opencode server, and the session it is running
+  # for the round, outlive the process. The deploy drops $STATE/restart before the
+  # restart; the stop then leaves the session running instead of aborting it, and the
+  # next process's recover finds it under the worktree and rejoins it — the bead back in
+  # the dev queue first, the lane that takes it waiting on that session rather than
+  # starting one, its messages read off the server as the round's text. One worker call
+  # in all, and the bead reaches its PR.
+  setup true auto stub/reviewer 'attach = "http://oc.test:4096"'; echo hang >"$TEST_CTRL/worker"
+  mkdir -p "$BEAD_LOOP_STATE"; touch "$BEAD_LOOP_STATE/restart"
+  setsid "$SUP" --once tick 2>>"$T/sup.log" & pid=$!
+  until grep -q '^bead-worker' "$TEST_CTRL/calls" 2>/dev/null; do sleep 0.1; done
+  echo '{"ses_live":{"type":"busy"}}' >"$TEST_CTRL/session-status.json"   # the server is on it now
+  sleep 0.3
+  kill -TERM -- -"$pid"; rc=0; wait "$pid" || rc=$?
+  assert_eq "$rc" 143 "exits 143 on TERM"
+  assert_match "$(cat "$T/sup.log")" "restart: 1 session(s) left running on the server for the next process to rejoin" "a restart keeps the session"
+  ! grep -q abort "$TEST_CTRL/curl.log" && ok || bad "no abort on a restart: $(grep abort "$TEST_CTRL/curl.log")"
+  assert_nofile "$BEAD_LOOP_STATE/restart" "the marker is consumed"
+  R=$BEAD_LOOP_STATE/repo
+  sup recover "$REPO"
+  assert_match "$(cat "$T/sup.log")" "t-1: worker session ses_live still running on the server after the stop; rejoining it" "recover found it"
+  ! grep -q abort "$TEST_CTRL/curl.log" && ok || bad "recover did not abort it"
+  assert_eq "$(cat "$R/rejoin/t-1" 2>/dev/null)" "ses_live worker" "the rejoin marker"
+  assert_eq "$(bead .status)" open "back in the dev queue"
+  ! grep -q 'interrupted by a stop' <<<"$(bead .notes)" && ok || bad "not noted as interrupted: it goes on"
+  assert_eq "$(sup --json status "$REPO" | jq -r '.queues.dev[0].id')" t-1 "first in the dev queue"
+  # The session finishes on the server while the lane waits on it: its work in the
+  # worktree, its DONE among its messages, then the server shows it idle.
+  echo work >"$R/wt/t-1/work.txt"
+  jq -cn '[{info:{role:"user"},parts:[{type:"text",text:"Work the bead"}]},{info:{role:"assistant"},parts:[{type:"text",text:"I did it."},{type:"tool"},{type:"text",text:"DONE: work.txt written"}]}]' >"$TEST_CTRL/messages.json"
+  ( sleep 0.6; echo '{}' >"$TEST_CTRL/session-status.json" ) &
+  BEAD_LOOP_REJOIN_POLL=0.1 sup --once tick; wait
+  assert_match "$(cat "$T/sup.log")" "dev: bead t-1 .*rejoining session ses_live" "the lane rejoined rather than started"
+  assert_match "$(cat "$T/sup.log")" "rejoined session ses_live: finished after" "and waited for it"
+  assert_eq "$(calls)" "bead-worker bead-reviewer" "one worker call in all; the reviewer took its DONE"
+  assert_file "$R/inflight/t-1" "to a PR"
+  assert_nofile "$R/rejoin/t-1" "the marker is spent"
+  assert_match "$(cat "$R"/logs/t-1.*.worker.jsonl | tail -1)" "DONE: work.txt written" "the session's text is the round's log"
+  assert_eq "$(cat "$R/failures/t-1" 2>/dev/null || echo 0)" 0 "no failure anywhere"
+  # A stop that is not a restart (a hand stop, gpu-mode) still aborts the session.
+  setup true auto stub/reviewer 'attach = "http://oc.test:4096"'; echo hang >"$TEST_CTRL/worker"
+  setsid "$SUP" --once tick 2>>"$T/sup.log" & pid=$!
+  until grep -q '^bead-worker' "$TEST_CTRL/calls" 2>/dev/null; do sleep 0.1; done
+  echo '{"ses_live":{"type":"busy"}}' >"$TEST_CTRL/session-status.json"   # the server is on it now
+  sleep 0.3
+  kill -TERM -- -"$pid"; wait "$pid" 2>/dev/null || true
+  assert_match "$(cat "$TEST_CTRL/curl.log")" "session/ses_live/abort" "a plain stop aborts"
+}
+
+case_restart_rejoins_the_reviewer_session() {
+  # The same for a reviewer round: review/ID survives the stop, recover finds the
+  # session under the worktree, the review lane waits on it and takes its APPROVE.
+  setup true auto stub/reviewer 'attach = "http://oc.test:4096"'; echo hang >"$TEST_CTRL/review"
+  mkdir -p "$BEAD_LOOP_STATE"; touch "$BEAD_LOOP_STATE/restart"
+  setsid "$SUP" --once tick 2>>"$T/sup.log" & pid=$!
+  until grep -q '^bead-reviewer' "$TEST_CTRL/calls" 2>/dev/null; do sleep 0.1; done
+  echo '{"ses_rev":{"type":"busy"}}' >"$TEST_CTRL/session-status.json"   # the server is on it now
+  sleep 0.3
+  kill -TERM -- -"$pid"; rc=0; wait "$pid" || rc=$?
+  assert_eq "$rc" 143 "exits 143 on TERM"
+  R=$BEAD_LOOP_STATE/repo
+  assert_file "$R/review/t-1" "still in the review queue"
+  sup recover "$REPO"
+  assert_match "$(cat "$T/sup.log")" "t-1: reviewer session ses_rev still running on the server after the stop; rejoining it" "recover found it"
+  assert_eq "$(cat "$R/rejoin/t-1" 2>/dev/null)" "ses_rev reviewer" "the rejoin marker"
+  jq -cn '[{info:{role:"assistant"},parts:[{type:"text",text:"APPROVE: checked every criterion"}]}]' >"$TEST_CTRL/messages.json"
+  ( sleep 0.6; echo '{}' >"$TEST_CTRL/session-status.json" ) &
+  BEAD_LOOP_REJOIN_POLL=0.1 sup --once tick; wait
+  assert_match "$(cat "$T/sup.log")" "review: t-1 by stub/reviewer (0 failures, rejoining session ses_rev)" "the review lane rejoined"
+  assert_eq "$(calls)" "bead-worker bead-reviewer" "one reviewer call in all"
+  assert_file "$R/inflight/t-1" "to a PR"
+  assert_match "$(cat "$T/sup.log")" "t-1: review approved" "its APPROVE taken"
 }
 case_new_attempt_aborts_leftover_session() {
   setup true auto '' 'attach = "http://oc.test:4096"'
