@@ -320,6 +320,33 @@ case_claude_stage_after_local_ones() {
   assert_branch bead/t-1 "pushed"
   assert_match "$(git -C "$T/origin.git" log -1 --format=%s bead/t-1)" "opus round" "the commit is Claude's"
 }
+case_aider_stage() {
+  # worker aider:stub/worker runs aider in the worktree on the files the bead's description
+  # names, against the opencode provider's server, the gate as its lint; no DONE: line is
+  # needed, settle_worktree commits the edit and the round goes on to review and the PR.
+  setup true auto stub/reviewer "$(printf '[[stages]]\nworker = "aider:stub/worker"\nreviewer = "stub/reviewer"\n')"
+  echo base >"$REPO/work.txt"; git -C "$REPO" add -A && git -C "$REPO" commit -qm "work.txt" && git -C "$REPO" push -q origin main
+  jq '.[0].description = "Edit work.txt (leave README alone); see docs/none.md."' "$BD_STATE/issues.json" >"$BD_STATE/i.tmp" && mv "$BD_STATE/i.tmp" "$BD_STATE/issues.json"
+  jq -n '{provider:{stub:{options:{baseURL:"http://stub.test/v1", apiKey:"not-needed"}}}}' >"$T/opencode.json"
+  OPENCODE_CONFIG=$T/opencode.json sup work "$REPO"
+  assert_eq "$(cut -d' ' -f1,3,4 "$TEST_CTRL/calls" | tr '\n' '|')" "bead-worker openai/worker aider|bead-reviewer stub/reviewer none|" "aider implements, opencode reviews"
+  assert_eq "$(sed -n 1p "$TEST_CTRL/aider.args")" "base=http://stub.test/v1 key=not-needed" "the provider's server and key from opencode.json"
+  assert_match "$(sed -n 2p "$TEST_CTRL/aider.args")" "^--yes-always --no-auto-commits --no-gitignore --model openai/worker " "non-interactive, no commits of its own"
+  assert_match "$(sed -n 2p "$TEST_CTRL/aider.args")" " --lint-cmd true " "the gate is aider's lint"
+  assert_match "$(sed -n 2p "$TEST_CTRL/aider.args")" " work.txt$" "the file the description names, and only that one"
+  assert_match "$(cat "$TEST_CTRL/prompt.1")" "ACCEPTANCE CRITERIA" "the bead is the message"
+  assert_branch bead/t-1 "pushed"
+  assert_match "$(git -C "$T/origin.git" log -1 --format=%s bead/t-1)" "t-1: Do the thing" "settle_worktree committed aider's edit"
+  assert_eq "$(git -C "$T/origin.git" diff --name-only main bead/t-1 | tr '\n' ' ')" "work.txt " "aider's scratch files stayed out of the commit"
+  assert_match "$(cat "$TEST_CTRL/gh.log")" "pr create" "and a PR"
+  # No provider config: aider runs without OPENAI_API_BASE and the log says so.
+  setup true auto '' "$(printf '[[stages]]\nworker = "aider:stub/worker"\n')"
+  echo base >"$REPO/work.txt"; git -C "$REPO" add -A && git -C "$REPO" commit -qm "work.txt" && git -C "$REPO" push -q origin main
+  OPENCODE_CONFIG=$T/none.json sup work "$REPO"
+  assert_eq "$(sed -n 1p "$TEST_CTRL/aider.args")" "base=unset key=unused" "no base, a dummy key"
+  assert_match "$(cat "$T/sup.log")" "no baseURL for opencode provider stub" "said so"
+  assert_branch bead/t-1 "still worked"
+}
 
 case_adopts_foreign_bead_prs() {
   setup

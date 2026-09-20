@@ -18,8 +18,8 @@ on_exhaust = "repeat"                  # repeat: cycle the stages until it lands
 # `failures` of them, then the next stage does. So the bead reaches Opus below after
 # 3 + 2 = 5 failures. Usually set once, globally. (`attempts` is the older name.)
 [[stages]]
-worker = "devbox/coder"
-reviewer = "acbox/coder"
+worker = "devbox/coder"                # an opencode agent on the devbox provider; "aider:devbox/coder" is aider on
+reviewer = "acbox/coder"               # the same server, given the files the bead names and the gate as its lint
 failures = 3
 
 [[stages]]
