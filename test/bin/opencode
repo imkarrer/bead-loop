@@ -36,6 +36,6 @@ case $agent in
     v=$(sed -n "${round}p" "$TEST_CTRL/review")
     case $v in
       approve) say "APPROVE: checked every criterion" ;;
-      *) say "REJECT: work.txt:1 wrong, fix it" ;;
+      *) say "REJECT: work.txt:1 wrong, fix it"; say "$(printf "For the worker:\n- What is wrong: work.txt:1 says round 1\n- What to do: append the word fixed\n- How to check: grep -c fixed work.txt prints 1")" ;;
     esac ;;
 esac

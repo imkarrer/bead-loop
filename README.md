@@ -6,7 +6,7 @@ model works a bead in its own worktree and a gate proves it, and a **review lane
 the reviewer model judges the diff and pushes the PR — over three queues: **dev**,
 **review**, **merge** (CI on GitHub). Green merges, the bead closes. A bead sent back
 from review or from CI returns to the dev queue with a note and one more **failure**;
-enough failures move it to a stronger stage, the last one Opus. No model runs the
+enough failures move it to a stronger stage, the last one Claude (Sonnet). No model runs the
 loop; models do the two jobs that need judgement, and neither waits for the other.
 
 ```mermaid
@@ -58,7 +58,7 @@ flowchart LR
 | Role | What | Where it runs here |
 | --- | --- | --- |
 | Supervisor | `bin/bead-supervisor`, bash, deterministic | systemd user timer on this box |
-| Implementor | opencode agent `bead-worker` | `devbox/coder` — Qwen3-Coder-30B on the RTX 4080; `claude/opus` as the last stage |
+| Implementor | opencode agent `bead-worker` | `devbox/coder` — Qwen3-Coder-30B on the RTX 4080; `claude/sonnet` as the last stage |
 | Reviewer | opencode agent `bead-reviewer`, read-only | `acbox/coder` — Qwen3-Coder-Next 80B Q8 on ac-box's CPU |
 
 Both models are opencode providers in `~/.config/opencode/opencode.json`; any
@@ -223,7 +223,7 @@ bead-supervisor --json status                             # one JSON object per 
 05:40:01 inquire-platform: inq-85h.5: review approved
 05:40:03 inquire-platform: opened https://github.com/imkarrer/inquire-platform/pull/44
 
-inquire-platform  label=delegate:local base=master merge=pipeline stages=devbox/coder⇢acbox/coder×3 → acbox/coder⇢acbox/instruct×2 → claude/opus⇢claude/opus×1
+inquire-platform  label=delegate:local base=master merge=pipeline stages=devbox/coder⇢acbox/coder×3 → acbox/coder⇢acbox/instruct×2 → claude/sonnet⇢claude/sonnet×1
   dev lane:    inq-ufz.13 grading.dlq: 30-day retention as a per-topic config (2m)
   review lane: idle
   dev queue (4):
@@ -317,17 +317,17 @@ failures = 2
 timeout = 14400
 
 [[stages]]
-worker = "claude/opus"
-reviewer = "claude/opus"
+worker = "claude/sonnet"
+reviewer = "claude/sonnet"
 failures = 1
 ```
 
 Read: a bead starts on the fast GPU worker reviewed by the 80B and stays there for its
 first three failures; the fourth and fifth send it to the 80B implementing with the
-*other* 80B reviewing (four-hour timeout); the sixth to Opus; then, with `repeat`,
-around again until it lands. So "when does something get evicted to Opus" is one
-number: the sum of `failures` above the Opus stage. A stage may name `claude/<alias>`
-(`claude/opus`, `claude/sonnet`): that round runs in Claude Code (`claude -p`) instead
+*other* 80B reviewing (four-hour timeout); the sixth to Claude; then, with `repeat`,
+around again until it lands. So "when does something get evicted to Claude" is one
+number: the sum of `failures` above the Claude stage. A stage may name `claude/<alias>`
+(`claude/sonnet`, `claude/opus`): that round runs in Claude Code (`claude -p`) instead
 of opencode, the agent file's body as its system prompt, tools by role — the frontier
 model gets only what the local ones could not land. It needs `claude` on PATH and logged
 in once (`claude`, then `/login`); the skills are linked into `~/.claude/skills` by
