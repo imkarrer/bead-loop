@@ -551,13 +551,13 @@ case_status_json_and_ui() {
   # The parked bead under Needs you: the question first, the reason, the brief and the
   # bead's notes folded, the rounds behind their toggle; opened, each round with its note
   # and its log to open in place.
-  hum=$(printf '%s' "$html" | tr '\n' ' ' | grep -o '<h3 class="human">.*' | head -c 4000)
+  hum=$(printf '%s' "$html" | tr '\n' ' ' | grep -o '<h3 class="human">.*' | cut -c1-4000)
   assert_match "$hum" 'class="id">t-5</td>.*<span class="chip bad" title="every stage has had its failures">exhausted</span>' "the reason as the chip"
   assert_match "$hum" '<div class="ask"><div class="head">The question<span class="muted">parked 2026-09-18 17:05 · stopped on stage 1 (stub/worker) · brief by stub/worker</span></div><pre class="text">Does x.ts:1 have to print the total, or only the count? The bead says both.</pre></div>' "the question, first, with when and who asked"
   assert_match "$hum" '<button class="hist" onclick="toggleFold(&quot;brief:t-5&quot;)">▸ what happened, and why</button>' "the brief folded"
   assert_match "$hum" 'toggleFold(&quot;notes:t-5&quot;)">▸ the bead&#39;s notes</button>' "the notes folded"
   assert_eq "$(printf '%s' "$hum" | grep -c 'WHAT HAPPENED')" 0 "closed: the brief not shown"
-  opened=$(render_page "$T/state.json" "toggleHist('t-5'); toggleFold('brief:t-5')" | tr '\n' ' ' | grep -o '<h3 class="human">.*' | head -c 6000)
+  opened=$(render_page "$T/state.json" "toggleHist('t-5'); toggleFold('brief:t-5')" | tr '\n' ' ' | grep -o '<h3 class="human">.*' | cut -c1-6000)
   assert_match "$opened" '<div class="round"><div class="head">round 1 <span class="chip worker">stub/worker</span><span class="muted">stage 1</span><span class="muted">2026-09-18 17:00</span></div><pre class="note">gate failed twice: npm test boom: 1 of 2 tests failed</pre><div class="logs">logs: <button class="link " onclick="toggleLog(&quot;'"$REPO"'&quot;,&quot;t-5.20260918T170000.gate&quot;)" title="t-5.20260918T170000.gate">▸ gate</button></div></div>' "round 1: who, when, the note in full, its gate log to open"
   assert_match "$opened" '<div class="round"><div class="head">round 2 .*<pre class="note">review (stub/reviewer) rejected: REJECT: x.ts:1 wrong</pre></div>' "round 2, no logs"
   assert_match "$opened" '<pre class="text">WHAT HAPPENED: round 1 broke a test. WHY: the bead asks for two things.</pre>' "the brief, opened"
