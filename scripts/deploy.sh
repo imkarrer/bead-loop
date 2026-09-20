@@ -6,9 +6,11 @@
 # clone (~/.local/state/bead-loop/deploy/src — nothing else ever writes there, so a
 # reset to origin/main is always safe) is put at that commit, the release's binary is
 # downloaded and checked, install.sh installs it and refreshes the links and units from
-# the clone, and the stack is recycled: the opencode server, the UI, the loop.
-# Restarting the loop aborts the rounds it is on; it reopens them with no failure when
-# it comes back (recover).
+# the clone, and what changed is restarted: the loop always (it is the binary); the
+# opencode server only when the agents, the skills or its unit changed, since the model
+# sessions live in it; the UI only when bin/, ui/ or its unit changed. Restarting the
+# loop cuts short the rounds it is on; it reopens them with no failure when it comes
+# back (recover).
 #
 # What this box needs: git, gh (signed in), flox — no compiler. The binary links the
 # flox env's glibc by store path, and `flox activate` on the clone realizes that env at
@@ -72,15 +74,26 @@ BEAD_SUPERVISOR_BIN=$dl/bead-supervisor "$SRC/install.sh"
 echo "$want" >"$DEPLOY/deployed"
 echo "at $tag: $(git -C "$SRC" log -1 --format='%h %s')"
 
-echo "--- :arrows_counterclockwise: recycle the stack"
-systemctl --user daemon-reload
-for u in opencode-web.service bead-loop-ui.service bead-supervisor.service; do
-  if systemctl --user is-enabled -q "$u" 2>/dev/null || systemctl --user is-active -q "$u" 2>/dev/null; then
-    systemctl --user restart "$u" && echo "restarted $u"
+echo "--- :arrows_counterclockwise: restart what changed"
+# The model sessions live in opencode-web.service: restarting it kills every round in
+# flight, so it is restarted only when what it serves from the checkout changed (the
+# agents, the skills, its unit) — a change to src/ leaves it, and the UI, running. The
+# supervisor is the binary: restarted on every deploy. The first deploy, and --force,
+# restart everything.
+changed() {  # changed PATH...: since the deployed commit
+  [ -z "$have" ] || [ "$FORCE" = 1 ] || ! git -C "$SRC" diff --quiet "$have" "$want" -- "$@"
+}
+restart() {  # restart UNIT
+  if systemctl --user is-enabled -q "$1" 2>/dev/null || systemctl --user is-active -q "$1" 2>/dev/null; then
+    systemctl --user restart "$1" && echo "restarted $1"
   else
-    echo "$u is not enabled here; left alone"
+    echo "$1 is not enabled here; left alone"
   fi
-done
+}
+systemctl --user daemon-reload
+if changed agents skills systemd/opencode-web.service; then restart opencode-web.service; else echo "opencode-web.service kept: agents, skills and its unit are as deployed (the sessions live)"; fi
+if changed bin ui systemd/bead-loop-ui.service; then restart bead-loop-ui.service; else echo "bead-loop-ui.service kept: bin, ui and its unit are as deployed"; fi
+restart bead-supervisor.service
 systemctl --user is-active -q bead-supervisor.timer || systemctl --user start bead-supervisor.timer || true
 sleep 2
 systemctl --user --no-pager --lines=0 status opencode-web.service bead-loop-ui.service bead-supervisor.service | grep -E '^\S|Active:' || true
