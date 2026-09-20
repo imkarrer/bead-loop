@@ -376,6 +376,18 @@ The worker never runs `bd`; the bead's text is in its prompt and the supervisor
 records every state change in the operator's checkout. `.beads/issues.jsonl` changes
 there, uncommitted, for you to commit with your own work.
 
+## Dogfood
+
+This repo is one of the loop's repos: `.beads/` holds its backlog (`bd ready -l
+delegate:local` lists what the loop may take), `.bead-loop.toml` says how a worktree is
+proven (the same syntax, shellcheck, skills lint and state-machine suite CI runs), and
+`~/src/bead-loop` is in the global `repos`. So an improvement to the loop is a bead, and
+the loop works it: worker, gate, reviewer, PR, CI, merge. The timer runs this checkout,
+so a merged bead changes the running loop on its next tick — the gate, CI and the merge
+are the guard, and a bead that touches `bin/bead-supervisor`'s core should say so in its
+acceptance criteria. The Rust rewrite (`bd show bl-ect`) is an epic of six beads kept out
+of the queue (no label) until the loop has proven itself on smaller ones.
+
 ## Checks
 
 `test/run.sh` drives the supervisor through every row of the outcome table above with
