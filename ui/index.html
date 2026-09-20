@@ -66,7 +66,7 @@
   .chip.n { min-width: 22px; text-align: center; color: var(--bright); }
   /* a bead's round history: the toggle sits by the failures chip; the list is quiet, monospace */
   button.hist { font: 500 12px var(--mono); padding: 0 5px; border: 0; color: var(--muted); line-height: 18px; vertical-align: 1px; white-space: nowrap; }
-  button.hist:hover { color: var(--accent); }
+  button.hist:hover, button.hist.on { color: var(--accent); }
   pre.hist { margin: 2px 0 8px; font: 12px/1.55 var(--mono); color: var(--muted); white-space: pre-wrap; }
   tr.sub td { border-top: 0; padding-top: 0; } tr.sub td pre.hist { margin-top: 0; }
   /* the rounds: one block each — who, when, what stopped it in full, and its logs to open in place */
@@ -313,6 +313,13 @@ const histRow = (b, span, r) => openHist.has(b.id) ? `<tr class="sub"><td></td><
 // Folds: the brief and the bead's notes under a parked bead, closed by default, remembered per bead.
 const openFold = new Set();
 window.toggleFold = (k) => { if (!openFold.delete(k)) openFold.add(k); render(); };
+// A note to a bead in a queue, from its row: the box opens under the row, the text goes
+// on the bead as an operator note, and the next round reads it — the way to hand a
+// bead what it lacked before it fails again, without waiting for it to park.
+const openNote = new Set();
+window.toggleNote = (id) => { if (!openNote.delete(id)) openNote.add(id); render(); };
+const noteToggle = (b) => ` <button class="hist ${openNote.has(b.id) ? 'on' : ''}" onclick="toggleNote(${js(b.id)})" title="a note on the bead; its next round reads it">✎ note</button>`;
+const noteRow = (b, span, r) => !openNote.has(b.id) ? '' : `<tr class="sub"><td></td><td colspan="${span}"><div class="reply"><textarea id="note-${esc(b.id)}" rows="2" placeholder="Context it lacked, a claim that changed — goes on the bead as an operator note; its next round reads it"></textarea><button ${busyAction ? 'disabled' : ''} onclick="act('note',{repo:${js(r.repo)},id:${js(b.id)},text:document.getElementById('note-${esc(b.id)}').value}); toggleNote(${js(b.id)})">Add note</button></div></td></tr>`;
 const fold = (k, label, body) => `<div class="fold"><button class="hist" onclick="toggleFold(${js(k)})">${openFold.has(k) ? '▾' : '▸'} ${esc(label)}</button>${openFold.has(k) ? body : ''}</div>`;
 const stageChip = (st, r) => !st ? '<span class="chip bad" title="stages exhausted">exhausted</span>'
   : `<span class="chip ${st.index > 1 ? 'warn' : ''}" title="stage ${st.index}: worker ${esc(st.worker)}${st.reviewer ? ', reviewer ' + esc(st.reviewer) : ''}">${st.index > 1 ? `S${st.index} · ` : ''}${esc(st.worker)}</span>`
@@ -420,7 +427,7 @@ function strays(r, now) {
 }
 
 // The queues, in the order the lanes take them. Position is the information: #1 is next.
-const qRow = (i, b, extra, r) => `<tr><td class="pos">${i + 1}</td><td class="id">${esc(b.id)}</td><td class="title"><span class="t" title="${esc(b.title || '')}">${esc(b.title || '')}</span></td><td class="fit">${failChip(b.failures)}${histToggle(b)}${extra || ''}</td></tr>${histRow(b, 4, r)}`;
+const qRow = (i, b, extra, r) => `<tr><td class="pos">${i + 1}</td><td class="id">${esc(b.id)}</td><td class="title"><span class="t" title="${esc(b.title || '')}">${esc(b.title || '')}</span></td><td class="fit">${failChip(b.failures)}${histToggle(b)}${noteToggle(b)}${extra || ''}</td></tr>${histRow(b, 4, r)}${noteRow(b, 4, r)}`;
 function queueCol(name, rows, r, now) {
   const empty = { dev: 'nothing ready', review: 'nothing waiting for review', merge: 'no PRs in flight' }[name];
   const sub = { dev: 'no open blocker, fewest failures first, then bd’s order', review: 'gate passed; the reviewer next', merge: r.max_inflight == null ? 'PRs in CI · no cap: dependencies are the gate' : `PRs in CI · dev pauses at ${r.max_inflight}` }[name];

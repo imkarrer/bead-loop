@@ -272,7 +272,10 @@ event stream; nobody presses refresh):
 - **The three queues in their order**: **dev** (#1 is next; each bead's failures and the
   stage that puts it on), **review** (how long each has waited), **merge** (each PR with
   GitHub's word on it — CI running m/n, red with the failing check, green, merged,
-  conflicting — asked once a minute). Then **Needs you** — the human queue: each bead
+  conflicting — asked once a minute). Every dev and review row has **✎ note**: a word
+  to the bead before its next round — context it lacked, a claim that changed — put on
+  the bead as an operator note, which that round reads; nothing else moves. Then
+  **Needs you** — the human queue: each bead
   **parked**, with **the question** first: what you have to decide or supply so that the
   next round lands. The loop writes it before it raises the bead with you — a **brief**,
   one call to `brief_model` (the last stage's worker unless set) that reads every round's
