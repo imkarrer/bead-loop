@@ -235,11 +235,14 @@ event stream; nobody presses refresh):
 - **The header**: the loop — up since when and what it is on, or down — with **Wake**,
   **Stop** (the keeper brings it back in a minute: a breather) and **Off** (keeper too:
   down until you start it); the GPU switch; Claude's sign-in.
-- **Per repo, first and large, the two lanes**: what the **dev lane** is on and what the
-  **review lane** is on — id, title, its failure count and stage, the live session's model,
-  when it last produced output, a link into it, Abort — or why a lane is idle (queue
-  empty; every bead in it held; waiting on CI under a cap). **★ make priority** on the
-  repo's heading puts it first on every pass.
+- **The lanes, once, at the top**: a lane is one thing for the whole loop — it walks
+  every repo — so each lane has one panel saying what it is on: the bead, **its repo**,
+  title, failure count and stage, the live session's model, when it last produced output,
+  a link into it, Abort — or why it is idle (nothing queued for it in any repo; N queued
+  and starting; Claude signed out), and Pause / Resume. With `[[lanes]]` there is one
+  panel per configured lane (gpu, cpu, claude…).
+- **Per repo**, then: the queues and Needs you below, and **★ make priority** on the
+  repo's heading, which puts it first on every pass.
 - **The three queues in their order**: **dev** (#1 is next; each bead's failures and the
   stage that puts it on), **review** (how long each has waited), **merge** (each PR with
   GitHub's word on it — CI running m/n, red with the failing check, green, merged,
@@ -252,7 +255,14 @@ event stream; nobody presses refresh):
   session in the bead's worktree with the bead and the question as the first prompt.
   Under those, each bead **held** — still in its queue, waiting on something outside the
   loop, with the reason and where it sits; nothing to press, it clears itself when the
-  world changes. Only when there is one, a session the server is still running that is
+  world changes. And, first of all, each **decision**: a bead of type `decision` (or
+  labelled `needs-human`) in a watched repo is a question for you — asked by the loop, by
+  an agent planning work, or by yourself — shown with its text in full and an answer box.
+  **Answer & close** puts the answer on the bead as its close reason, where whoever asked
+  reads it, and rings the bell: beads that depended on the decision are ready. This is
+  how anything that needs you reaches you: not a channel, the page, and always with the
+  why. (`bd create -t decision "the question" -d "the context"` asks one; `bd list -l
+  needs-human` lists them from a terminal.) Only when there is one, a session the server is still running that is
   on no lane (an orphan of a killed round, a hand-run `work`), with Abort.
 - **The supervisor's log**, live.
 
@@ -497,6 +507,10 @@ docs/state-machine.md with stub `bd`, `opencode`, `claude`, `aider`, `gh` and `c
 (`test/bin/`) and a real git origin: no model, no network, a minute. `test/lint-skills.sh`
 checks the frontmatter opencode needs. `scripts/ci.sh rust|scripts|suite` are the three
 steps, run the same way in `.github/workflows/ci.yml` and `.buildkite/pipeline.yml`.
+The GitHub workflow stays only because `main`'s protection requires its `ci` status and
+Buildkite does not yet post one on this repo (the Buildkite GitHub App must be given the
+repo — a decision bead asks for that); once it does, the required check becomes
+`buildkite/bead-loop` and the workflow goes.
 
 **Buildkite** is what merges and deploys. Every push and PR builds on queue `self`
 (ac-box): `rust` (fmt, clippy `-D warnings`, build, unit tests) and `scripts` side by

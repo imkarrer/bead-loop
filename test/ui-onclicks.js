@@ -28,7 +28,7 @@ setTimeout(() => {
     try { new Function(code); } catch (e) { bad++; console.error(`bad onclick: ${code.slice(0, 120)}\n  ${e.message}`); }
   }
   // Every act(...) call must name a lever the page knows: the attribute was not cut off.
-  for (const m of all.matchAll(/onclick="act\('(\w+)'/g)) if (!/^(abort|wake|stop|loop|timer|lane|gpu|priority|reopen|escalate|answer|claude_login|claude_code|claude_cancel)$/.test(m[1])) { bad++; console.error(`unknown lever: ${m[1]}`); }
+  for (const m of all.matchAll(/onclick="act\('(\w+)'/g)) if (!/^(abort|wake|stop|loop|timer|lane|gpu|priority|reopen|escalate|answer|decide|claude_login|claude_code|claude_cancel)$/.test(m[1])) { bad++; console.error(`unknown lever: ${m[1]}`); }
   console.log(`${n} onclick attributes, ${bad} bad`);
   process.exit(bad ? 1 : 0);
 }, 20);

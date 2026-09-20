@@ -239,6 +239,27 @@ pub fn status_json(repo: &Repo) -> Value {
                 .collect()
         })
         .unwrap_or_default();
+    // decisions: open beads of type `decision`, or labelled needs-human — a question for
+    // the human, asked by the loop, an agent, or the human's own planning. The page lists
+    // them under Needs you with the text in full; the answer closes the bead with the
+    // reason, where whoever asked reads it.
+    let decisions: Vec<Value> = crate::shell::bd_open_json(repo)
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|b| {
+            b.get("issue_type").and_then(|t| t.as_str()) == Some("decision")
+                || b.get("labels").and_then(|l| l.as_array()).map(|a| a.iter().any(|v| v.as_str() == Some("needs-human"))).unwrap_or(false)
+        })
+        .map(|b| {
+            json!({
+                "id": b.get("id").cloned().unwrap_or(Value::Null),
+                "title": b.get("title").cloned().unwrap_or(Value::Null),
+                "description": b.get("description").cloned().unwrap_or(Value::Null),
+                "created_at": b.get("created_at").cloned().unwrap_or(Value::Null),
+            })
+        })
+        .collect();
     let worktrees: Vec<Value> = std::fs::read_dir(repo.rs.join("wt"))
         .map(|rd| {
             let mut dirs: Vec<std::path::PathBuf> = rd.flatten().map(|e| e.path()).filter(|p| p.is_dir()).collect();
@@ -270,6 +291,7 @@ pub fn status_json(repo: &Repo) -> Value {
         "queues": {"dev": dev, "review": review, "merge": merge},
         "parked": parked,
         "held": held,
+        "decisions": decisions,
         "worktrees": worktrees,
     })
 }

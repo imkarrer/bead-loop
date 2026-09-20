@@ -127,6 +127,7 @@
   .banner.signin input { font: 13px var(--mono); padding: 4px 8px; border: 1px solid var(--line-strong); border-radius: 5px; background: var(--base03); color: var(--bright); }
   h2 .prio { font-size: 12px; font-weight: 400; margin-left: 8px; vertical-align: middle; }
   h2 .prio.on { color: var(--yellow); border-color: var(--yellow); }
+  .why pre.text { margin: 4px 0 8px; white-space: pre-wrap; font: 12.5px/1.55 var(--mono); color: var(--ink); }
   footer { color: var(--muted); font-size: 12px; text-align: right; padding: 0 20px 20px; }
   .empty { color: var(--muted); font-style: italic; }
 </style>
@@ -269,7 +270,7 @@ function prChips(p, now, r) {
 
 // The two lanes, side by side: what each is on right now, with the session that is live
 // for it and the lever to stop it. This is the page's answer to "what is being worked".
-function lanePanel(r, name, now, ticking) {
+function lanePanel(r, name, now, ticking, showRepo) {
   const l = r.lanes[name];
   // The lane's role: the default pair split by role; a configured lane ([[lanes]]) or
   // the claude lane takes both roles for its models.
@@ -294,12 +295,38 @@ function lanePanel(r, name, now, ticking) {
   const live = wt && wt.sessions.find((s) => s.state === 'busy');
   return `<div class="lane ${name}">
     <div class="label">${name} lane <span class="muted">· ${role} · ${ago(l.since, now)}</span> ${paused ? '<span class="chip warn" title="finishes this round, then starts no new one">pausing</span>' : ''}<span class="act">${pauseBtn}</span></div>
-    <div class="bead">${esc(l.id)}</div>
+    <div class="bead">${esc(l.id)}${showRepo ? ` <span class="muted">· ${esc(r.slug)}</span>` : ''}</div>
     <div class="what">${esc(l.title || '')}</div>
     <div class="stage">${failChip(l.failures)}${histToggle(l)}${stageChip(l.stage, r)}
       ${live ? `${roleChip(live.agent)} <span class="mono">${esc(live.model)}</span> <span>last output ${ago(live.updated, now)} ago</span> <a href="${esc(live.url)}" target="_blank" rel="noopener">open session ↗</a> ${abortBtn(r, live, `${live.agent} on ${l.id}`)}`
         : `<span>${name === 'dev' ? 'setup, or the gate' : 'pushing the PR'}</span>`}</div>${histList(l)}
   </div>`;
+}
+// The lanes, once, at the top: a lane is one thing for the whole loop (it walks every
+// repo), so its panel says which bead it is on and which repo that bead belongs to —
+// not a set of panels per repo, most of them idle. Idle panels count what is queued
+// across repos; paused is paused everywhere.
+function lanesPane(s) {
+  const ticking = s.service.available && (s.service.active === 'active' || s.service.active === 'activating');
+  const names = [...new Set(s.repos.flatMap((r) => r.lane_names || ['dev', 'review']))];
+  const panels = names.map((name) => {
+    const on = s.repos.find((r) => r.lanes && r.lanes[name]);
+    if (on) return lanePanel(on, name, s.now, ticking, true);
+    const paused = s.repos.some((r) => r.paused && r.paused[name]);
+    const pauseBtn = `<button ${busyAction ? 'disabled' : ''} onclick="act('lane',{name:${js(name)},paused:${!paused}})">${paused ? 'Resume lane' : 'Pause lane'}</button>`;
+    const onClaude = (b) => b.stage && /^claude\//.test(b.stage.worker + ' ' + (b.stage.reviewer || ''));
+    const count = (pick) => s.repos.reduce((n, r) => n + r.queues.dev.filter(pick).length + r.queues.review.filter(pick).length, 0);
+    const queued = name === 'dev' ? s.repos.reduce((n, r) => n + r.queues.dev.length, 0)
+      : name === 'review' ? s.repos.reduce((n, r) => n + r.queues.review.length, 0)
+      : name === 'claude' ? count(onClaude) : count(() => true);
+    const signedOut = name === 'claude' && s.repos.some((r) => r.claude_ok === false);
+    const why = paused ? 'paused — starts no new round until resumed'
+      : queued === 0 ? 'idle — nothing queued for it in any repo'
+      : signedOut ? `idle — ${queued} waiting; Claude is signed out (Sign in at the top)`
+      : ticking ? `idle — ${queued} queued across repos, starting…` : `idle — ${queued} queued; the loop is down`;
+    return `<div class="lane idle ${esc(name)}${paused ? ' paused' : ''}"><div class="label">${esc(name)} lane ${paused ? '<span class="chip warn">paused</span>' : ''}<span class="act">${pauseBtn}</span></div><div class="what">${why}</div></div>`;
+  });
+  return `<section class="card" id="lanes"><h2>Lanes <span class="cfg">one each for the whole loop · a bead names its repo</span></h2><div class="lanes">${panels.join('')}</div></section>`;
 }
 // Sessions the server is still running that are on no lane: an orphan of a killed round,
 // or a hand-run `work`. Only appears when there is something to stop.
@@ -366,16 +393,27 @@ function repo(r, now, ticking) {
         <td class="fit"><span class="chip warn">held</span> <span class="muted">in ${esc(b.where)} · ${ago(b.since, now)}</span></td>
         <td class="act">${b.where === 'merge' ? '' : claudeBtn(r, b)}</td></tr>
     <tr class="sub"><td></td><td colspan="3" class="why">${esc(b.why)}</td></tr>`).join('')}</table>`;
+  // Decisions: a bead of type `decision` (or labelled needs-human) in this repo is a
+  // question for you, asked by the loop, an agent, or your own planning — the text in
+  // full, since it is what you decide on. Answer & close puts the answer on the bead as
+  // its close reason, where whoever asked reads it; beads that depended on it unblock.
+  const decisions = (r.decisions || []).length === 0 ? '' : `<table class="decisions">${r.decisions.map((d) => `
+    <tr><td class="id">${esc(d.id)}</td><td class="title"><b>${esc(d.title || '')}</b></td>
+        <td class="fit"><span class="chip warn">question</span></td><td class="act"></td></tr>
+    <tr class="sub"><td></td><td colspan="3" class="why"><pre class="text">${esc(d.description || '(no description)')}</pre>
+      <div class="reply">
+        <textarea id="dec-${esc(d.id)}" rows="2" placeholder="Your decision — goes on the bead as its close reason; whoever asked reads it there"></textarea>
+        <button ${busyAction ? 'disabled' : ''} onclick="act('decide',{repo:${js(r.repo)},id:${js(d.id)},text:document.getElementById('dec-${esc(d.id)}').value})">Answer &amp; close</button>
+      </div></td></tr>`).join('')}</table>`;
   // The priority repo: the lanes look at it first on every pass; otherwise round-robin.
   const prio = r.priority
     ? `<button ${busyAction ? 'disabled' : ''} class="prio on" onclick="act('priority',{repo:'none'})" title="the lanes look at this repo first on every pass; click to go back to round-robin">★ priority</button>`
     : `<button ${busyAction ? 'disabled' : ''} class="prio" onclick="act('priority',{repo:${js(r.repo)}})" title="the lanes look at this repo first on every pass">☆ make priority</button>`;
   return `<section class="card" id="repo-${esc(r.slug)}">
     <h2>${esc(r.slug)} ${prio} <span class="cfg">${esc(r.label)} · ${esc(r.base)} · merge ${esc(r.merge)} · stages: ${stages} · then ${esc(r.on_exhaust)}${r.attach ? '' : ' · <b>no attach</b>: sessions not visible'}</span></h2>
-    <div class="lanes">${(r.lane_names || ['dev', 'review']).map((n) => lanePanel(r, n, now, ticking)).join('')}</div>
     <div class="queues">${queueCol('dev', r.queues.dev, r, now)}${queueCol('review', r.queues.review, r, now)}${queueCol('merge', r.queues.merge, r, now)}${claudeCol(r)}</div>
     ${strays(r, now)}
-    <h3 class="human">Needs you<span class="n">${r.parked.length + (r.held || []).length}</span><span class="note">a question the last stage could not answer, stages exhausted, a PR closed unmerged — or a bead held in its queue by something outside the loop — it waits here until you act, or the world changes</span></h3>${human}${held}
+    <h3 class="human">Needs you<span class="n">${(r.decisions || []).length + r.parked.length + (r.held || []).length}</span><span class="note">a decision asked of you; a question the last stage could not answer, stages exhausted, a PR closed unmerged; a bead held in its queue by something outside the loop — each with why, until you act or the world changes</span></h3>${decisions}${human}${held}
   </section>`;
 }
 
@@ -403,7 +441,7 @@ function render() {
     : `<pre class="log" id="log">${lines.map((l) => `<span class="t">${clock(l.t)}</span>  <span class="${l.cls}">${esc(l.m)}</span>`).join("\n")}</pre>`;
   const sysBox = `<label class="opt" title="systemd’s Starting/Finished/Stopped lines for the unit"><input type="checkbox" ${showSys ? 'checked' : ''} onchange="setSys(this.checked)">systemd lines</label>`;
   $('main').innerHTML = (last.error ? `<div class="banner">status failed: ${esc(last.error)}</div>` : '')
-    + (last.repos.length === 0 ? '<section class="card"><div class="empty">no repos: set <span class="mono">repos</span> in ~/.config/bead-loop/config.toml</div></section>' : '')
+    + (last.repos.length === 0 ? '<section class="card"><div class="empty">no repos: set <span class="mono">repos</span> in ~/.config/bead-loop/config.toml</div></section>' : lanesPane(last))
     + last.repos.map((r) => repo(r, last.now, last.service.available && (last.service.active === 'active' || last.service.active === 'activating'))).join("")
     + `<section class="card"><h3 class="log">Supervisor log${sysBox}</h3>${log}</section>`;
   const el = $('log'); if (el) el.scrollTop = el.scrollHeight;

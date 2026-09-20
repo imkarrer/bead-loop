@@ -44,6 +44,12 @@ pub fn bd_ready_json(repo: &Repo) -> Value {
     parse_array(&bd_out(repo, &["ready", "-l", &repo.label, "--json", "-n", "0"]))
 }
 
+/// `bd list --status open --json -n 0`: every open bead, any label — the decision beads
+/// and the ones labelled needs-human live here.
+pub fn bd_open_json(repo: &Repo) -> Value {
+    parse_array(&bd_out(repo, &["list", "--status", "open", "--json", "-n", "0"]))
+}
+
 /// `bd list --status in_progress -l LABEL --json -n 0`
 pub fn bd_in_progress_json(repo: &Repo) -> Value {
     parse_array(&bd_out(repo, &["list", "--status", "in_progress", "-l", &repo.label, "--json", "-n", "0"]))

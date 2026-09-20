@@ -492,8 +492,12 @@ case_status_json_and_ui() {
   echo '{"ses_rev":{"type":"busy"}}' >"$TEST_CTRL/session-status.json"
   echo https://github.com/example/repo/pull/7 >"$BEAD_LOOP_STATE/repo/inflight/t-1"; : >"$BEAD_LOOP_STATE/repo/inflight/.t-1.red"
   jq '. + [{id:"t-5", title:"Parked one", description:"p", status:"in_progress", priority:2, labels:["delegate:local"], notes:"someone: a human note\nbead-loop 2026-09-18T17:05+00:00: stages exhausted after REJECT: x.ts:1 wrong"}]' "$BD_STATE/issues.json" >"$BD_STATE/i.tmp" && mv "$BD_STATE/i.tmp" "$BD_STATE/issues.json"
+  # t-8: a decision — a question for the human, type decision (a needs-human label does the same).
+  jq '. + [{id:"t-8", title:"Which ntfy topic?", description:"The loop can post to ntfy. Which topic, and for which events?", status:"open", priority:1, issue_type:"decision", labels:[]}]' "$BD_STATE/issues.json" >"$BD_STATE/i.tmp" && mv "$BD_STATE/i.tmp" "$BD_STATE/issues.json"
   j=$(sup --json status "$REPO")
   assert_eq "$(printf '%s' "$j" | jq -r '.slug, .attach, .stages[0].worker, .stages[0].failures, .lanes.dev.id, (.lanes.review // "idle")' | tr '\n' ' ')" "repo http://oc.test:4096 stub/worker 2 t-6 idle " "config and lanes"
+  assert_eq "$(printf '%s' "$j" | jq -r '.decisions | map("\(.id):\(.title)") | join(" ")')" "t-8:Which ntfy topic?" "decisions: the open decision beads, with the question"
+  assert_eq "$(printf '%s' "$j" | jq -r '.queues.dev | map(.id) | index("t-8") // "absent"')" absent "a decision is not work for the lanes"
   assert_eq "$(printf '%s' "$j" | jq -r '.queues.dev | map("\(.id):\(.failures):\(.stage.worker)") | join(" ")')" "t-2:0:stub/worker t-3:1:stub/worker t-7:2:claude/opus" "dev queue in order: fewest failures first, with its stage"
   assert_eq "$(printf '%s' "$j" | jq -r '(.queues.dev | map("\(.id):\(.history | length)") | join(" ")), .queues.dev[2].history[1]' | tr '\n' ' ')" "t-2:0 t-3:0 t-7:2 round 2 (stub/worker): REJECT: x.ts:1 wrong " "history: the lines of failures/ID.notes, [] without one"
   assert_eq "$(printf '%s' "$j" | jq -r '.queues.review | map("\(.id):\(.title)") | join(" ")')" "t-4:Fourth" "review queue"
@@ -518,6 +522,12 @@ case_status_json_and_ui() {
   # claude/opus stage) and where it sits, and nothing else.
   html=$(render_page "$T/state.json")
   node --check "$T/page.js" 2>/dev/null && ok || bad "the page's script parses"
+  # The decision under Needs you: the question, its text in full, and the answer box.
+  assert_match "$(printf '%s' "$html" | grep -o '<h3 class="human">Needs you<span class="n">[0-9]*</span>')" '<span class="n">2</span>' "Needs you counts the decision with the parked bead"
+  dec=$(printf '%s' "$html" | tr '\n' ' ' | grep -o '<table class="decisions">.*' | head -c 1200)
+  assert_match "$dec" 'class="id">t-8</td><td class="title"><b>Which ntfy topic?</b>' "the decision, first"
+  assert_match "$dec" 'Which topic, and for which events?' "with its text in full"
+  assert_match "$dec" "onclick=\"act('decide',{repo:" "and the Answer &amp; close lever"
   assert_match "$(printf '%s' "$html" | grep -o '<div class="q claude">.*' | head -c 400)" '<h3>Claude<span class="n">1</span></h3>' "the Claude column, with its count"
   assert_match "$(printf '%s' "$html" | grep -o '<div class="q claude">.*' | head -c 600)" 'class="id">t-7</td>.*dev queue #3' "t-7 in it, with where it sits"
   assert_match "$(printf '%s' "$html" | grep -o '<div class="q dev">.*' | head -c 2000)" 'title="sent back to dev 2 times">2×</span> <button class="hist" onclick="toggleHist(.t-7.)"[^>]*>▸ 2 rounds</button>' "t-7's round history behind a toggle, closed"
@@ -549,6 +559,11 @@ case_status_json_and_ui() {
   assert_match "$(jq -r '.[]|select(.id=="t-5")|.notes' "$BD_STATE/issues.json")" "operator .*: use the other flag" "the answer on the bead"
   assert_match "$("$REAL_CURL" -s -m 3 -X POST -H 'content-type: application/json' -d "{\"repo\":\"$REPO\",\"id\":\"t-5\"}" "http://127.0.0.1:$port/api/reopen")" '"reopened":"t-5"' "reopen runs bd"
   assert_eq "$(jq -r '.[]|select(.id=="t-5")|.status' "$BD_STATE/issues.json")" open "the bead is open again"
+  # The decision answered from the page: closed with the answer as the reason.
+  assert_match "$("$REAL_CURL" -s -m 3 -X POST -H 'content-type: application/json' -d "{\"repo\":\"$REPO\",\"id\":\"t-5\",\"text\":\"x\"}" "http://127.0.0.1:$port/api/decide")" "not an open decision" "decide only on a decision bead"
+  assert_match "$("$REAL_CURL" -s -m 3 -X POST -H 'content-type: application/json' -d "{\"repo\":\"$REPO\",\"id\":\"t-8\",\"text\":\"\"}" "http://127.0.0.1:$port/api/decide")" "write the decision first" "an empty answer is refused"
+  assert_match "$("$REAL_CURL" -s -m 3 -X POST -H 'content-type: application/json' -d "{\"repo\":\"$REPO\",\"id\":\"t-8\",\"text\":\"the bead-loop topic, for Needs you only\"}" "http://127.0.0.1:$port/api/decide")" '"decided":"t-8"' "answered from the page"
+  assert_eq "$(jq -r '.[]|select(.id=="t-8")|"\(.status) \(.close_reason)"' "$BD_STATE/issues.json")" "closed decided: the bead-loop topic, for Needs you only" "closed with the answer as the reason"
   kill $upid
 }
 
