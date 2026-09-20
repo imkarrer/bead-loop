@@ -1,10 +1,11 @@
 # bead-loop working on itself: the supervisor's own backlog, worked by the loop it
 # implements. Stages (GPU x3 -> CPU x2 -> Sonnet once, repeat) come from
-# ~/.config/bead-loop/config.toml. The gate is the same proof CI runs: syntax,
-# shellcheck, the skills lint and the state-machine suite, so a worktree that passes it
-# is one CI would pass. The timer runs ~/src/bead-loop's checkout, so a merged bead
-# changes the running loop on its next tick; the gate, CI and the merge are the guard.
+# ~/.config/bead-loop/config.toml. The gate is the same proof CI runs: the crate builds
+# and its tests pass, the scripts pass shellcheck, the skills lint and the state-machine
+# suite against the fresh binary, so a worktree that passes it is one CI would pass. A
+# merge to main is deployed to this box by the pipeline (scripts/deploy.sh): the running
+# loop re-execs the new binary at its next idle moment.
 label = "delegate:local"
 base = "main"
-gate = "bash -n bin/bead-supervisor install.sh test/run.sh test/lint-skills.sh test/bin/* && node --check bin/bead-loop-ui && shellcheck -S warning bin/bead-supervisor install.sh test/run.sh test/lint-skills.sh test/bin/* && test/lint-skills.sh && test/run.sh"
-merge = "auto"                       # GitHub Actions reports the check; the tick merges on green
+gate = "cargo build --quiet && cargo test --quiet && bash -n install.sh scripts/*.sh test/run.sh test/lint-skills.sh test/bin/* && node --check bin/bead-loop-ui test/ui-onclicks.js && shellcheck -S warning install.sh scripts/*.sh test/run.sh test/lint-skills.sh test/bin/* && test/lint-skills.sh && test/run.sh"
+merge = "pipeline"                   # Buildkite reports, and its automerge step merges a labelled PR on green

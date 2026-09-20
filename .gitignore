@@ -1,2 +1,5 @@
 # Claude Code worktrees live here; each is its own checkout.
 .claude/worktrees/
+
+# cargo
+target/

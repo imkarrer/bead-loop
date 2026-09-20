@@ -24,6 +24,8 @@ case $2 in
     if [ "$n" = 7 ]; then jq --arg l "$l" '.labels += [$l]' "$TEST_CTRL/pr.json" >"$TEST_CTRL/pr.json.tmp" && mv "$TEST_CTRL/pr.json.tmp" "$TEST_CTRL/pr.json"
     else echo "$n $l" >>"$TEST_CTRL/labels-extra"; fi ;;
   merge)
+    # A test plants $TEST_CTRL/merge-refused to have GitHub refuse (branch protection).
+    [ -e "$TEST_CTRL/merge-refused" ] && { echo "Pull request is not mergeable: protected branch" >&2; exit 1; }
     if [ "$3" = 7 ]; then jq '.state="MERGED"' "$TEST_CTRL/pr.json" >"$TEST_CTRL/pr.json.tmp" && mv "$TEST_CTRL/pr.json.tmp" "$TEST_CTRL/pr.json"
     else echo "$3" >>"$TEST_CTRL/merged-extra"; fi ;;
   update-branch) jq '.mergeStateStatus="CLEAN"' "$TEST_CTRL/pr.json" >"$TEST_CTRL/pr.json.tmp" && mv "$TEST_CTRL/pr.json.tmp" "$TEST_CTRL/pr.json" ;;

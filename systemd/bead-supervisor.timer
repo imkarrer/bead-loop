@@ -1,12 +1,14 @@
 [Unit]
-Description=bead-loop: a tick 3 minutes after the last one ended
+Description=bead-loop: keep the resident loop up (start it now, and again a minute after it stops)
 
-# A tick keeps going by itself while there is work (bead after bead); it ends when
-# a pass finds nothing to attempt — nothing ready, or waiting on CI. So this gap is
-# only how often that wait is checked: one `gh pr view` per PR in flight.
+# The service is the loop itself and stays up on its own; this timer is its keeper.
+# Starting the timer starts the loop at once (OnActiveSec=0) and again a minute after
+# it ends for any reason — so `gpu-mode work`, which starts the timer, brings the loop
+# back, and `gpu-mode game`, which stops timer and service, keeps it down. Stopping only
+# the service is a pause until the timer's next look; stopping the timer too is a stop.
 [Timer]
-OnBootSec=5min
-OnUnitInactiveSec=3min
+OnActiveSec=0
+OnUnitInactiveSec=1min
 
 [Install]
 WantedBy=timers.target

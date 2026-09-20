@@ -1,0 +1,93 @@
+//! `systemctl stop` signals the whole cgroup: the model client dies with us, the
+//! server-side session would not. One thread owns TERM and INT (blocked everywhere else,
+//! taken with sigwait): it aborts the session under every worktree a lane is on, clears
+//! the lane markers, forwards the signal to the children still running (a plain `kill`
+//! of the supervisor alone reaches them too), and exits 143 — the bash's `on_signal`.
+use std::path::PathBuf;
+use std::sync::Mutex;
+
+struct Lane {
+    key: String,
+    attach: String,
+    slug: String,
+    wt: Option<PathBuf>,
+    lane_file: Option<PathBuf>,
+}
+
+static LANES: Mutex<Vec<Lane>> = Mutex::new(Vec::new());
+static CHILDREN: Mutex<Vec<u32>> = Mutex::new(Vec::new());
+
+/// What a lane is on right now: its worktree (a session may be running there) and its
+/// marker file. `key` names the lane in this process (dev, review, or a hand-run work).
+pub fn set_current(key: &str, attach: &str, slug: &str, wt: Option<PathBuf>, lane_file: Option<PathBuf>) {
+    let mut g = LANES.lock().unwrap();
+    g.retain(|l| l.key != key);
+    g.push(Lane { key: key.to_string(), attach: attach.to_string(), slug: slug.to_string(), wt, lane_file });
+}
+
+pub fn clear_current(key: &str) {
+    LANES.lock().unwrap().retain(|l| l.key != key);
+}
+
+pub fn child_started(pid: u32) {
+    CHILDREN.lock().unwrap().push(pid);
+}
+
+pub fn child_ended(pid: u32) {
+    CHILDREN.lock().unwrap().retain(|p| *p != pid);
+}
+
+/// Block TERM/INT in this (the main) thread — every thread spawned later inherits the
+/// mask — and start the thread that takes them.
+pub fn install() {
+    unsafe {
+        let mut set: libc::sigset_t = std::mem::zeroed();
+        libc::sigemptyset(&mut set);
+        libc::sigaddset(&mut set, libc::SIGTERM);
+        libc::sigaddset(&mut set, libc::SIGINT);
+        libc::pthread_sigmask(libc::SIG_BLOCK, &set, std::ptr::null_mut());
+        // SIGPIPE: a closed pipe on stderr/stdout is an error to handle, not a death.
+        libc::signal(libc::SIGPIPE, libc::SIG_IGN);
+    }
+    std::thread::Builder::new()
+        .name("signals".into())
+        .spawn(|| {
+            let mut set: libc::sigset_t = unsafe { std::mem::zeroed() };
+            unsafe {
+                libc::sigemptyset(&mut set);
+                libc::sigaddset(&mut set, libc::SIGTERM);
+                libc::sigaddset(&mut set, libc::SIGINT);
+            }
+            let mut sig: libc::c_int = 0;
+            loop {
+                let rc = unsafe { libc::sigwait(&set, &mut sig) };
+                if rc == 0 {
+                    break;
+                }
+            }
+            on_signal();
+        })
+        .expect("signal thread");
+}
+
+fn on_signal() -> ! {
+    // Abort what the model server is doing for us, then the lane markers, then the
+    // children (timeout, opencode, claude) that a group kill would have reached anyway.
+    let lanes: Vec<(String, String, Option<PathBuf>, Option<PathBuf>)> = LANES
+        .lock()
+        .map(|g| g.iter().map(|l| (l.attach.clone(), l.slug.clone(), l.wt.clone(), l.lane_file.clone())).collect())
+        .unwrap_or_default();
+    for (attach, slug, wt, lane_file) in lanes {
+        if let Some(wt) = wt {
+            crate::harness::abort_sessions_on(&attach, &slug, &wt);
+        }
+        if let Some(f) = lane_file {
+            let _ = std::fs::remove_file(f);
+        }
+    }
+    let children: Vec<u32> = CHILDREN.lock().map(|g| g.clone()).unwrap_or_default();
+    for pid in children {
+        unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM) };
+    }
+    std::process::exit(143)
+}

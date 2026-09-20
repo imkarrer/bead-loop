@@ -24,6 +24,7 @@ case $agent in
       blocked) say "I looked."; say "BLOCKED: lib/x.ts:3 has no such flag" ;;
       nocommit) say "DONE: nothing to do" ;;
       hang) sleep 30 ;;
+      crash) echo "connection refused" >&2; exit 7 ;;   # the harness died before the model said a word
       uncommitted) echo "work" >"$dir/work.txt"; say "DONE: wrote work.txt (forgot to commit)" ;;
       done)
         round=$(grep -c '^bead-worker' "$TEST_CTRL/calls")
@@ -36,6 +37,7 @@ case $agent in
     v=$(sed -n "${round}p" "$TEST_CTRL/review")
     case $v in
       approve) say "APPROVE: checked every criterion" ;;
+      crash) echo "connection refused" >&2; exit 7 ;;   # the reviewer's server is down
       *) say "REJECT: work.txt:1 wrong, fix it"; say "$(printf "For the worker:\n- What is wrong: work.txt:1 says round 1\n- What to do: append the word fixed\n- How to check: grep -c fixed work.txt prints 1")" ;;
     esac ;;
 esac
