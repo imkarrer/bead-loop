@@ -455,6 +455,8 @@ case_status_json_and_ui() {
   assert_match "$("$REAL_CURL" -s -m 3 -X POST -H 'content-type: application/json' -d '{"repo":"/nope","id":"t-5"}' "http://127.0.0.1:$port/api/reopen")" "unknown repo" "reopen only in a configured repo"
   assert_match "$("$REAL_CURL" -s -m 3 -X POST -H 'content-type: application/json' -d "{\"repo\":\"$REPO\",\"id\":\"t-5\"}" "http://127.0.0.1:$port/api/escalate")" '"escalated":"t-5"' "work with Claude from the page"
   assert_eq "$(cat "$BEAD_LOOP_STATE/repo/failures/t-5")" 2 "on the last stage"
+  assert_match "$("$REAL_CURL" -s -m 3 -X POST -H 'content-type: application/json' -d "{\"repo\":\"$REPO\",\"id\":\"t-5\",\"text\":\"use the other flag\"}" "http://127.0.0.1:$port/api/answer")" '"answered":"t-5"' "answer from the page"
+  assert_match "$(jq -r '.[]|select(.id=="t-5")|.notes' "$BD_STATE/issues.json")" "operator .*: use the other flag" "the answer on the bead"
   assert_match "$("$REAL_CURL" -s -m 3 -X POST -H 'content-type: application/json' -d "{\"repo\":\"$REPO\",\"id\":\"t-5\"}" "http://127.0.0.1:$port/api/reopen")" '"reopened":"t-5"' "reopen runs bd"
   assert_eq "$(jq -r '.[]|select(.id=="t-5")|.status' "$BD_STATE/issues.json")" open "the bead is open again"
   kill $upid
@@ -557,6 +559,31 @@ case_escalate_to_the_last_stage() {
   setup true auto '' "$(stages stub/fast::1 claude/opus::1)"; echo nocommit >"$TEST_CTRL/worker"
   sup --once tick; sup --once tick; assert_eq "$(bead .status)" in_progress "parked after the stages"
   sup escalate "$REPO" t-1; assert_eq "$(bead .status)" open "escalate reopens a parked bead"
+}
+
+case_human_queue_answer_and_open() {
+  # BLOCKED at the last stage parks the bead with the question; the answer goes on the
+  # bead and sends it back to the dev queue at the same stage; the next round reads it.
+  setup true auto '' "$(stages stub/fast::1)"; echo blocked >"$TEST_CTRL/worker"
+  sup --once tick; assert_eq "$(bead .status)" in_progress "parked with the question"
+  j=$(sup --json status "$REPO")
+  assert_eq "$(printf '%s' "$j" | jq -r '.parked[0] | "\(.question) \(.why.what[0:8])"')" "true BLOCKED:" "status marks it a question"
+  assert_eq "$(printf '%s' "$j" | jq -r '.parked[0].open_cmd')" "bead-supervisor open $REPO t-1" "and says how to open it"
+  sup answer "$REPO" t-1 "the flag is called --dry-run, see lib/x.ts:9"
+  assert_eq "$(bead .status)" open "answered: back in the dev queue"
+  assert_match "$(bead .notes)" "operator .*: the flag is called --dry-run" "the answer on the bead"
+  echo "done" >"$TEST_CTRL/worker"; sup --once tick
+  assert_match "$(cat "$TEST_CTRL/prompt.2")" "operator .*: the flag is called --dry-run" "the next round reads the answer"
+  assert_eq "$(cut -d' ' -f3 "$TEST_CTRL/calls" | tail -1)" "stub/fast" "at the same stage, not escalated"
+  # open: an interactive Claude Code session in the bead's worktree, the bead and the
+  # loop's note in the first prompt, on the branch a round left when there is one.
+  setup true auto '' "$(stages stub/fast::1)"; echo blocked >"$TEST_CTRL/worker"; sup --once tick
+  sup open "$REPO" t-1
+  assert_eq "$(cat "$TEST_CTRL/opened")" "$BEAD_LOOP_STATE/repo/wt/t-1" "claude opened in the worktree"
+  assert_match "$(cat "$TEST_CTRL/opened.prompt")" "branch bead/t-1" "on the bead's branch"
+  assert_match "$(cat "$TEST_CTRL/opened.prompt")" "its last note: bead-loop round 1 .*BLOCKED: lib/x.ts:3 has no such flag" "with the question"
+  assert_match "$(cat "$TEST_CTRL/opened.prompt")" "title: Do the thing" "and the bead"
+  assert_eq "$(git -C "$BEAD_LOOP_STATE/repo/wt/t-1" rev-parse --abbrev-ref HEAD)" bead/t-1 "the worktree is on the branch"
 }
 
 # ---- main ----------------------------------------------------------------------------
