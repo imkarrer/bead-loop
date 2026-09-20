@@ -64,6 +64,11 @@
   .chip.worker { color: var(--worker); background: rgba(42, 161, 152, .14); }
   .chip.reviewer { color: var(--reviewer); background: rgba(108, 113, 196, .18); }
   .chip.n { min-width: 22px; text-align: center; color: var(--bright); }
+  /* a bead's round history: the toggle sits by the failures chip; the list is quiet, monospace */
+  button.hist { font: 500 12px var(--mono); padding: 0 5px; border: 0; color: var(--muted); line-height: 18px; vertical-align: 1px; white-space: nowrap; }
+  button.hist:hover { color: var(--accent); }
+  pre.hist { margin: 2px 0 8px; font: 12px/1.55 var(--mono); color: var(--muted); white-space: pre-wrap; }
+  tr.sub td { border-top: 0; padding-top: 0; } tr.sub td pre.hist { margin-top: 0; }
 
   table { border-collapse: collapse; width: 100%; }
   td, th { text-align: left; padding: 7px 12px 7px 0; vertical-align: top; border-top: 1px solid var(--line); }
@@ -92,11 +97,11 @@
   .lane .what { font-size: 15px; color: var(--base2); margin-top: 3px; line-height: 1.4; }
   .lane.idle .what { color: var(--muted); font-style: italic; margin-top: 10px; }
   .lane .stage { margin-top: 10px; color: var(--muted); display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-  /* the three queues, in the order the lanes take them */
-  .queues { display: grid; grid-template-columns: 1.3fr 1fr 1fr; gap: 0 28px; margin-top: 6px; }
+  /* the three queues, in the order the lanes take them, then the Claude column: a view over them */
+  .queues { display: grid; grid-template-columns: 1.3fr 1fr 1fr 1fr; gap: 0 28px; margin-top: 6px; }
   @media (max-width: 1000px) { .queues { grid-template-columns: 1fr; } }
   .q h3 { margin-bottom: 2px; } .q .sub { color: var(--muted); font-size: 12px; margin-bottom: 8px; }
-  .q.dev h3 { color: var(--worker); } .q.review h3 { color: var(--reviewer); } .q.merge h3 { color: var(--green); }
+  .q.dev h3 { color: var(--worker); } .q.review h3 { color: var(--reviewer); } .q.merge h3 { color: var(--green); } .q.claude h3 { color: var(--blue); }
   .q td.pos { color: var(--muted); font: 500 12px var(--mono); width: 22px; padding-right: 6px; text-align: right; }
   .q tr:first-child td.pos, .q tr:first-child td.id { color: var(--bright); }
   .q tr.sub td { border-top: 0; padding-top: 0; font-size: 12.5px; }
@@ -108,6 +113,10 @@
   .reply code.cmd { font: 12px var(--mono); color: var(--bright); background: var(--base03); padding: 3px 7px; border-radius: 4px; user-select: all; }
 
 
+  /* the log's heading carries its one option, at the right */
+  .card h3.log { display: flex; align-items: center; }
+  .card h3.log .opt { margin-left: auto; display: flex; align-items: center; gap: 6px; text-transform: none; letter-spacing: 0; font-weight: 400; font-size: 12.5px; cursor: pointer; }
+  .card h3.log .opt input { margin: 0; accent-color: var(--accent); }
   pre.log { margin: 0; font: 12.5px/1.6 var(--mono); white-space: pre-wrap; max-height: 44vh; overflow: auto; color: var(--ink); }
   pre.log .t { color: var(--muted); }
   pre.log .good { color: var(--green); } pre.log .warn { color: var(--yellow); } pre.log .bad { color: var(--orange); }
@@ -211,6 +220,14 @@ const titleOf = (s, w) => (s.title && !/^[\s?.…]*$/.test(s.title)) ? s.title :
 // How often the bead has been sent back to dev, and the stage that count puts it on:
 // stage 1 is the fast local pair; a later stage is a stronger model, the last one Opus.
 const failChip = (n) => n ? `<span class="chip n" title="sent back to dev ${n} time${n > 1 ? 's' : ''}">${n}×</span>` : '';
+// The bead's round history — what each round left, "round N (model): note" — behind a
+// toggle, closed by default. Which are open lives in a Set by bead id, so the re-render
+// on every push (and every 10 s) leaves them as they were.
+const openHist = new Set();
+window.toggleHist = (id) => { if (!openHist.delete(id)) openHist.add(id); render(); };
+const histToggle = (b) => !b.failures ? '' : ` <button class="hist" onclick="toggleHist('${esc(b.id)}')" title="what each round left">${openHist.has(b.id) ? '▾' : '▸'} ${b.failures} round${b.failures > 1 ? 's' : ''}</button>`;
+const histList = (b) => !openHist.has(b.id) ? '' : `<pre class="hist">${(b.history || []).length ? b.history.map(esc).join('\n') : 'no notes kept for these rounds'}</pre>`;
+const histRow = (b, span) => openHist.has(b.id) ? `<tr class="sub"><td></td><td colspan="${span}">${histList(b)}</td></tr>` : '';
 const stageChip = (st, r) => !st ? '<span class="chip bad" title="stages exhausted">exhausted</span>'
   : `<span class="chip ${st.index > 1 ? 'warn' : ''}" title="stage ${st.index}: worker ${esc(st.worker)}${st.reviewer ? ', reviewer ' + esc(st.reviewer) : ''}">${st.index > 1 ? `S${st.index} · ` : ''}${esc(st.worker)}</span>`
     + ((r && r.claude_ok === false && /^claude\//.test(st.worker + ' ' + (st.reviewer || ''))) ? ' <span class="chip bad" title="a claude/* round cannot run while Claude is signed out; the lane takes other beads meanwhile">waits for Claude sign-in</span>' : '');
@@ -259,9 +276,9 @@ function lanePanel(r, name, now, ticking) {
     <div class="label">${name} lane <span class="muted">· ${role} · ${ago(l.since, now)}</span> ${paused ? '<span class="chip warn" title="finishes this round, then starts no new one">pausing</span>' : ''}<span class="act">${pauseBtn}</span></div>
     <div class="bead">${esc(l.id)}</div>
     <div class="what">${esc(l.title || '')}</div>
-    <div class="stage">${failChip(l.failures)}${stageChip(l.stage, r)}
+    <div class="stage">${failChip(l.failures)}${histToggle(l)}${stageChip(l.stage, r)}
       ${live ? `${roleChip(live.agent)} <span class="mono">${esc(live.model)}</span> <span>last output ${ago(live.updated, now)} ago</span> <a href="${esc(live.url)}" target="_blank" rel="noopener">open session ↗</a> ${abortBtn(r, live, `${live.agent} on ${l.id}`)}`
-        : `<span>${name === 'dev' ? 'setup, or the gate' : 'pushing the PR'}</span>`}</div>
+        : `<span>${name === 'dev' ? 'setup, or the gate' : 'pushing the PR'}</span>`}</div>${histList(l)}
   </div>`;
 }
 // Sessions the server is still running that are on no lane: an orphan of a killed round,
@@ -278,7 +295,7 @@ function strays(r, now) {
 }
 
 // The queues, in the order the lanes take them. Position is the information: #1 is next.
-const qRow = (i, b, extra) => `<tr><td class="pos">${i + 1}</td><td class="id">${esc(b.id)}</td><td class="title"><span class="t" title="${esc(b.title || '')}">${esc(b.title || '')}</span></td><td class="fit">${failChip(b.failures)}${extra || ''}</td></tr>`;
+const qRow = (i, b, extra) => `<tr><td class="pos">${i + 1}</td><td class="id">${esc(b.id)}</td><td class="title"><span class="t" title="${esc(b.title || '')}">${esc(b.title || '')}</span></td><td class="fit">${failChip(b.failures)}${histToggle(b)}${extra || ''}</td></tr>${histRow(b, 4)}`;
 function queueCol(name, rows, r, now) {
   const empty = { dev: 'nothing ready', review: 'nothing waiting for review', merge: 'no PRs in flight' }[name];
   const sub = { dev: 'fewest failures first, then bd’s order', review: 'gate passed; the reviewer next', merge: `PRs in CI · dev pauses at ${r.max_inflight}` }[name];
@@ -287,6 +304,21 @@ function queueCol(name, rows, r, now) {
   else if (name === 'merge') body = `<table>${rows.map((p) => `<tr><td class="id">${esc(p.id)}</td><td class="title"><span class="t"><a href="${esc(p.url)}" target="_blank" rel="noopener">${esc(p.url.replace(/^https?:\/\/github\.com\/[^/]+\//, ''))} ↗</a></span></td></tr><tr class="sub"><td></td><td>${prChips(p, now)}</td></tr>`).join('')}</table>`;
   else body = `<table>${rows.map((b, i) => qRow(i, b, (name === 'dev' ? ` ${stageChip(b.stage, r)}` : ` <span class="muted">${ago(b.since, now)}</span>${stageChip(b.stage, r).includes('waits for') ? ' <span class="chip bad">waits for Claude sign-in</span>' : ''}`) + `</td><td class="act">${claudeBtn(r, b)}`)).join('')}</table>`;
   return `<div class="q ${name}"><h3>${name} queue<span class="n">${rows.length}</span></h3><div class="sub">${sub}</div>${body}</div>`;
+}
+// The Claude column: every bead whose current stage names a claude/* worker or reviewer,
+// and where it sits. A view over the lanes and the dev and review queues, not a queue of
+// its own — the last stage is Claude's, and this is where its beads are found. What is
+// being worked comes first, then the queues in the order the lanes take them.
+const onClaude = (b) => !!(b.stage && /^claude\//.test(b.stage.worker + ' ' + (b.stage.reviewer || '')));
+function claudeCol(r) {
+  const rows = [
+    ...Object.entries(r.lanes).map(([k, l]) => ({ b: l, where: `on the ${k} lane` })),
+    ...r.queues.dev.map((b, i) => ({ b, where: `dev queue #${i + 1}` })),
+    ...r.queues.review.map((b, i) => ({ b, where: `review queue #${i + 1}` })),
+  ].filter((x) => onClaude(x.b));
+  const body = rows.length === 0 ? '<div class="empty">no bead on the Claude stage</div>'
+    : `<table>${rows.map(({ b, where }) => `<tr><td class="id">${esc(b.id)}</td><td class="title"><span class="t" title="${esc(b.title || '')}">${esc(b.title || '')}</span></td><td class="fit">${failChip(b.failures)}${histToggle(b)} <span class="muted">${esc(where)}</span></td></tr>${histRow(b, 2)}`).join('')}</table>`;
+  return `<div class="q claude"><h3>Claude<span class="n">${rows.length}</span></h3><div class="sub">the last stage; runs on the dev and review lanes</div>${body}</div>`;
 }
 
 function repo(r, now, ticking) {
@@ -297,8 +329,8 @@ function repo(r, now, ticking) {
   // Claude Code session in its worktree with you, the last stage, or a plain reopen.
   const human = r.parked.length === 0 ? '<div class="empty">nothing waiting on you</div>' : `<table>${r.parked.map((b) => `
     <tr><td class="id">${esc(b.id)}</td><td class="title"><span class="t" title="${esc(b.title || '')}">${esc(b.title || '')}</span></td>
-        <td class="fit">${b.question ? '<span class="chip warn">question</span>' : b.stage ? '<span class="chip">stopped</span>' : '<span class="chip bad">exhausted</span>'} ${failChip(b.failures)}</td>
-        <td class="act">${claudeBtn(r, b)} <button ${busyAction ? 'disabled' : ''} onclick="act('reopen',{repo:${JSON.stringify(r.repo)},id:${JSON.stringify(b.id)}})" title="back in the dev queue as is">Reopen</button></td></tr>
+        <td class="fit">${b.question ? '<span class="chip warn">question</span>' : b.stage ? '<span class="chip">stopped</span>' : '<span class="chip bad">exhausted</span>'} ${failChip(b.failures)}${histToggle(b)}</td>
+        <td class="act">${claudeBtn(r, b)} <button ${busyAction ? 'disabled' : ''} onclick="act('reopen',{repo:${JSON.stringify(r.repo)},id:${JSON.stringify(b.id)}})" title="back in the dev queue as is">Reopen</button></td></tr>${histRow(b, 3)}
     <tr class="sub"><td></td><td colspan="3" class="why">${b.why ? `${b.why.when ? `<span class="muted">${esc(b.why.when.replace('T', ' ').slice(0, 16))}${b.why.round ? ' ·' + esc(b.why.round) : ''} — </span>` : ''}${esc(b.why.what)}` : '<span class="muted">no note from the loop — parked by hand, or before the loop kept notes</span>'}
       <div class="reply">
         <textarea id="ans-${esc(b.id)}" rows="2" placeholder="Your answer, or what to do differently — goes on the bead; the next round reads it"></textarea>
@@ -308,7 +340,7 @@ function repo(r, now, ticking) {
   return `<section class="card" id="repo-${esc(r.slug)}">
     <h2>${esc(r.slug)} <span class="cfg">${esc(r.label)} · ${esc(r.base)} · merge ${esc(r.merge)} · stages: ${stages} · then ${esc(r.on_exhaust)}${r.attach ? '' : ' · <b>no attach</b>: sessions not visible'}</span></h2>
     <div class="lanes">${lanePanel(r, 'dev', now, ticking)}${lanePanel(r, 'review', now, ticking)}</div>
-    <div class="queues">${queueCol('dev', r.queues.dev, r, now)}${queueCol('review', r.queues.review, r, now)}${queueCol('merge', r.queues.merge, r, now)}</div>
+    <div class="queues">${queueCol('dev', r.queues.dev, r, now)}${queueCol('review', r.queues.review, r, now)}${queueCol('merge', r.queues.merge, r, now)}${claudeCol(r)}</div>
     ${strays(r, now)}
     <h3 class="human">Needs you<span class="n">${r.parked.length}</span><span class="note">a question the last stage could not answer, stages exhausted, or a PR closed unmerged — the loop waits here until you act</span></h3>${human}
   </section>`;
@@ -323,16 +355,24 @@ function logClass(m) {
   if (/^(Starting|Finished|Stopped|Started) |\.service:/.test(m)) return 'sys';
   return '';
 }
+// systemd's own lines — Starting, Finished, Stopped, the unit's accounting — are the
+// journal's, not the loop's: hidden unless asked, and the asking is remembered per browser.
+let showSys = false;
+try { showSys = localStorage.getItem('showSys') === '1'; } catch { /* no storage: the default, every load */ }
+window.setSys = (on) => { showSys = !!on; try { localStorage.setItem('showSys', showSys ? '1' : '0'); } catch { /* not remembered, still applied */ } render(); };
 
 function render() {
   if (!last) return;
   header(last);
+  const lines = last.log.map((l) => { const m = l.msg.replace(/^\d\d:\d\d:\d\d /, ''); return { t: l.t, m, cls: logClass(m) }; }).filter((l) => showSys || l.cls !== 'sys');
   const log = last.log.length === 0 ? '<div class="empty">no journal (not running under systemd?)</div>'
-    : `<pre class="log" id="log">${last.log.map((l) => { const m = l.msg.replace(/^\d\d:\d\d:\d\d /, ""); return `<span class="t">${clock(l.t)}</span>  <span class="${logClass(m)}">${esc(m)}</span>`; }).join("\n")}</pre>`;
+    : lines.length === 0 ? '<div class="empty">only systemd’s own lines so far</div>'
+    : `<pre class="log" id="log">${lines.map((l) => `<span class="t">${clock(l.t)}</span>  <span class="${l.cls}">${esc(l.m)}</span>`).join("\n")}</pre>`;
+  const sysBox = `<label class="opt" title="systemd’s Starting/Finished/Stopped lines for the unit"><input type="checkbox" ${showSys ? 'checked' : ''} onchange="setSys(this.checked)">systemd lines</label>`;
   $('main').innerHTML = (last.error ? `<div class="banner">status failed: ${esc(last.error)}</div>` : '')
     + (last.repos.length === 0 ? '<section class="card"><div class="empty">no repos: set <span class="mono">repos</span> in ~/.config/bead-loop/config.toml</div></section>' : '')
     + last.repos.map((r) => repo(r, last.now, last.service.available && (last.service.active === 'active' || last.service.active === 'activating'))).join("")
-    + `<section class="card"><h3>Supervisor log</h3>${log}</section>`;
+    + `<section class="card"><h3 class="log">Supervisor log${sysBox}</h3>${log}</section>`;
   const el = $('log'); if (el) el.scrollTop = el.scrollHeight;
   $('foot').textContent = `state as of ${clock(last.now)} · pushed on every change`;
 }

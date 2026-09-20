@@ -829,7 +829,7 @@ sessions_json() {
 # status_json: this repo, one JSON object: the three queues in their order, the two
 # lanes and what each is on, the parked beads, and every worktree with its sessions.
 status_json() {
-  local f id dir merge='[]' worktrees='[]' failures='{}' dev='[]' review='[]' lanes='{}' name
+  local f id dir merge='[]' worktrees='[]' failures='{}' history='{}' dev='[]' review='[]' lanes='{}' name
   for f in "$RS"/inflight/*; do
     [ -e "$f" ] || continue
     id=$(basename "$f")
@@ -838,9 +838,13 @@ status_json() {
       --argjson adopted "$([ -e "$(mark "$id" adopted)" ] && echo true || echo false)" \
       '. + [{id: $id, url: $url, red: $red, adopted: $adopted}]')
   done
+  # failures/ID is the count; failures/ID.notes the history, one line per round, read once.
   for f in "$RS"/failures/*; do
-    [ -e "$f" ] || continue; case $f in *.notes) continue ;; esac
-    failures=$(printf '%s' "$failures" | jq -c --arg id "$(basename "$f")" --arg n "$(cat "$f")" '. + {($id): ($n | tonumber)}')
+    [ -e "$f" ] || continue
+    case $f in
+      *.notes) history=$(printf '%s' "$history" | jq -c --arg id "$(basename "$f" .notes)" --rawfile h "$f" '. + {($id): ($h | split("\n") | map(select(. != "")))}') ;;
+      *) failures=$(printf '%s' "$failures" | jq -c --arg id "$(basename "$f")" --arg n "$(cat "$f")" '. + {($id): ($n | tonumber)}') ;;
+    esac
   done
   for dir in "$RS"/wt/*/; do
     dir=${dir%/}; [ -d "$dir" ] || continue; id=$(basename "$dir")
@@ -859,7 +863,7 @@ status_json() {
   done
   jq -cn --arg slug "$SLUG" --arg repo "$REPO" --arg label "$LABEL" --arg base "$BASE" --arg merge_mode "$MERGE" \
     --arg stages "$STAGES" --arg attach "$ATTACH" --argjson max_inflight "$MAX_INFLIGHT" --arg on_exhaust "$ON_EXHAUST" \
-    --argjson merge "$merge" --argjson failures "$failures" --argjson worktrees "$worktrees" \
+    --argjson merge "$merge" --argjson failures "$failures" --argjson history "$history" --argjson worktrees "$worktrees" \
     --argjson dev "$dev" --argjson review "$review" --argjson lanes "$lanes" \
     --argjson paused "{\"dev\": $([ -e "$STATE_DIR/pause.dev" ] && echo true || echo false), \"review\": $([ -e "$STATE_DIR/pause.review" ] && echo true || echo false)}" \
     --argjson claude_ok "$(case " $STAGES " in *claude/*) claude_ok && echo true || echo false ;; *) echo null ;; esac)" \
@@ -870,7 +874,8 @@ status_json() {
     | def stage_of($n): ($st | map(.failures) | add) as $total
         | (if $n >= $total then (if $on_exhaust == "repeat" then ($n % $total) else null end) else $n end) as $k
         | if $k == null then null else (reduce $st[] as $s ({i: 0, count: 0, hit: null}; if .hit == null then (.count += $s.failures | .i += 1 | if $k < .count then .hit = ($s + {index: .i}) else . end) else . end) | .hit) end;
-    def bead($b): {id: $b.id, title: $b.title, priority: $b.priority, failures: ($failures[$b.id] // 0), stage: stage_of($failures[$b.id] // 0)};
+    # history: the lines of failures/ID.notes, one per round, oldest first; [] when there is no file.
+    def bead($b): {id: $b.id, title: $b.title, priority: $b.priority, failures: ($failures[$b.id] // 0), stage: stage_of($failures[$b.id] // 0), history: ($history[$b.id] // [])};
     # why: the last note the loop left on the bead — every send-back and every parking writes one,
     # "bead-loop [round N (model)] <date>: <what happened>" — split into when and what.
     def why($b): ($b.notes // "" | split("\n") | map(select(startswith("bead-loop"))) | last // null)

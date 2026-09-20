@@ -53,6 +53,17 @@ assert_nofile() { [ ! -e "$1" ] && ok || bad "$2: unexpected $1"; }
 assert_branch() { git -C "$T/origin.git" show-ref -q "refs/heads/$1" && ok || bad "$2: origin has no branch $1"; }
 assert_nobranch() { git -C "$T/origin.git" show-ref -q "refs/heads/$1" && bad "$2: origin has branch $1" || ok; }
 calls() { cut -d' ' -f1 "$TEST_CTRL/calls" | tr '\n' ' ' | sed 's/ $//'; }
+# render_page STATE.json: the page's script run against that state under a stub DOM (the
+# elements it looks up, an EventSource that pushes the state once); prints main's HTML.
+render_page() {
+  sed -n '/^<script>/,/^<\/script>/p' "$HERE/../ui/index.html" | sed '1d;$d' >"$T/page.js"
+  node -e '
+    const els = {}; const el = (id) => els[id] ||= { id, innerHTML: "", textContent: "", hidden: false, dataset: {}, scrollTop: 0, scrollHeight: 0, value: "" };
+    global.document = { getElementById: el, addEventListener() {}, hidden: false };
+    global.window = global; global.setInterval = () => {};
+    global.EventSource = class { constructor() { setTimeout(() => { this.onopen(); this.onmessage({ data: require("fs").readFileSync(process.argv[1], "utf8") }); console.log(el("main").innerHTML); }, 0); } };
+    require(process.argv[2]);' "$1" "$T/page.js"
+}
 
 # ---- cases -------------------------------------------------------------------------
 case_dry_run() {
@@ -411,15 +422,17 @@ case_new_attempt_aborts_leftover_session() {
 }
 
 case_status_json_and_ui() {
-  # Three queues and two lanes, laid out by hand: t-1 in the merge queue (red), t-2 and
-  # t-3 ready (t-3 has failed once, so t-2 goes first), t-4 waiting for review, t-6 on
-  # the dev lane, t-5 parked.
-  setup true auto stub/reviewer "$(printf 'attach = "http://oc.test:4096"\n%s' "$(stages stub/worker:stub/reviewer:2 stub/slow::1)")"
-  R=$BEAD_LOOP_STATE/repo; wt=$R/wt/t-1; mkdir -p "$wt" "$R/failures" "$R/inflight" "$R/review"; echo 2 >"$R/failures/t-1"; echo 1 >"$R/failures/t-3"
+  # Three queues and two lanes, laid out by hand: t-1 in the merge queue (red), t-2, t-3
+  # and t-7 ready (t-3 has failed once, so t-2 goes first; t-7 twice, so it is on the
+  # last stage, Claude's), t-4 waiting for review, t-6 on the dev lane, t-5 parked.
+  setup true auto stub/reviewer "$(printf 'attach = "http://oc.test:4096"\n%s' "$(stages stub/worker:stub/reviewer:2 claude/opus::1)")"
+  R=$BEAD_LOOP_STATE/repo; wt=$R/wt/t-1; mkdir -p "$wt" "$R/failures" "$R/inflight" "$R/review"; echo 2 >"$R/failures/t-1"; echo 1 >"$R/failures/t-3"; echo 2 >"$R/failures/t-7"
+  printf 'round 1 (stub/worker): BLOCKED: which flag?\nround 2 (stub/worker): REJECT: x.ts:1 wrong\n' >"$R/failures/t-7.notes"
   jq '. + [{id:"t-2", title:"Second", description:"y", status:"open", priority:2, labels:["delegate:local"]},
           {id:"t-3", title:"Third", description:"z", status:"open", priority:1, labels:["delegate:local"]},
           {id:"t-4", title:"Fourth", description:"w", status:"in_progress", priority:2, labels:["delegate:local"]},
-          {id:"t-6", title:"Sixth", description:"v", status:"in_progress", priority:2, labels:["delegate:local"]}]' "$BD_STATE/issues.json" >"$BD_STATE/i.tmp" && mv "$BD_STATE/i.tmp" "$BD_STATE/issues.json"
+          {id:"t-6", title:"Sixth", description:"v", status:"in_progress", priority:2, labels:["delegate:local"]},
+          {id:"t-7", title:"Seventh", description:"u", status:"open", priority:2, labels:["delegate:local"]}]' "$BD_STATE/issues.json" >"$BD_STATE/i.tmp" && mv "$BD_STATE/i.tmp" "$BD_STATE/issues.json"
   echo "DONE: did it" >"$R/review/t-4"; echo t-6 >"$R/lane.dev"
   jq -n '[{id:"ses_rev", parentID:null, agent:"bead-reviewer", model:{providerID:"slow",id:"m"}, title:"Reviewing", time:{created:0, updated:(now*1000)}}]' >"$TEST_CTRL/sessions.json"
   echo '{"ses_rev":{"type":"busy"}}' >"$TEST_CTRL/session-status.json"
@@ -427,7 +440,8 @@ case_status_json_and_ui() {
   jq '. + [{id:"t-5", title:"Parked one", description:"p", status:"in_progress", priority:2, labels:["delegate:local"], notes:"someone: a human note\nbead-loop 2026-09-18T17:05+00:00: stages exhausted after REJECT: x.ts:1 wrong"}]' "$BD_STATE/issues.json" >"$BD_STATE/i.tmp" && mv "$BD_STATE/i.tmp" "$BD_STATE/issues.json"
   j=$(sup --json status "$REPO")
   assert_eq "$(printf '%s' "$j" | jq -r '.slug, .attach, .stages[0].worker, .stages[0].failures, .lanes.dev.id, (.lanes.review // "idle")' | tr '\n' ' ')" "repo http://oc.test:4096 stub/worker 2 t-6 idle " "config and lanes"
-  assert_eq "$(printf '%s' "$j" | jq -r '.queues.dev | map("\(.id):\(.failures):\(.stage.worker)") | join(" ")')" "t-2:0:stub/worker t-3:1:stub/worker" "dev queue in order: fewest failures first, with its stage"
+  assert_eq "$(printf '%s' "$j" | jq -r '.queues.dev | map("\(.id):\(.failures):\(.stage.worker)") | join(" ")')" "t-2:0:stub/worker t-3:1:stub/worker t-7:2:claude/opus" "dev queue in order: fewest failures first, with its stage"
+  assert_eq "$(printf '%s' "$j" | jq -r '(.queues.dev | map("\(.id):\(.history | length)") | join(" ")), .queues.dev[2].history[1]' | tr '\n' ' ')" "t-2:0 t-3:0 t-7:2 round 2 (stub/worker): REJECT: x.ts:1 wrong " "history: the lines of failures/ID.notes, [] without one"
   assert_eq "$(printf '%s' "$j" | jq -r '.queues.review | map("\(.id):\(.title)") | join(" ")')" "t-4:Fourth" "review queue"
   assert_eq "$(printf '%s' "$j" | jq -c '.queues.merge[0] | [.id, .red, .adopted, .failures]')" '["t-1",true,false,2]' "merge queue with its markers"
   assert_eq "$(printf '%s' "$j" | jq -r '.parked | map(.id) | join(" ")')" "t-5" "parked = in_progress minus the queues and lanes"
@@ -446,6 +460,20 @@ case_status_json_and_ui() {
   assert_eq "$(jq -r '.repos[0].slug, (.repos[0].worktrees[0].sessions[0].state), (.repos[0].queues.dev[0].id), (.error // "none")' "$T/state.json" | tr '\n' ' ')" "repo orphan t-2 none " "/api/state carries the supervisor's JSON"
   assert_match "$("$REAL_CURL" -s -m 3 "http://127.0.0.1:$port/")" "<title>bead-loop</title>" "the page"
   assert_eq "$(jq -r '.gpu | "\(.available) \(.mode) \(.by)"' "$T/state.json")" "true game auto" "gpu-mode read from its state dir"
+  # The page rendered against that state: the Claude column lists t-7 (dev queue, on the
+  # claude/opus stage) and where it sits, and nothing else.
+  html=$(render_page "$T/state.json")
+  node --check "$T/page.js" 2>/dev/null && ok || bad "the page's script parses"
+  assert_match "$(printf '%s' "$html" | grep -o '<div class="q claude">.*' | head -c 400)" '<h3>Claude<span class="n">1</span></h3>' "the Claude column, with its count"
+  assert_match "$(printf '%s' "$html" | grep -o '<div class="q claude">.*' | head -c 600)" 'class="id">t-7</td>.*dev queue #3' "t-7 in it, with where it sits"
+  assert_match "$(printf '%s' "$html" | grep -o '<div class="q dev">.*' | head -c 2000)" 'title="sent back to dev 2 times">2×</span> <button class="hist" onclick="toggleHist(.t-7.)"[^>]*>▸ 2 rounds</button>' "t-7's round history behind a toggle, closed"
+  assert_eq "$(printf '%s' "$html" | grep -c 'pre class="hist"')" 0 "no history listed until opened"
+  # The supervisor log with systemd's own lines in it: hidden by default, the box unchecked.
+  jq '.log = [{t: now, msg: "Starting bead-supervisor.service - the bead loop..."}, {t: now, msg: "03:50:01 repo: dev: bead t-2 to stub/worker"}, {t: now, msg: "Finished bead-supervisor.service - the bead loop."}]' "$T/state.json" >"$T/state-log.json"
+  log=$(render_page "$T/state-log.json" | grep -o '<section class="card"><h3 class="log">.*')
+  assert_match "$log" '<input type="checkbox"  onchange="setSys(this.checked)">systemd lines</label>' "the systemd lines box, unchecked"
+  assert_match "$log" '<span class="pick">repo: dev: bead t-2 to stub/worker</span>' "the loop's line shown"
+  assert_eq "$(printf '%s' "$log" | grep -c 'class="sys"')" 0 "systemd's lines hidden"
   assert_match "$(timeout 5 "$REAL_CURL" -sN -m 4 "http://127.0.0.1:$port/api/events" | head -1)" '^data: {"now":[0-9]*,"repos":\[{"slug":"repo"' "the event stream opens with the state"
   # The second page gets the last state replayed at once, with a fresh now in front: still one JSON object.
   assert_eq "$(timeout 5 "$REAL_CURL" -sN -m 4 "http://127.0.0.1:$port/api/events" | head -1 | sed 's/^data: //' | jq -r '.repos[0].slug, (.now | type)' | tr '\n' ' ')" "repo number " "the replayed state is valid JSON"
