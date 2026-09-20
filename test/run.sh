@@ -2,13 +2,26 @@
 # bead-loop integration tests: the supervisor's state machine against stub
 # bd/opencode/gh (test/bin) and a real git origin. Every row of the README's
 # outcome table is a case here. Run: test/run.sh [case-name...]
+#
+# What belongs here is a transition the state machine makes through its tools — a
+# round, a queue, a PR, a session — and what it leaves on the bead and on disk. The
+# shape of a prompt, a note, a queue order or the status JSON is a unit test in src/
+# (cargo test); a case here proves the wiring once, not every variant.
+#
+# Every case has its own scratch dir, state dir and stub control dir, so with no case
+# named they run side by side, one process per case (JOBS=N; JOBS=1 for one at a time).
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 SUP=${SUP:-$HERE/../target/debug/bead-supervisor}   # the Rust binary; SUP=... to point elsewhere
-# The stubs in test/bin shadow curl; the UI case talks to a real server with the real one.
-REAL_CURL=$(command -v curl || true)
+# The stubs in test/bin shadow curl; the UI case talks to a real server with the real one
+# (found before the stubs go on PATH, and handed down to the cases run side by side).
+export REAL_CURL=${REAL_CURL:-$(command -v curl || true)}
 export PATH=$HERE/bin:$PATH
 export GIT_AUTHOR_NAME=test GIT_AUTHOR_EMAIL=t@example.com GIT_COMMITTER_NAME=test GIT_COMMITTER_EMAIL=t@example.com
+# A lane with nothing to do looks at the other lane three times, LANE_WAIT apart, before
+# it leaves a tick: 10 s in production, where the pause is what makes the check cheap;
+# here it would be 20 s of nothing per idle lane. A case about the wait sets its own.
+export LANE_WAIT=${LANE_WAIT:-0.1}
 PASS=0 FAIL=0
 
 # ---- fixture -----------------------------------------------------------------
@@ -160,7 +173,11 @@ case_no_reviewer() {
   assert_branch bead/t-1 "pushed"
 }
 case_ci_pending_then_green() {
+  # The verdict on a check list is a unit test (merge::verdicts); here, what each one
+  # does to the PR and the bead: nothing while a check is pending, the merge on green.
   setup; sup work "$REPO"
+  set_checks '[{"context":"a","state":"SUCCESS"},{"context":"b","state":"PENDING"}]'; sup reconcile "$REPO"
+  assert_eq "$(jq -r .state "$TEST_CTRL/pr.json")" OPEN "one pending check holds the merge"
   set_checks '[{"context":"ci","state":"PENDING"}]'; sup reconcile "$REPO"
   assert_eq "$(jq -r .state "$TEST_CTRL/pr.json")" OPEN "pending: not merged"
   assert_eq "$(bead .status)" in_progress "pending: bead waits"
@@ -188,22 +205,6 @@ case_ci_red() {
   assert_match "$(bead .comments | tr '\n' ' ')" "pushed round 2 to https://github.com/example/repo/pull/7" "said so on the bead"
   assert_file "$BEAD_LOOP_STATE/repo/inflight/t-1" "back in the merge queue"
   assert_eq "$(git -C "$T/origin.git" rev-list --count main..bead/t-1)" 2 "the fix is on the branch"
-}
-case_ci_mixed_is_not_green() {
-  setup; sup work "$REPO"
-  set_checks '[{"context":"a","state":"SUCCESS"},{"context":"b","state":"PENDING"}]'; sup reconcile "$REPO"
-  assert_eq "$(jq -r .state "$TEST_CTRL/pr.json")" OPEN "one pending check holds the merge"
-}
-case_ci_none_reported() {
-  setup; sup work "$REPO"; sup reconcile "$REPO"
-  assert_eq "$(jq -r .state "$TEST_CTRL/pr.json")" OPEN "no checks: not merged"
-  assert_match "$(bead .notes)" "no CI checks" "noted"
-}
-case_merge_manual() {
-  setup true manual; sup work "$REPO"
-  set_checks '[{"context":"ci","state":"SUCCESS"}]'; sup reconcile "$REPO"
-  assert_eq "$(jq -r .state "$TEST_CTRL/pr.json")" OPEN "manual: green stays open"
-  assert_eq "$(bead .status)" in_progress "manual: bead waits for you"
 }
 case_merge_pipeline() {
   setup true pipeline; sup work "$REPO"
@@ -233,17 +234,16 @@ case_merge_pipeline_label_missing() {
   set_checks '[{"context":"ci","state":"SUCCESS"}]'; sup reconcile "$REPO"
   assert_eq "$(jq -r .state "$TEST_CTRL/pr.json")" OPEN "green: still nobody merges but you"
 }
-case_behind_updates_branch() {
+case_behind_then_closed_unmerged() {
   setup; sup work "$REPO"
   jq '.mergeStateStatus="BEHIND"' "$TEST_CTRL/pr.json" >"$TEST_CTRL/pr.tmp" && mv "$TEST_CTRL/pr.tmp" "$TEST_CTRL/pr.json"
   set_checks '[{"context":"ci","state":"SUCCESS"}]'; sup reconcile "$REPO"
   assert_match "$(cat "$TEST_CTRL/gh.log")" "pr update-branch 7" "behind: branch updated, not merged"
   assert_eq "$(jq -r .state "$TEST_CTRL/pr.json")" OPEN "behind: waits for CI to rerun"
-}
-case_pr_closed_unmerged() {
-  setup; sup work "$REPO"
+  # Someone closes it instead: parked for you, out of the merge queue.
   jq '.state="CLOSED"' "$TEST_CTRL/pr.json" >"$TEST_CTRL/pr.tmp" && mv "$TEST_CTRL/pr.tmp" "$TEST_CTRL/pr.json"; sup reconcile "$REPO"
   assert_match "$(bead .notes)" "closed without merging" "noted"
+  assert_eq "$(bead .status)" in_progress "parked"
   assert_nofile "$BEAD_LOOP_STATE/repo/inflight/t-1" "untracked"
 }
 case_inflight_limits_tick() {
@@ -259,23 +259,20 @@ case_nothing_ready() {
 }
 case_lock_skips() {
   setup; mkdir -p "$BEAD_LOOP_STATE"
-  ( exec 9>"$BEAD_LOOP_STATE/lock"; flock 9; sleep 3 ) &
-  sleep 0.5; rc=0; sup --once tick || rc=$?
+  ( exec 9>"$BEAD_LOOP_STATE/lock"; flock 9; sleep 1 ) &
+  sleep 0.2; rc=0; sup --once tick || rc=$?
   assert_eq "$rc" 0 "held lock is a clean skip"
   assert_eq "$(calls)" "" "nothing ran"
   wait
 }
-case_config_comments() {
-  setup; sed -i "s|^gate = 'true'$|gate = 'true'   # trailing comment|" "$REPO/.bead-loop.toml"; sup work "$REPO"
-  assert_branch bead/t-1 "gate with a trailing comment still runs as `true`"
-}
 case_config_layers() {
-  # repo file over global over default; a global stages table serves every repo;
-  # ~ in repos expands; a config that does not parse is a loud stop.
+  # The layering, the parse and ~ are unit tests (config::tests); here, that a run reads
+  # the two files: a global stages table serves every repo, the repo's wins, tick finds
+  # the repo through `repos`, and a config that does not parse is a loud stop.
   setup true auto ''
-  printf 'model = "stub/worker"\nrepos = ["~/repo"]\nworker_timeout = 60\nmax_inflight = 3\n%s\n' "$(stages stub/global::1)" >"$BEAD_LOOP_CONFIG/config.toml"
+  printf 'model = "stub/worker"\nrepos = ["~/repo"]\nworker_timeout = 60\nmax_inflight = 3\n%s\n' "$(stages stub/global::1:7)" >"$BEAD_LOOP_CONFIG/config.toml"
   out=$(sup --dry-run work "$REPO")
-  assert_match "$out" "model: stub/global" "stages from the global file"
+  assert_match "$out" "failures: 0  model: stub/global" "dry run names the stage, from the global file"
   printf 'max_inflight = 1\n%s\n' "$(stages stub/repo::1)" >>"$REPO/.bead-loop.toml"
   out=$(sup --dry-run work "$REPO")
   assert_match "$out" "model: stub/repo" "repo stages win over global"
@@ -305,34 +302,17 @@ case_blocked_at_last_stage_parks() {
   sup --once tick; assert_eq "$(bead .status)" open "BLOCKED at the first stage: a stronger model may not be"
   sup --once tick; assert_eq "$(bead .status)" in_progress "BLOCKED at the last stage: parked even with repeat"
 }
-case_history_in_prompt() {
-  setup true auto '' "$(stages stub/fast::2)"; echo nocommit >"$TEST_CTRL/worker"
-  sup --once tick; ! grep -q '<previous-attempts>' "$TEST_CTRL/prompt.1" && ok || bad "first attempt has no history"
-  sup --once tick; assert_match "$(cat "$TEST_CTRL/prompt.2")" "<previous-attempts>" "second attempt sees the history"
-  assert_match "$(cat "$TEST_CTRL/prompt.2")" "round 1 (stub/fast): worker made no commit" "with the note"
-}
-case_fair_pick() {
-  setup true auto '' "$(stages stub/fast::3)"; echo nocommit >"$TEST_CTRL/worker"
-  jq '. + [{id:"t-2", title:"Second", description:"y", status:"open", priority:3, labels:["delegate:local"]}]' "$BD_STATE/issues.json" >"$BD_STATE/i.tmp" && mv "$BD_STATE/i.tmp" "$BD_STATE/issues.json"
-  sup --once tick; sup --once tick
-  assert_match "$(cat "$TEST_CTRL/prompt.1")" "id: t-1" "first pick is bd's order"
-  assert_match "$(cat "$TEST_CTRL/prompt.2")" "id: t-2" "then the untried bead, not t-1 again"
-  sup --once tick; assert_match "$(cat "$TEST_CTRL/prompt.3")" "id: t-1" "then t-1's second attempt"
-}
-case_dry_run_names_stage() {
-  setup true auto '' "$(stages stub/fast::1:7)"; out=$(sup --dry-run work "$REPO")
-  assert_match "$out" "failures: 0  model: stub/fast" "dry run names the stage"
-}
-
 case_claude_stage_after_local_ones() {
   # One --once tick: the dev lane's stub round fails and requeues t-1 on the Claude stage;
   # the claude lane, passing after it, takes it straight away.
   setup true auto '' "$(stages stub/fast::1 claude/opus:claude/opus:1)"; echo nocommit >"$TEST_CTRL/worker"
   sup --once tick
   assert_eq "$(cut -d' ' -f3,4 "$TEST_CTRL/calls" | tr '\n' '|')" "stub/fast none|claude/opus claude|claude/opus claude|" "the local attempt fails, then Claude Code implements and reviews"
+  ! grep -q '<previous-attempts>' "$TEST_CTRL/prompt.1" && ok || bad "first attempt has no history"
   assert_match "$(cat "$TEST_CTRL/system.2")" "delegated developer for one bead" "worker agent body is the system prompt"
   assert_match "$(cat "$TEST_CTRL/system.3")" "senior reviewer" "reviewer agent body is the system prompt"
   assert_match "$(cat "$TEST_CTRL/prompt.2")" "<previous-attempts>" "Claude sees the local attempt's note"
+  assert_match "$(cat "$TEST_CTRL/prompt.2")" "round 1 (stub/fast): worker made no commit" "the note the send-back left"
   assert_branch bead/t-1 "pushed"
   assert_match "$(git -C "$T/origin.git" log -1 --format=%s bead/t-1)" "opus round" "the commit is Claude's"
 }
@@ -413,14 +393,6 @@ case_adopt_off() {
   sup reconcile "$REPO"
   assert_nofile "$BEAD_LOOP_STATE/repo/inflight/x-1" "adopt = false: ignored"
 }
-case_dotted_ids_count_as_inflight() {
-  setup true auto stub/reviewer 'max_inflight = 1'; jq '.[0].id="t-1.2"' "$BD_STATE/issues.json" >"$BD_STATE/i.tmp" && mv "$BD_STATE/i.tmp" "$BD_STATE/issues.json"
-  sup work "$REPO"; assert_file "$BEAD_LOOP_STATE/repo/inflight/t-1.2" "tracked"
-  jq '. + [{id:"t-3", title:"Next", description:"x", status:"open", priority:2, labels:["delegate:local"]}]' "$BD_STATE/issues.json" >"$BD_STATE/i.tmp" && mv "$BD_STATE/i.tmp" "$BD_STATE/issues.json"
-  : >"$TEST_CTRL/calls"; sup --once tick
-  assert_eq "$(calls)" "" "a bead id with a dot still counts toward max_inflight"
-}
-
 case_status_lists_worktree_sessions() {
   setup true auto stub/reviewer 'attach = "http://oc.test:4096"'
   wt=$BEAD_LOOP_STATE/repo/wt/t-1; mkdir -p "$wt" "$BEAD_LOOP_STATE/repo/failures"; echo 2 >"$BEAD_LOOP_STATE/repo/failures/t-1"
@@ -436,8 +408,11 @@ case_status_lists_worktree_sessions() {
   assert_match "$out" "http://oc.test:4096/$(printf '%s' "$wt" | base64 -w0 | tr '+/' '-_' | tr -d '=')/session/ses_rev" "web UI url under the worktree"
   ! printf '%s' "$out" | grep -q ses_sub && ok || bad "subagent sessions hidden"
   assert_match "$(cat "$TEST_CTRL/curl.log")" "session/status $wt" "asked the server about that worktree"
-  # A client process for the worktree makes the same busy session a live one.
-  (exec -a "opencode run --dir $wt --agent bead-reviewer" bash -c "sleep 30; true") & cpid=$!
+  # A client process for the worktree makes the same busy session a live one: a bash
+  # under that name, blocked on opening a fifo nobody writes (no child, so the kill ends
+  # it and nothing outlives the case; a renamed sleep would not do — coreutils on NixOS
+  # dispatches on argv[0]).
+  mkfifo "$T/client"; (exec -a "opencode run --dir $wt --agent bead-reviewer" bash -c 'read -r <"$0" || true' "$T/client") & cpid=$!
   out=$(sup status "$REPO"); kill $cpid
   assert_match "$out" "busy    bead-reviewer" "busy with a client: not an orphan"
   # Without attach there is no server to ask, so no session lines at all.
@@ -479,6 +454,8 @@ case_status_json_and_ui() {
   # Three queues and two lanes, laid out by hand: t-1 in the merge queue (red), t-2, t-3
   # and t-7 ready (t-3 has failed once, so t-2 goes first; t-7 twice, so it is on the
   # last stage, Claude's), t-4 waiting for review, t-6 on the dev lane, t-5 parked.
+  # The JSON's shape from this layout is a unit test (status::tests); here, that the
+  # binary reads bd and the attached server into it, and what the UI does with it.
   setup true auto stub/reviewer "$(printf 'attach = "http://oc.test:4096"\n%s' "$(stages stub/worker:stub/reviewer:2 claude/opus::1)")"
   R=$BEAD_LOOP_STATE/repo; wt=$R/wt/t-1; mkdir -p "$wt" "$R/failures" "$R/inflight" "$R/review"; echo 2 >"$R/failures/t-1"; echo 1 >"$R/failures/t-3"; echo 2 >"$R/failures/t-7"
   printf 'round 1 (stub/worker): BLOCKED: which flag?\nround 2 (stub/worker): REJECT: x.ts:1 wrong\n' >"$R/failures/t-7.notes"
@@ -495,20 +472,13 @@ case_status_json_and_ui() {
   # t-8: a decision — a question for the human, type decision (a needs-human label does the same).
   jq '. + [{id:"t-8", title:"Which ntfy topic?", description:"The loop can post to ntfy. Which topic, and for which events?", status:"open", priority:1, issue_type:"decision", labels:[]}]' "$BD_STATE/issues.json" >"$BD_STATE/i.tmp" && mv "$BD_STATE/i.tmp" "$BD_STATE/issues.json"
   j=$(sup --json status "$REPO")
-  assert_eq "$(printf '%s' "$j" | jq -r '.slug, .attach, .stages[0].worker, .stages[0].failures, .lanes.dev.id, (.lanes.review // "idle")' | tr '\n' ' ')" "repo http://oc.test:4096 stub/worker 2 t-6 idle " "config and lanes"
+  assert_eq "$(printf '%s' "$j" | jq -r '.slug, .attach, .lanes.dev.id, (.queues.dev | map(.id) | join(",")), (.queues.review[0].title), (.queues.merge[0].red), (.parked | map(.id) | join(","))' | tr '\n' ' ')" \
+    "repo http://oc.test:4096 t-6 t-2,t-3,t-7 Fourth true t-5 " "bd's beads laid into the queues, the lanes and parked"
   assert_eq "$(printf '%s' "$j" | jq -r '.decisions | map("\(.id):\(.title)") | join(" ")')" "t-8:Which ntfy topic?" "decisions: the open decision beads, with the question"
   assert_eq "$(printf '%s' "$j" | jq -r '.queues.dev | map(.id) | index("t-8") // "absent"')" absent "a decision is not work for the lanes"
-  assert_eq "$(printf '%s' "$j" | jq -r '.queues.dev | map("\(.id):\(.failures):\(.stage.worker)") | join(" ")')" "t-2:0:stub/worker t-3:1:stub/worker t-7:2:claude/opus" "dev queue in order: fewest failures first, with its stage"
-  assert_eq "$(printf '%s' "$j" | jq -r '(.queues.dev | map("\(.id):\(.history | length)") | join(" ")), .queues.dev[2].history[1]' | tr '\n' ' ')" "t-2:0 t-3:0 t-7:2 round 2 (stub/worker): REJECT: x.ts:1 wrong " "history: the lines of failures/ID.notes, [] without one"
-  assert_eq "$(printf '%s' "$j" | jq -r '.queues.review | map("\(.id):\(.title)") | join(" ")')" "t-4:Fourth" "review queue"
-  assert_eq "$(printf '%s' "$j" | jq -c '.queues.merge[0] | [.id, .red, .adopted, .failures]')" '["t-1",true,false,2]' "merge queue with its markers"
-  assert_eq "$(printf '%s' "$j" | jq -r '.parked | map(.id) | join(" ")')" "t-5" "parked = in_progress minus the queues and lanes"
-  assert_eq "$(printf '%s' "$j" | jq -r '.parked[0].why | "\(.when) \(.what)"')" "2026-09-18T17:05+00:00 stages exhausted after REJECT: x.ts:1 wrong" "why it is parked: the last note the loop left"
   assert_eq "$(printf '%s' "$j" | jq -r '.worktrees[0] | "\(.id) \(.failures) \(.sessions[0].state) \(.sessions[0].model) \(.sessions[0].url)"')" \
-    "t-1 2 orphan slow/m http://oc.test:4096/$(printf '%s' "$wt" | base64 -w0 | tr '+/' '-_' | tr -d '=')/session/ses_rev" "worktree with its session"
-  assert_eq "$(printf '%s' "$j" | jq -r '.queues.merge[0].stage.worker // "n/a"')" "n/a" "merge rows carry no stage"
+    "t-1 2 orphan slow/m http://oc.test:4096/$(printf '%s' "$wt" | base64 -w0 | tr '+/' '-_' | tr -d '=')/session/ses_rev" "worktree with its session from the server"
   assert_match "$(sup status "$REPO")" "dev lane:    t-6 Sixth" "text status names the lane's bead"
-  assert_match "$(sup status "$REPO")" "1   t-2            0× stub/worker    Second" "text status orders the dev queue"
   command -v node >/dev/null || { echo "  (no node: ui server not exercised)"; return; }
   # The UI server: the page, the state it reads, and the two guards on its levers.
   port=$((20000 + RANDOM % 20000))
@@ -538,11 +508,12 @@ case_status_json_and_ui() {
   assert_match "$log" '<input type="checkbox"  onchange="setSys(this.checked)">systemd lines</label>' "the systemd lines box, unchecked"
   assert_match "$log" '<span class="pick">repo: dev: bead t-2 to stub/worker</span>' "the loop's line shown"
   assert_eq "$(printf '%s' "$log" | grep -c 'class="sys"')" 0 "systemd's lines hidden"
-  assert_match "$(timeout 5 "$REAL_CURL" -sN -m 4 "http://127.0.0.1:$port/api/events" | head -1)" '^data: {"now":[0-9]*,"repos":\[{"slug":"repo"' "the event stream opens with the state"
+  # The stream's first event comes at once; -m 1 is only so curl lets go of the socket.
+  assert_match "$(timeout 3 "$REAL_CURL" -sN -m 1 "http://127.0.0.1:$port/api/events" | head -1)" '^data: {"now":[0-9]*,"repos":\[{"slug":"repo"' "the event stream opens with the state"
   # Every button the page renders for this state must be a button: the onclick parses as JS.
   node "$HERE/ui-onclicks.js" "$T/state.json" >"$T/onclicks.txt" 2>&1 && ok || bad "onclick attributes: $(tail -3 "$T/onclicks.txt" | tr '\n' ' ')"
   # The second page gets the last state replayed at once, with a fresh now in front: still one JSON object.
-  assert_eq "$(timeout 5 "$REAL_CURL" -sN -m 4 "http://127.0.0.1:$port/api/events" | head -1 | sed 's/^data: //' | jq -r '.repos[0].slug, (.now | type)' | tr '\n' ' ')" "repo number " "the replayed state is valid JSON"
+  assert_eq "$(timeout 3 "$REAL_CURL" -sN -m 1 "http://127.0.0.1:$port/api/events" | head -1 | sed 's/^data: //' | jq -r '.repos[0].slug, (.now | type)' | tr '\n' ' ')" "repo number " "the replayed state is valid JSON"
   assert_match "$("$REAL_CURL" -s -m 3 -X POST -H 'content-type: application/json' -d '{"name":"review","paused":true}' "http://127.0.0.1:$port/api/lane")" '"paused":true' "pause a lane from the page"
   assert_file "$BEAD_LOOP_STATE/pause.review" "the marker the lane checks"
   assert_eq "$("$REAL_CURL" -sf -m 3 "http://127.0.0.1:$port/api/state" | jq -r '.repos[0].paused.review')" true "state says so"
@@ -620,28 +591,18 @@ case_stale_assignee_does_not_block() {
   assert_eq "$(bead .status)" in_progress "claimed"
   assert_branch bead/t-1 "and pushed"
 }
-case_attempts_carry_over() {
-  # The older attempts/ counter moves into failures/ file by file, even when failures/
-  # already exists (a status run makes it), and the old directory goes.
-  setup; R=$BEAD_LOOP_STATE/repo; mkdir -p "$R/attempts" "$R/failures"
-  echo 2 >"$R/attempts/t-1"; echo "round 1 (x): y" >"$R/attempts/t-1.notes"; echo 5 >"$R/failures/t-9"
-  sup status "$REPO" >/dev/null
-  assert_eq "$(cat "$R/failures/t-1") $(cat "$R/failures/t-9")" "2 5" "both counters in failures/"
-  assert_file "$R/failures/t-1.notes" "the history too"; assert_nofile "$R/attempts" "attempts/ gone"
-}
-
 case_review_lane_waits_for_dev_to_claim() {
   # At a tick's start the dev lane spends a moment picking before it claims; the review
   # lane, finding its queue empty and no lane marker yet, must not conclude the tick is
   # over. It leaves only after the dev lane has looked idle three checks in a row.
-  setup; echo 1 >"$TEST_CTRL/slow-ready"
-  LANE_WAIT=0.5 sup tick
+  setup; echo 0.3 >"$TEST_CTRL/slow-ready"
+  LANE_WAIT=0.2 sup tick
   assert_eq "$(calls)" "bead-worker bead-reviewer" "review waited, then took the bead"
   ! grep -q 'going round again' "$T/sup.log" && ok || bad "no second round needed"
   # A hand-run review lane holding its lock when the tick starts: the tick's review lane
   # skips, dev fills the review queue and leaves; the tick notices work is still queued
   # and runs the lanes again rather than leave it for later.
-  setup; echo 1 >"$TEST_CTRL/slow-ready"; mkdir -p "$BEAD_LOOP_STATE"
+  setup; echo 0.3 >"$TEST_CTRL/slow-ready"; mkdir -p "$BEAD_LOOP_STATE"
   ( exec 8>"$BEAD_LOOP_STATE/lock.review"; flock 8; sleep 0.5 ) &
   sleep 0.1; LANE_WAIT=0.1 sup tick; wait
   assert_eq "$(calls)" "bead-worker bead-reviewer" "reviewed within the same tick"
@@ -827,14 +788,18 @@ case_merge_queue_holds() {
   set_checks '[{"context":"ci","state":"SUCCESS"}]'; sup reconcile "$REPO"; assert_eq "$(bead .status)" closed "green later: closed"
   # manual: green is yours to merge.
   setup true manual; sup work "$REPO"; set_checks '[{"context":"ci","state":"SUCCESS"}]'; sup reconcile "$REPO"
+  assert_eq "$(jq -r .state "$TEST_CTRL/pr.json")" OPEN "manual: green stays open"
+  assert_eq "$(bead .status)" in_progress "manual: bead waits for you"
   assert_match "$(cat "$BEAD_LOOP_STATE/repo/held/t-1")" "yours to merge" "held for you"
   # auto: GitHub refuses the merge (branch protection) — held, not retried into the void.
   setup; sup work "$REPO"; set_checks '[{"context":"ci","state":"SUCCESS"}]'; touch "$TEST_CTRL/merge-refused"; sup reconcile "$REPO"
   assert_match "$(cat "$BEAD_LOOP_STATE/repo/held/t-1")" "GitHub refuses the merge (CLEAN)" "held"
   assert_eq "$(bead .status)" in_progress "waits"
   rm "$TEST_CTRL/merge-refused"; sup reconcile "$REPO"; assert_eq "$(bead .status)" closed "protection lifted: merged"
-  # no checks reported: held (the note the bash left, now in the human list too).
+  # no checks reported: not merged, noted, held (the human list too).
   setup; sup work "$REPO"; sup reconcile "$REPO"
+  assert_eq "$(jq -r .state "$TEST_CTRL/pr.json")" OPEN "no checks: not merged"
+  assert_match "$(bead .notes)" "no CI checks" "noted"
   assert_match "$(cat "$BEAD_LOOP_STATE/repo/held/t-1")" "reports no CI checks" "held"
 }
 case_one_place_invariant() {
@@ -861,9 +826,10 @@ case_run_is_resident() {
   # is worked as soon as the bell rings; TERM ends it with 143.
   setup; jq '.[0].labels=[]' "$BD_STATE/issues.json" >"$BD_STATE/i.tmp" && mv "$BD_STATE/i.tmp" "$BD_STATE/issues.json"
   setsid "$SUP" run 2>>"$T/sup.log" & pid=$!
-  sleep 1.5
+  for _ in $(seq 50); do grep -q 'dev: nothing ready' "$T/sup.log" 2>/dev/null && break; sleep 0.1; done
   assert_eq "$(calls)" "" "nothing to do: nothing ran"
   assert_match "$(cat "$T/sup.log")" "bead-loop resident" "said so"
+  assert_match "$(cat "$T/sup.log")" "dev: nothing ready with label" "the dev lane looked and is blocked on the bell"
   jq '.[0].labels=["delegate:local"]' "$BD_STATE/issues.json" >"$BD_STATE/i.tmp" && mv "$BD_STATE/i.tmp" "$BD_STATE/issues.json"
   "$SUP" wake 2>>"$T/sup.log"
   for _ in $(seq 100); do grep -q '^bead-reviewer' "$TEST_CTRL/calls" 2>/dev/null && [ -e "$BEAD_LOOP_STATE/repo/inflight/t-1" ] && break; sleep 0.1; done
@@ -965,10 +931,31 @@ DONE=
 trap 'if [ -z "$DONE" ]; then printf "\n  ABORT in %s (exit %s); the supervisor'"'"'s last lines:\n" "${CASE:-?}" "$?"; tail -n 15 "${T:-/nonexistent}/sup.log" 2>/dev/null | sed "s/^/    /"; fi' EXIT
 cases=$(declare -F | awk '{print $3}' | grep '^case_')
 [ $# -gt 0 ] && cases=$(printf 'case_%s\n' "$@")
-for CASE in $cases; do
-  printf '%s\n' "$CASE"; "$CASE"
-  [ -n "${KEEP:-}" ] || rm -rf "$T"
-done
-DONE=1
+jobs=${JOBS:-$(nproc 2>/dev/null || echo 4)}
+if [ "$jobs" -gt 1 ] && [ "$(printf '%s\n' "$cases" | wc -l)" -gt 1 ]; then
+  # Side by side: this script once per case, each into its own file, then the outputs in
+  # the cases' order — the case's line, its FAIL lines, its count — summed up here. A
+  # case that died outside an assertion (set -e) has no count line and is a failure; its
+  # own ABORT lines are in its file.
+  out=$(mktemp -d); DONE=1; trap 'rm -rf "$out"' EXIT
+  printf '%s\n' "$cases" | sed 's/^case_//' \
+    | xargs -P "$jobs" -I{} bash -c 'JOBS=1 "$1" "$2" >"$3/$2.out" 2>&1 || true' _ "$HERE/run.sh" {} "$out"
+  for CASE in $cases; do
+    f=$out/${CASE#case_}.out
+    if grep -q ' passed, .* failed$' "$f"; then
+      grep -v ' passed, .* failed$' "$f" | grep -v '^$'
+      read -r p _ n _ < <(tail -1 "$f"); PASS=$((PASS + p)); FAIL=$((FAIL + n))
+    else
+      cat "$f"; printf '  FAIL %s: died without a count\n' "$CASE"; FAIL=$((FAIL + 1))
+    fi
+  done
+else
+  for CASE in $cases; do
+    t0=$(date +%s%N); "$CASE"
+    printf '%-48s %5d ms\n' "$CASE" "$(( ($(date +%s%N) - t0) / 1000000 ))"
+    [ -n "${KEEP:-}" ] || rm -rf "$T"
+  done
+  DONE=1
+fi
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" = 0 ]

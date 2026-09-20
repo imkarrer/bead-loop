@@ -166,10 +166,18 @@ pub fn home() -> PathBuf {
 
 /// `~` and `~/x` to the home directory; anything else as is.
 pub fn expand_tilde(s: &str) -> PathBuf {
+    if s.starts_with('~') {
+        expand_tilde_in(s, &home())
+    } else {
+        PathBuf::from(s)
+    }
+}
+
+pub fn expand_tilde_in(s: &str, home: &Path) -> PathBuf {
     if s == "~" {
-        home()
+        home.to_path_buf()
     } else if let Some(rest) = s.strip_prefix("~/") {
-        home().join(rest)
+        home.join(rest)
     } else {
         PathBuf::from(s)
     }
@@ -221,5 +229,28 @@ mod tests {
         assert_eq!(tail_lines("a\nb\nc", 2), "b\nc");
         assert_eq!(cut_bytes("héllo", 2), "h");
         assert_eq!(cut_bytes("abc", 10), "abc");
+        assert_eq!(first_line("x\ny"), "x");
+        assert_eq!(first_line(""), "");
+    }
+    #[test]
+    fn tilde_is_the_home_directory() {
+        let h = Path::new("/home/t");
+        assert_eq!(expand_tilde_in("~", h), PathBuf::from("/home/t"));
+        assert_eq!(expand_tilde_in("~/repo", h), PathBuf::from("/home/t/repo"));
+        assert_eq!(expand_tilde_in("/abs/~x", h), PathBuf::from("/abs/~x"), "only a leading ~ expands");
+        assert_eq!(expand_tilde_in("~user/x", h), PathBuf::from("~user/x"), "~user is not ours to expand");
+    }
+    #[test]
+    fn touch_makes_and_bumps() {
+        let d = std::env::temp_dir().join(format!("bl-touch-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&d);
+        let f = d.join("wake");
+        touch(&f);
+        assert!(f.exists());
+        write_file(&f, "x");
+        touch(&f);
+        assert_eq!(std::fs::read_to_string(&f).unwrap(), "x", "a bump keeps the content");
+        assert!(mtime(&f) > 0);
+        let _ = std::fs::remove_dir_all(&d);
     }
 }

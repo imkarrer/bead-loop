@@ -80,25 +80,35 @@ fn failing_checks(view: &Value) -> String {
         .unwrap_or_default()
 }
 
-/// `close_merged ID INFLIGHT URL VIEW`: the bead is done; say what CI said at the merge.
-/// If bd will not close it — an adopted bead may already be closed, that is fine; a bd
-/// error is not — the inflight file stays and the bead is held, rather than dropped.
-pub fn close_merged(repo: &Repo, id: &str, url: &str, view: &Value) {
+/// `ci=SUCCESS build=FAILURE`, what the close reason quotes; "none reported" without checks.
+pub fn checks_at_merge(view: &Value) -> String {
     let checks: Vec<String> = view
         .get("statusCheckRollup")
         .and_then(|v| v.as_array())
         .map(|a| {
             a.iter()
                 .map(|c| {
-                    format!("{}={}", c.get("context").or_else(|| c.get("name")).and_then(|v| v.as_str()).unwrap_or("null"), {
-                        let s = c.get("conclusion").or_else(|| c.get("state")).and_then(|v| v.as_str()).unwrap_or("null");
-                        s
-                    })
+                    format!(
+                        "{}={}",
+                        c.get("context").or_else(|| c.get("name")).and_then(|v| v.as_str()).unwrap_or("null"),
+                        c.get("conclusion").or_else(|| c.get("state")).and_then(|v| v.as_str()).unwrap_or("null")
+                    )
                 })
                 .collect()
         })
         .unwrap_or_default();
-    let checks = if checks.is_empty() { "none reported".to_string() } else { checks.join(" ") };
+    if checks.is_empty() {
+        "none reported".to_string()
+    } else {
+        checks.join(" ")
+    }
+}
+
+/// `close_merged ID INFLIGHT URL VIEW`: the bead is done; say what CI said at the merge.
+/// If bd will not close it — an adopted bead may already be closed, that is fine; a bd
+/// error is not — the inflight file stays and the bead is held, rather than dropped.
+pub fn close_merged(repo: &Repo, id: &str, url: &str, view: &Value) {
+    let checks = checks_at_merge(view);
     let closed = bd_close(repo, id, &format!("bead-loop: {url} merged; checks at merge: {checks}"));
     if !closed && !repo.mark(id, "adopted").exists() {
         // Was it closed already (by hand)? Then fine. Otherwise keep the PR in the queue.
@@ -410,8 +420,55 @@ mod tests {
     fn verdicts() {
         let v = |c: Value| verdict(&serde_json::json!({"statusCheckRollup": c}));
         assert_eq!(v(serde_json::json!([])), "nocheck");
+        assert_eq!(verdict(&serde_json::json!({})), "nocheck", "no rollup at all");
         assert_eq!(v(serde_json::json!([{"context":"ci","state":"SUCCESS"},{"__typename":"CheckRun","conclusion":"SUCCESS"}])), "green");
-        assert_eq!(v(serde_json::json!([{"context":"a","state":"SUCCESS"},{"context":"b","state":"PENDING"}])), "pending");
+        assert_eq!(
+            v(serde_json::json!([{"context":"a","state":"SUCCESS"},{"context":"b","state":"PENDING"}])),
+            "pending",
+            "one pending check holds the merge"
+        );
         assert_eq!(v(serde_json::json!([{"context":"ci","state":"FAILURE"}])), "red");
+        assert_eq!(
+            v(serde_json::json!([{"name":"build","conclusion":"SUCCESS"},{"name":"lint","conclusion":"CANCELLED"}])),
+            "red",
+            "red beats green"
+        );
+        assert_eq!(
+            v(serde_json::json!([{"name":"x","conclusion":"SKIPPED"},{"name":"y","conclusion":"NEUTRAL"}])),
+            "green",
+            "skipped and neutral are green"
+        );
+        assert_eq!(v(serde_json::json!([{"name":"x","status":"IN_PROGRESS"}])), "pending", "a check run still running");
+    }
+    #[test]
+    fn what_the_notes_quote() {
+        let view = serde_json::json!({"statusCheckRollup": [{"context":"ci","state":"FAILURE"},{"name":"build","conclusion":"SUCCESS"},{"name":"lint","conclusion":"TIMED_OUT"}]});
+        assert_eq!(failing_checks(&view), "ci, lint", "the failing checks by name");
+        assert_eq!(checks_at_merge(&view), "ci=FAILURE build=SUCCESS lint=TIMED_OUT");
+        assert_eq!(checks_at_merge(&serde_json::json!({"statusCheckRollup": []})), "none reported");
+        assert_eq!(failing_checks(&serde_json::json!({})), "");
+    }
+    #[test]
+    fn say_repeats_itself_only_when_loud() {
+        set_quiet(false);
+        say("k", "a".into());
+        set_quiet(true);
+        say("k2", "b".into());
+        say("k2", "b".into()); // silent: the same line for that key
+        say("k2", "c".into());
+        let g = LAST.lock().unwrap();
+        assert_eq!(g.as_ref().unwrap().get("k2").map(String::as_str), Some("c"));
+        assert!(g.as_ref().unwrap().get("k").is_none(), "loud lines are not remembered");
+        drop(g);
+        set_quiet(false);
+    }
+    #[test]
+    fn green_since_is_a_marker_made_once() {
+        let d = crate::config::scratch("green-since");
+        let repo = crate::config::test_repo(&d, &["a"]);
+        let first = green_since(&repo, "t-1");
+        assert!(first > 0 && repo.mark("t-1", "green").exists());
+        assert_eq!(green_since(&repo, "t-1"), first, "the second look keeps the first time");
+        let _ = std::fs::remove_dir_all(&d);
     }
 }

@@ -473,6 +473,30 @@ mod tests {
         assert_eq!(repos_in_order(&repos, &t, 1), vec![PathBuf::from("/c"), PathBuf::from("/b"), PathBuf::from("/a")]);
         crate::util::write_file(&t.join("priority"), "b\n");
         assert_eq!(repos_in_order(&repos, &t, 0)[0], PathBuf::from("/b"));
+        assert!(repos_in_order(&[], &t, 3).is_empty());
+        let _ = std::fs::remove_dir_all(&t);
+    }
+    #[test]
+    fn a_held_lock_is_a_skip() {
+        let t = crate::config::scratch("lock");
+        let p = t.join("lock");
+        let first = try_lock(&p).expect("the first taker holds it");
+        assert!(try_lock(&p).is_none(), "a second taker is refused while it is held");
+        drop(first);
+        assert!(try_lock(&p).is_some(), "and gets it once the holder is gone");
+        let _ = std::fs::remove_dir_all(&t);
+    }
+    #[test]
+    fn priority_is_a_file_with_the_repo() {
+        let t = crate::config::scratch("priority");
+        assert!(priority_repo(&t).is_none());
+        set_priority(&t, Some("/nowhere/repo"));
+        assert_eq!(priority_repo(&t), Some(PathBuf::from("/nowhere/repo")), "a path that does not resolve is kept as given");
+        assert!(t.join("wake").exists(), "the bell rang");
+        set_priority(&t, Some("none"));
+        assert!(priority_repo(&t).is_none(), "none clears it");
+        crate::util::write_file(&t.join("priority"), "  \n");
+        assert!(priority_repo(&t).is_none(), "an empty file is no priority");
         let _ = std::fs::remove_dir_all(&t);
     }
 }
