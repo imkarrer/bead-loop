@@ -246,8 +246,8 @@ anything, and the web UI url that opens it. Click the url; no need to know how t
 sessions under the worktree's path, base64url-encoded — not under the repo, which is why
 the repo's project view looks idle while the loop is busy).
 
-`busy` with a stale "ago" is the slow model thinking: the 80B takes minutes before its
-first token. **`ORPHAN`** is a session the server calls busy with no `opencode run` client
+`busy` with a stale "ago" is the slow model thinking: a cold 20k-token prompt is ~2.5
+minutes of prefill on the 80B before its first token. **`ORPHAN`** is a session the server calls busy with no `opencode run` client
 left on this box: with `attach`, killing the client does not stop the server-side session,
 and on a one-model box it starves the next review. The loop aborts its own sessions
 on the server when the client dies — on `worker_timeout`, on `systemctl stop`/`restart`
@@ -389,9 +389,15 @@ check green.
 - Two model servers on two boxes, so two lanes: the GPU implements the next bead while
   the CPU reviews the last, and each lane has one bead at a time. One PR in CI at a time by
   default (`max_inflight`), because CI on a shared queue is the other scarce thing.
-- The 80B at ~3 tok/s is too slow to sit in an agentic edit loop and too good to leave
-  out; one review call per round is where it pays. First live result: it rejected a diff
-  the 30B had declared done, for duplicating entries that already existed.
+- The 80B generates at 10–12 tok/s on its own and prefills at ~140 tok/s (measured from
+  the review logs' step timestamps, 19 Sep 2026; agent-hub's docs/prefill-tuning.md has
+  the box-side numbers): a fresh 20k-token diff is ~2.5 minutes before the first token,
+  and every agentic turn would pay that again. Too slow to sit in an edit loop, too good
+  to leave out; one review call per round is where it pays, and the server's prompt cache
+  makes each later turn of that one call a 10 ms prefix load. It halves when something
+  else is on the same backend — `coder` runs two slots since 18 Sep, and the `instruct`
+  model shares the cores — which is what a "3 tok/s" reading is. First live result: it
+  rejected a diff the 30B had declared done, for duplicating entries that already existed.
 - A send-back is a failure, wherever it comes from — the gate, the reviewer, CI — and the
   failure count alone picks the stage. One counter, one table, no special cases.
 - Every claim is checked by something that is not the model that made it: the gate,
