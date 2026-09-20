@@ -193,6 +193,19 @@ pub fn pick_runnable(repo: &Repo, which: &str, lane: Option<&LaneSpec>) -> Optio
     pick
 }
 
+/// Drop the marker of whichever lane is on this bead — found by its content, not by a
+/// fixed name: the lanes are named by the config (gpu, cpu, claude), and two rounds in
+/// one repo must not share a file. A bead on no lane (the watcher's send-back of a red
+/// PR) touches nothing, so a running round keeps its marker.
+fn clear_lane_of(repo: &Repo, id: &str) {
+    for name in repo.lane_files() {
+        if repo.lane_bead(&name).as_deref() == Some(id) {
+            repo.lane_clear(&name);
+            signals::clear_current(&name);
+        }
+    }
+}
+
 /// `hold`: the round could not happen for a reason that is not the bead's. The bead
 /// stays where it is (open: the dev queue; review/ID: the review queue), the reason on
 /// the bead once, and the pick skips it for HOLD_BACKOFF seconds.
@@ -202,10 +215,7 @@ pub fn hold(repo: &Repo, id: &str, wt: Option<&Path>, why: &str) {
     if repo.hold(id, why) {
         bd_note(repo, id, &format!("bead-loop {}: held, no failure charged: {why}", date_iminutes()));
     }
-    repo.lane_clear("dev");
-    repo.lane_clear("review");
-    signals::clear_current("dev");
-    signals::clear_current("review");
+    clear_lane_of(repo, id);
     if let Some(wt) = wt {
         // the fresh worktree of a round that never ran is not worth keeping
         if !branch_exists(repo, &format!("bead/{id}")) {
@@ -226,10 +236,7 @@ pub fn send_back(repo: &Repo, id: &str, wt: &Path, keep: bool, note: &str, model
     repo.set_failures(id, n);
     let one_line: String = note.replace('\n', " ");
     append_file(&repo.notes_path(id), &format!("round {n} ({model}): {}\n", cut_bytes(&one_line, 2000)));
-    repo.lane_clear("dev");
-    repo.lane_clear("review");
-    signals::clear_current("dev");
-    signals::clear_current("review");
+    clear_lane_of(repo, id);
     repo.release(id);
     if !keep {
         worktree_remove(repo, wt);
@@ -471,13 +478,16 @@ pub fn dev_one(repo: &Repo, opts: &Opts, id: Option<&str>, last_id: &mut Option<
     }
 
     bd_claim(repo, &id);
-    repo.lane_set("dev", &id);
+    // The marker carries the lane's name (gpu, cpu, claude — or dev, the default pair's),
+    // so status shows the lane on it and two lanes in one repo never share a file.
+    let lane_name = lane.map(|l| l.name.as_str()).unwrap_or("dev");
+    repo.lane_set(lane_name, &id);
     if !git_ok(&repo.repo, &["fetch", "-q", "origin", &repo.base]) {
         hold(repo, &id, None, &format!("git fetch origin {} failed", repo.base));
         return Pass::Worked;
     }
     abort_sessions(repo, &wt); // a killed earlier round may have left one running here
-    signals::set_current("dev", &repo.attach, &repo.slug, Some(wt.clone()), Some(repo.lane_path("dev")));
+    signals::set_current(lane_name, &repo.attach, &repo.slug, Some(wt.clone()), Some(repo.lane_path(lane_name)));
     let kept = wt.is_dir() && resumed && git_ok(&wt, &["rev-parse", "-q", "--verify", "HEAD"]);
     if !kept {
         if wt.exists() {
@@ -574,8 +584,8 @@ pub fn dev_one(repo: &Repo, opts: &Opts, id: Option<&str>, last_id: &mut Option<
     let done = last_line_starting(&final_text, "DONE:").unwrap_or_default();
     write_file(&repo.review_path(&id), &format!("{done}\n"));
     repo.release(&id);
-    repo.lane_clear("dev");
-    signals::clear_current("dev");
+    repo.lane_clear(lane_name);
+    signals::clear_current(lane_name);
     log(&format!(
         "{}: {id}: gate passed → review queue ({})",
         repo.slug,
@@ -622,8 +632,9 @@ pub fn review_one(repo: &Repo, opts: &Opts, id: Option<&str>, lane: Option<&Lane
         git_must(&repo.repo, &["worktree", "add", "-q", &wt.to_string_lossy(), &branch]);
         log(&format!("{}: {id}: worktree rebuilt from {branch} for the review", repo.slug));
     }
-    repo.lane_set("review", &id);
-    signals::set_current("review", &repo.attach, &repo.slug, Some(wt.clone()), Some(repo.lane_path("review")));
+    let lane_name = lane.map(|l| l.name.as_str()).unwrap_or("review");
+    repo.lane_set(lane_name, &id);
+    signals::set_current(lane_name, &repo.attach, &repo.slug, Some(wt.clone()), Some(repo.lane_path(lane_name)));
     let mut verdict = String::new();
     if !review_model.is_empty() {
         log(&format!("{}: review: {id} by {review_model} ({n} failures)", repo.slug));
@@ -678,8 +689,8 @@ pub fn review_one(repo: &Repo, opts: &Opts, id: Option<&str>, lane: Option<&Lane
     if opts.local {
         log(&format!("{}: --local: branch {branch} is ready in {}; nothing pushed", repo.slug, wt.display()));
         bd_note(repo, &id, &format!("bead-loop: worked locally on {branch} (not pushed)"));
-        repo.lane_clear("review");
-        signals::clear_current("review");
+        repo.lane_clear(lane_name);
+        signals::clear_current(lane_name);
         return Pass::Worked;
     }
 
@@ -737,8 +748,8 @@ pub fn review_one(repo: &Repo, opts: &Opts, id: Option<&str>, lane: Option<&Lane
         crate::merge::hand_to_pipeline(repo, &id, &num, &url);
     }
     let _ = git(&repo.repo, &["worktree", "remove", "--force", &wt.to_string_lossy()]);
-    repo.lane_clear("review");
-    signals::clear_current("review");
+    repo.lane_clear(lane_name);
+    signals::clear_current(lane_name);
     repo.wake();
     Pass::Worked
 }

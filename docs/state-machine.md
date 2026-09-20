@@ -21,7 +21,7 @@ The loop keeps no state of its own beyond files; a bead's state is a function of
 | `$RS/failures/ID` | the failure count → the stage (`stage_for`); `.notes` the history |
 | `$RS/review/ID` | in the review queue (holds the worker's last line) |
 | `$RS/inflight/ID` | in the merge queue (holds the PR url); beside it `.ID.adopted`, `.ID.red`, `.ID.nocheck`, `.ID.fixing` |
-| `$RS/lane.dev`, `$RS/lane.review` | the bead each lane is on |
+| `$RS/lane.NAME` | the bead the lane NAME is on (`dev`, `review`; or the `[[lanes]]` names: `gpu`, `cpu`, `claude`) |
 | `$RS/wt/ID`, branch `bead/ID` (local, origin) | the work |
 | GitHub | the PR: none / OPEN (checks pending, green, red, none; mergeState CLEAN, BEHIND, DIRTY, BLOCKED) / MERGED / CLOSED |
 | the servers | opencode session running or orphaned; devbox, acbox, claude, gh reachable or not |
@@ -52,9 +52,9 @@ stateDiagram-v2
 | --- | --- | --- |
 | **waiting** | bd `open` + label, a blocker not `closed` | bd, when the blocker closes (a merge, or a human) |
 | **ready** | bd `open` + label, no blocker open; none of the markers below | the dev lane |
-| **dev** | `lane.dev = ID`, bd `in_progress`, `wt/ID` | the dev lane: to review, or back to ready |
+| **dev** | `lane.NAME = ID` (the lane on it), bd `in_progress`, `wt/ID` | the dev lane: to review, or back to ready |
 | **review** | `review/ID`, `wt/ID`, bd `in_progress` | the review lane |
-| **reviewing** | `review/ID` + `lane.review = ID` | the review lane: to merge, or back to ready |
+| **reviewing** | `review/ID` + `lane.NAME = ID` | the review lane: to merge, or back to ready |
 | **merge** | `inflight/ID` + PR OPEN, bd `in_progress` | the merge watcher: closed, or back to ready, or human |
 | **human** | bd `in_progress`, no marker, no worktree (*parked*) — or any queue state with a `held` flag (below) | you: answer, reopen, escalate, or the merge queue's own recovery |
 | **closed** | bd `closed` | terminal |

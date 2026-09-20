@@ -345,7 +345,7 @@ State lives in `~/.local/state/bead-loop/<repo>/`: `inflight/<id>` (the PR url),
 `logs/<id>.<stamp>.*` (setup, worker, gate, reviewer output per attempt), `wt/<id>`
 (the worktree while a bead is on a lane or waiting for review), `review/<id>` (the review
 queue: the worker's last words), `failures/<id>` (+ `.notes`, the history), `held/<id>`
-(the reason a bead waits), `lane.dev` / `lane.review` (the bead each lane is on); and
+(the reason a bead waits), `lane.<name>` (the bead the lane of that name is on); and
 beside them `wake` (the bell), `priority`, `pause.dev` / `pause.review`.
 
 ## Run

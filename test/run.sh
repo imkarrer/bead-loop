@@ -920,6 +920,25 @@ case_lanes_from_toml() {
   rc=0; sup pause gpu 2>>"$T/sup.log" || rc=$?; assert_eq "$rc" 1 "a lane the config does not name is refused"
   sup resume slow; : >"$TEST_CTRL/calls"; sup --serial tick
   assert_eq "$(grep -c ' stub/slow ' "$TEST_CTRL/calls")" 2 "resumed: t-1 went through on the slow lane"
+  # Mid-round, each lane's marker carries its own name and its bead: status shows both
+  # lanes busy, and nothing is written under the default pair's names — two rounds in
+  # one repo sharing lane.dev left the second to erase the first, and the page reading
+  # only the configured names showed every lane idle while both models were working.
+  setup true auto stub/fast "$(stages stub/fast:stub/fast:1 stub/slow:stub/slow:1)"; echo hang >"$TEST_CTRL/worker"
+  printf '[[lanes]]\nname = "fast"\nmodels = ["stub/fast"]\n[[lanes]]\nname = "slow"\nmodels = ["stub/slow"]\n' >>"$BEAD_LOOP_CONFIG/config.toml"
+  mkdir -p "$BEAD_LOOP_STATE/repo/failures"; echo 1 >"$BEAD_LOOP_STATE/repo/failures/t-1"
+  jq '. + [{id:"t-2", title:"Second", description:"y", status:"open", priority:3, labels:["delegate:local"]}]' "$BD_STATE/issues.json" >"$BD_STATE/i.tmp" && mv "$BD_STATE/i.tmp" "$BD_STATE/issues.json"
+  setsid "$SUP" tick 2>>"$T/sup.log" & pid=$!
+  for _ in $(seq 100); do [ "$(grep -c '^bead-worker' "$TEST_CTRL/calls" 2>/dev/null)" = 2 ] && break; sleep 0.1; done
+  sleep 0.2
+  assert_eq "$(cat "$BEAD_LOOP_STATE/repo/lane.slow" 2>/dev/null)" t-1 "the slow lane's marker names its bead"
+  assert_eq "$(cat "$BEAD_LOOP_STATE/repo/lane.fast" 2>/dev/null)" t-2 "the fast lane's marker names its bead"
+  assert_nofile "$BEAD_LOOP_STATE/repo/lane.dev" "nothing under the default pair's name"
+  out=$(sup status "$REPO")
+  assert_match "$out" "slow lane:   *t-1 " "status: the slow lane is on t-1"
+  assert_match "$out" "fast lane:   *t-2 " "status: the fast lane is on t-2"
+  assert_eq "$(sup --json status "$REPO" | jq -r '(.queues.dev | length), (.parked | length)' | tr '\n' ' ')" "0 0 " "json: neither bead is queued or parked while on a lane"
+  kill -TERM -- -"$pid"; wait "$pid" 2>/dev/null || true
 }
 
 # ---- main ----------------------------------------------------------------------------
