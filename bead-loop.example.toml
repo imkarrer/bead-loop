@@ -9,6 +9,7 @@ merge = "auto"                         # auto: the next tick squash-merges once 
                                        # manual: PR only
 review_model = "acbox/coder"           # the senior model that judges the diff before the push; unset = no review
 on_exhaust = "repeat"                  # repeat: cycle the stages until it lands | park: leave it for you (default)
+# conflict_worker = "claude/sonnet"   # who rebases a PR that conflicts with the base (default: the last stage's worker)
 # adopt = true                         # open bead/* PRs from anyone join the loop and merge on green
 # max_inflight = 1                     # PRs in the merge queue before the dev lane pauses
 # merge_label = "automerge"            # the label merge = "pipeline" puts on each PR

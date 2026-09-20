@@ -14,7 +14,7 @@ case $2 in
     { [ -e "$TEST_CTRL/pr.json" ] && jq 'select(.state=="OPEN") | {number:7, headRefName:.head, url}' "$TEST_CTRL/pr.json"; jq ".[]" "$TEST_CTRL/extra-prs.json" 2>/dev/null; } | jq -s . | jq --arg h "$head" 'if $h == "" then . else map(select(.headRefName == $h)) end' | jq -r "$filter"
     ;;
   view)
-    if [ "$3" = 7 ]; then jq '{state, mergedAt: null, mergeStateStatus, statusCheckRollup, url}' "$TEST_CTRL/pr.json"
+    if [ "$3" = 7 ]; then jq '{state, mergedAt: null, mergeable: (.mergeable // "MERGEABLE"), mergeStateStatus, statusCheckRollup, url}' "$TEST_CTRL/pr.json"
     else jq --argjson n "$3" '.[] | select(.number==$n) | {state, mergedAt: null, mergeStateStatus: "CLEAN", statusCheckRollup: .checks, url}' "$TEST_CTRL/extra-prs.json"; fi ;;
   edit)
     # --add-label L: labels land in pr.json (or labels-extra for planted PRs). A test plants
