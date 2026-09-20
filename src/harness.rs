@@ -313,7 +313,7 @@ fn rejoin_poll() -> f64 {
 /// session is aborted and the run is 124, as `timeout` would have made it. Under a stop
 /// the run is 143 (the caller cuts the round short; the session goes on for the next
 /// process to rejoin).
-pub fn rejoin_session(repo: &Repo, sid: &str, logf: &Path, timeout: u64) -> AgentRun {
+pub fn rejoin_session(repo: &Repo, sid: &str, dir: &Path, logf: &Path, timeout: u64) -> AgentRun {
     let attach = repo.attach.as_str();
     let started_ms = crate::shell::curl_get(&format!("{attach}/session/{sid}"), None, 5)
         .and_then(|s| serde_json::from_str::<Value>(&s).ok())
@@ -326,9 +326,8 @@ pub fn rejoin_session(repo: &Repo, sid: &str, logf: &Path, timeout: u64) -> Agen
             rc = 143;
             break;
         }
-        let status = crate::shell::curl_get(&format!("{attach}/session/status"), None, 5).unwrap_or_default();
-        let v: Value = serde_json::from_str(&status).unwrap_or(Value::Null);
-        let busy = v.get(sid).is_some();
+        // By directory: the server answers `{}` to the bare status, whatever is running.
+        let busy = sessions_on(attach, dir).iter().any(|s| s == sid);
         if !busy {
             break;
         }
