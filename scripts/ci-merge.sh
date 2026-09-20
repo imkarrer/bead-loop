@@ -24,7 +24,10 @@ fail() { echo "automerge: $*" >&2; exit 1; }
 
 number=${BUILDKITE_PULL_REQUEST:-}
 sha=${BUILDKITE_COMMIT:-}
-repo=$(printf '%s' "${BUILDKITE_REPO:-}" | sed -nE 's|.*github\.com[:/]([^/]+/[^/]+?)(\.git)?$|\1|p')
+# owner/name from git@github.com:owner/name.git or https://github.com/owner/name(.git):
+# POSIX ERE has no lazy `+?`, so the .git comes off in a second step (build #2's
+# automerge got a 404 on "bead-loop.git").
+repo=$(printf '%s' "${BUILDKITE_REPO:-}" | sed -nE 's|.*github\.com[:/]([^/]+/[^/]+)$|\1|p' | sed 's/\.git$//')
 if [ -z "$number" ] || [ "$number" = false ] || [ -z "$sha" ] || [ -z "$repo" ]; then
   fail "not a pull request build (BUILDKITE_PULL_REQUEST=$number, BUILDKITE_REPO=${BUILDKITE_REPO:-})"
 fi

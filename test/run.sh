@@ -47,7 +47,9 @@ set_checks() {  # set_checks '[{"context":"ci","state":"SUCCESS"}]'
 ok() { PASS=$((PASS+1)); }
 bad() { FAIL=$((FAIL+1)); printf '  FAIL %s: %s\n' "$CASE" "$1"; }
 assert_eq() { [ "$1" = "$2" ] && ok || bad "$3: expected [$2] got [$1]"; }
-assert_match() { printf '%s' "$1" | grep -q -- "$2" && ok || bad "$3: [$1] lacks [$2]"; }
+# A here-string, not a pipe: `grep -q` leaves at the first match, and under pipefail a
+# printf still writing a large page (the UI case) then failed the assertion with SIGPIPE.
+assert_match() { grep -q -- "$2" <<<"$1" && ok || bad "$3: [$1] lacks [$2]"; }
 assert_file() { [ -e "$1" ] && ok || bad "$2: missing $1"; }
 assert_nofile() { [ ! -e "$1" ] && ok || bad "$2: unexpected $1"; }
 assert_branch() { git -C "$T/origin.git" show-ref -q "refs/heads/$1" && ok || bad "$2: origin has no branch $1"; }
