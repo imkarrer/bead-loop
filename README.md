@@ -126,8 +126,8 @@ agents/bead-reviewer.md   reviewer agent                   -> ~/.config/opencode
 bin/bead-loop-ui          the web UI server (node)         -> ~/.local/bin/
 ui/index.html             the page it serves
 systemd/                  the loop's service and its keeper timer, opencode-web and bead-loop-ui services,
-                          the deploy agent's service and config example
-scripts/                  ci.sh (the steps, with the cargo cache), ci-merge.sh (automerge), deploy.sh
+                          the deploy timer and its service
+scripts/                  ci.sh (the steps, with the cargo cache), ci-merge.sh (automerge), deploy.sh (the pull)
 bead-loop.example.toml    per-repo config                  -> <repo>/.bead-loop.toml
 .flox/env/manifest.toml   flox: every tool above, pinned, cargo included; services for a box without systemd
 docs/                     loop.mmd (the diagram above), state-machine.md (every state, every exit),
@@ -451,8 +451,8 @@ delegate:local` lists what the loop may take), `.bead-loop.toml` says how a work
 proven (the crate builds and its tests pass, the scripts pass shellcheck, the skills lint
 and the state-machine suite against the fresh binary — the same checks CI runs), and
 `~/src/bead-loop` is in the global `repos`. So an improvement to the loop is a bead, and
-the loop works it: worker, gate, reviewer, PR, CI, automerge, deploy. The pipeline's
-deploy step recycles the whole stack on this box after every merge to main
+the loop works it: worker, gate, reviewer, PR, CI, automerge, deploy. Within two minutes
+of a merge to main the deploy timer recycles the whole stack on this box
 (`scripts/deploy.sh`), and the running loop reopens any round that cut short with no
 failure charged — the gate, CI, the merge and recover are the guard. A bead that touches
 `src/` should say so in its acceptance criteria.
@@ -475,14 +475,17 @@ commit the build tested (the same contract as inquire-platform's automerge: the 
 read from the live PR, a moved head is refused, a removed label is a withdrawn request).
 The cargo registry and target directory live beside the agent's checkouts
 (`scripts/ci.sh`), so a build recompiles only what changed and a docs-only push costs a
-no-op build. On `main`, one more step, on queue **`devbox`** — an agent on the box the
-loop runs on, behind WSL's NAT where ac-box cannot reach it — runs `scripts/deploy.sh`:
-fast-forward the live checkout, `install.sh`, restart opencode-web, the UI and the loop.
-Setting that agent up once: `systemd/buildkite-agent.service` and
-`systemd/buildkite-agent.cfg.example` (the org's agent token goes in the copy at
-`~/.config/buildkite-agent/buildkite-agent.cfg`), then
-`systemctl --user enable --now buildkite-agent.service`. Two Buildkite settings make the
-rest add up: "Build pull requests" and "cancel intermediate builds".
+no-op build. Two Buildkite settings make the rest add up: "Build pull requests" and
+"cancel intermediate builds".
+
+**The deploy is a pull, not a step.** The box the loop runs on is behind WSL's NAT, where
+the shared agent on ac-box cannot reach it, so `bead-loop-deploy.timer` on that box runs
+`scripts/deploy.sh` every two minutes: one `git fetch`, and nothing more unless
+`origin/main` has moved past the live checkout — then fast-forward it, `install.sh`,
+restart opencode-web, the UI and the loop. A merge is running here within two minutes
+of landing. `scripts/deploy.sh --force` rebuilds and recycles what is checked out
+(`systemctl --user start bead-loop-deploy.service` is the same, on the timer's terms).
+The same shape as the homelab's own deploys, and for the same reason.
 
 ## Why this shape
 

@@ -6,9 +6,6 @@
       "bd": {
         "pkg-path": "beads"
       },
-      "buildkite-agent": {
-        "pkg-path": "buildkite-agent"
-      },
       "cargo": {
         "pkg-path": "cargo"
       },
@@ -162,93 +159,6 @@
       ],
       "outputs": {
         "out": "/nix/store/4976bpp0s5x209dkcs4a96717wmrf7f4-beads-1.2.2"
-      },
-      "system": "x86_64-linux",
-      "group": "toplevel",
-      "priority": 5
-    },
-    {
-      "attr_path": "buildkite-agent",
-      "broken": false,
-      "derivation": "/nix/store/9ygkxd4klzaiv8ryz974pdsqg4g0gbwq-buildkite-agent-3.137.2.drv",
-      "description": "Build runner for buildkite.com",
-      "install_id": "buildkite-agent",
-      "license": "MIT",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=ef34387ddd751e1ab8857adf4676492d32eb24ec",
-      "name": "buildkite-agent-3.137.2",
-      "pname": "buildkite-agent",
-      "rev": "ef34387ddd751e1ab8857adf4676492d32eb24ec",
-      "rev_count": 1073009,
-      "rev_date": "2026-09-13T08:01:44Z",
-      "scrape_date": "2026-09-15T04:58:07.817666Z",
-      "stabilities": [
-        "unstable"
-      ],
-      "unfree": false,
-      "version": "3.137.2",
-      "outputs_to_install": [
-        "out"
-      ],
-      "outputs": {
-        "out": "/nix/store/v3wk15w334i3x2f823zhbsa99q40gxbj-buildkite-agent-3.137.2"
-      },
-      "system": "aarch64-darwin",
-      "group": "toplevel",
-      "priority": 5
-    },
-    {
-      "attr_path": "buildkite-agent",
-      "broken": false,
-      "derivation": "/nix/store/m0ichwwh8ipksadj6vwkpww9hpcprziw-buildkite-agent-3.137.2.drv",
-      "description": "Build runner for buildkite.com",
-      "install_id": "buildkite-agent",
-      "license": "MIT",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=ef34387ddd751e1ab8857adf4676492d32eb24ec",
-      "name": "buildkite-agent-3.137.2",
-      "pname": "buildkite-agent",
-      "rev": "ef34387ddd751e1ab8857adf4676492d32eb24ec",
-      "rev_count": 1073009,
-      "rev_date": "2026-09-13T08:01:44Z",
-      "scrape_date": "2026-09-15T05:30:08.605550Z",
-      "stabilities": [
-        "unstable"
-      ],
-      "unfree": false,
-      "version": "3.137.2",
-      "outputs_to_install": [
-        "out"
-      ],
-      "outputs": {
-        "out": "/nix/store/cdyrnsrfa0himyi1cm3dzyg0ahpwsjbf-buildkite-agent-3.137.2"
-      },
-      "system": "aarch64-linux",
-      "group": "toplevel",
-      "priority": 5
-    },
-    {
-      "attr_path": "buildkite-agent",
-      "broken": false,
-      "derivation": "/nix/store/6d1rlknja999mp5b0lcfz4xllbl96swb-buildkite-agent-3.137.2.drv",
-      "description": "Build runner for buildkite.com",
-      "install_id": "buildkite-agent",
-      "license": "MIT",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=ef34387ddd751e1ab8857adf4676492d32eb24ec",
-      "name": "buildkite-agent-3.137.2",
-      "pname": "buildkite-agent",
-      "rev": "ef34387ddd751e1ab8857adf4676492d32eb24ec",
-      "rev_count": 1073009,
-      "rev_date": "2026-09-13T08:01:44Z",
-      "scrape_date": "2026-09-15T06:07:16.056040Z",
-      "stabilities": [
-        "unstable"
-      ],
-      "unfree": false,
-      "version": "3.137.2",
-      "outputs_to_install": [
-        "out"
-      ],
-      "outputs": {
-        "out": "/nix/store/n7ma9aig1bfikq10ijwyrdyg03xrb0gs-buildkite-agent-3.137.2"
       },
       "system": "x86_64-linux",
       "group": "toplevel",
