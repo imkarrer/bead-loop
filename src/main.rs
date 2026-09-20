@@ -23,12 +23,14 @@
 //!                                         reopen a dev round the last stop cut short (no failure)
 //!   bead-supervisor status [REPO...]      what is in flight: PRs, ready beads, worktrees and their sessions
 //!   bead-supervisor watch [REPO...]       status every 5 s (BEAD_LOOP_WATCH=N), the last log lines above it
+//!   bead-supervisor stats [REPO...]       the scoreboard: landed, first-try, without Claude, rounds and time per
+//!                                         landing, send-backs by reason and model, model hours — 24h/7d/30d/all
 //!   bead-supervisor log REPO [BEAD_ID]    follow the newest worker/reviewer session: tool calls and text
 //!
 //!   --dry-run    pick the bead, print the prompt, change nothing
 //!   --once       tick: one pass of each lane, in turn, whether or not more is queued
 //!   --serial     tick: the lanes one after the other instead of side by side
-//!   --json       status as one JSON object per repo (what the web UI reads)
+//!   --json       status as one JSON object per repo, stats as one object (what the web UI reads)
 //!   --local      implement, gate and review; keep the branch here, no push, no PR
 //!   --model M    opencode provider/model for the worker this run
 mod config;
@@ -40,6 +42,7 @@ mod round;
 mod shell;
 mod signals;
 mod state;
+mod stats;
 mod status;
 mod util;
 
@@ -105,7 +108,7 @@ fn main() {
     // One supervisor at a time for anything that runs rounds or the merge queue; the
     // read-only and the one-bead commands are free.
     let _lock = match cmd.as_str() {
-        "status" | "log" | "watch" | "lane" | "pause" | "resume" | "escalate" | "answer" | "open" | "priority" | "wake" => None,
+        "status" | "stats" | "log" | "watch" | "lane" | "pause" | "resume" | "escalate" | "answer" | "open" | "priority" | "wake" => None,
         _ => match lanes::try_lock(&state_dir.join("lock")) {
             Some(l) => Some(l),
             None => {
@@ -198,6 +201,15 @@ fn main() {
                 } else {
                     print!("{}", status::status_one(&repo));
                 }
+            }
+        }
+        "stats" => {
+            let loaded: Vec<Repo> = repos.iter().map(|r| Repo::load(r, opts.model_flag.as_deref())).collect();
+            let j = stats::stats_json(&loaded);
+            if json {
+                println!("{}", serde_json::to_string(&j).unwrap());
+            } else {
+                print!("{}", stats::stats_text(&j));
             }
         }
         "watch" => {

@@ -113,6 +113,30 @@
   .reply code.cmd { font: 12px var(--mono); color: var(--bright); background: var(--base03); padding: 3px 7px; border-radius: 4px; user-select: all; }
 
 
+  /* the scoreboard: a row of tiles, the one number each in the bright ink, its reading
+     under it; below, three columns — where rounds go back (bars in one hue, the count
+     beside each), what each model landed and lost, and the model hours. */
+  #score h2 .seg { margin-left: auto; font-size: 12.5px; }
+  #score h2 .seg button { padding: 2px 10px; }
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-top: 14px; }
+  .tile { padding: 12px 14px; border-radius: 8px; background: var(--base03); }
+  .tile .label { font-size: 11.5px; text-transform: uppercase; letter-spacing: .1em; color: var(--muted); font-weight: 600; }
+  .tile .value { font-size: 30px; line-height: 1.15; font-weight: 600; color: var(--base2); margin-top: 4px; }
+  .tile .value small { font-size: 14px; font-weight: 400; color: var(--muted); margin-left: 4px; }
+  .tile .value.warn { color: var(--yellow); }
+  .tile .sub { font-size: 12.5px; color: var(--muted); margin-top: 3px; line-height: 1.4; }
+  .score-cols { display: grid; grid-template-columns: 1fr 1.3fr 1fr; gap: 0 28px; margin-top: 4px; }
+  @media (max-width: 1000px) { .score-cols { grid-template-columns: 1fr; } }
+  .bars { display: grid; grid-template-columns: max-content 1fr max-content; gap: 5px 10px; align-items: center; font-size: 13px; }
+  .bars .k { color: var(--ink); white-space: nowrap; } .bars .n { color: var(--bright); font: 500 12.5px var(--mono); text-align: right; }
+  .bars .bar { height: 10px; border-radius: 3px; background: rgba(38, 139, 210, .18); overflow: hidden; }
+  .bars .bar i { display: block; height: 100%; background: var(--blue); border-radius: 3px; }
+  .score-cols .note { font-size: 12.5px; color: var(--muted); margin-top: 8px; line-height: 1.5; }
+  td.num { text-align: right; font: 500 13px var(--mono); white-space: nowrap; color: var(--bright); }
+  th.num { text-align: right; white-space: nowrap; }
+  td.reasons { color: var(--muted); font-size: 12.5px; white-space: nowrap; }
+  .chip.hand { color: var(--base03); background: var(--base1); }
+
   /* the log's heading carries its one option, at the right */
   .card h3.log { display: flex; align-items: center; }
   .card h3.log .opt { margin-left: auto; display: flex; align-items: center; gap: 6px; text-transform: none; letter-spacing: 0; font-weight: 400; font-size: 12.5px; cursor: pointer; }
@@ -368,6 +392,81 @@ function claudeCol(r) {
   return `<div class="q claude"><h3>Claude<span class="n">${rows.length}</span></h3><div class="sub">the last stage; runs on the dev and review lanes</div>${body}</div>`;
 }
 
+// The scoreboard: how well the workflow works, over a window you pick — 24h, 7d, 30d or
+// all. The server computes it (`bead-supervisor --json stats`) from what the beads and
+// the session logs already record, once a minute. Six tiles answer the questions in
+// order: is work landing, how much of it first time, how much without Claude, at what
+// cost in rounds and hours, and how often it needed you. Under them: where rounds go
+// back, what each model landed and lost, the model hours — and the last beads finished.
+let scoreWin = '7d';
+try { scoreWin = localStorage.getItem('scoreWin') || '7d'; } catch { /* the default, every load */ }
+window.setWin = (w) => { scoreWin = w; try { localStorage.setItem('scoreWin', w); } catch { /* not remembered, still applied */ } render(); };
+let scoreAll = false;  // the finished list shows a few; the toggle opens it for the session
+window.setScoreAll = (on) => { scoreAll = !!on; render(); };
+const FINISHED_SHOWN = 8;
+const dur = (s) => { if (s == null) return '–'; const m = Math.round(s / 60); return m < 60 ? `${m}m` : m < 60 * 48 ? `${Math.floor(m / 60)}h${String(m % 60).padStart(2, '0')}` : `${(m / 1440).toFixed(1)}d`; };
+const hours = (s) => `${(s / 3600).toFixed(1)}h`;
+const pct = (n, of) => of ? `${Math.round(n * 100 / of)}%` : '–';
+const tile = (label, value, sub, cls) => `<div class="tile"><div class="label">${label}</div><div class="value ${cls || ''}">${value}</div><div class="sub">${sub}</div></div>`;
+function scoreboard(s) {
+  const st = s.stats;
+  const seg = `<span class="seg">${['24h', '7d', '30d', 'all'].map((w) => `<button class="${w === scoreWin ? 'cur' : ''}" onclick="setWin('${w}')">${w}</button>`).join('')}</span>`;
+  if (!st) return `<section class="card" id="score"><h2>Scoreboard <span class="cfg">what the loop landed and what it cost</span>${seg}</h2><div class="empty">counting… (bead-supervisor stats, once a minute)</div></section>`;
+  const w = st.windows[scoreWin] || st.windows.all;
+  const days = Math.max(w.span_s, 3600) / 86400;
+  const landed = w.landed, sb = w.send_backs, mt = w.model_time;
+  const since = new Date(st.since * 1000).toLocaleDateString([], { month: 'short', day: 'numeric' });
+  const needed = w.answers + w.escalations;
+  const tiles = [
+    tile('Landed', `${landed}<small>${days >= 2 ? `${(landed / days).toFixed(1)} a day` : ''}</small>`, `merged and closed by the loop${w.closed_by_hand ? ` · ${w.closed_by_hand} finished by hand` : ''}${w.closed_unmerged ? ` · ${w.closed_unmerged} PR closed unmerged` : ''}`),
+    tile('First try', pct(w.landed_first_try, landed), `${w.landed_first_try} of ${landed} landed with no send-back`),
+    tile('Without Claude', pct(w.landed_local, landed), `${w.landed_local} of ${landed} landed by a local model`),
+    tile('Rounds per landing', `${w.rounds_per_landed.median == null ? '–' : w.rounds_per_landed.median.toFixed(1)}<small>median</small>`, `${w.rounds_per_landed.mean == null ? '–' : w.rounds_per_landed.mean.toFixed(1)} mean · ${sb.total} send-back${sb.total === 1 ? '' : 's'} in all`),
+    tile('Time to land', `${dur(w.time_to_land_s.median)}<small>median</small>`, `first claim → merge · ${dur(w.time_to_land_s.mean)} mean`),
+    tile('Needed you', `${needed}`, `${w.escalations} escalated · ${w.answers} answered · ${w.holds} held`, needed ? 'warn' : ''),
+  ].join('');
+  // where rounds go back: the reasons, most first, as bars against the biggest
+  const reasons = Object.entries(sb.by_reason).sort((a, b) => b[1] - a[1]);
+  const top = reasons.length ? reasons[0][1] : 1;
+  const bars = reasons.length === 0 ? '<div class="empty">no send-backs</div>'
+    : `<div class="bars">${reasons.map(([k, n]) => `<span class="k">${esc(k)}</span><span class="bar" title="${n} of ${sb.total}"><i style="width:${Math.round(n * 100 / top)}%"></i></span><span class="n">${n}</span>`).join('')}</div>`;
+  const extra = [w.rebases ? `${w.rebases} rebase${w.rebases > 1 ? 's' : ''} (no failure)` : '', w.interrupted ? `${w.interrupted} round${w.interrupted > 1 ? 's' : ''} interrupted by a stop` : ''].filter(Boolean).join(' · ');
+  // by model: what each landed, what it lost and why
+  const models = [...new Set([...Object.keys(w.landed_by), ...Object.keys(sb.by_model)])].sort((a, b) => (w.landed_by[b] || 0) - (w.landed_by[a] || 0) || a.localeCompare(b));
+  const modelRows = models.length === 0 ? '<div class="empty">no rounds yet</div>'
+    : `<table><tr><th>model</th><th class="num">landed</th><th class="num">sent back</th><th>why</th></tr>${models.map((m) => {
+      const lost = sb.by_model[m] || { total: 0, by_reason: {} };
+      const why = Object.entries(lost.by_reason).sort((a, b) => b[1] - a[1]).map(([k, n]) => `${esc(k)} ${n}`).join(' · ');
+      return `<tr><td class="mono">${esc(m)}</td><td class="num">${w.landed_by[m] || 0}</td><td class="num">${lost.total}</td><td class="reasons">${why}</td></tr>`;
+    }).join('')}</table>`;
+  // model time: hours by role, as a share of the window; empty rounds are a leak to see
+  const time = `<div class="bars">
+    <span class="k">worker</span><span class="bar" title="${hours(mt.worker_s)} of ${hours(w.span_s)}"><i style="width:${Math.min(100, Math.round(mt.worker_s * 100 / Math.max(w.span_s, 1)))}%"></i></span><span class="n">${hours(mt.worker_s)}</span>
+    <span class="k">reviewer</span><span class="bar" title="${hours(mt.review_s)} of ${hours(w.span_s)}"><i style="width:${Math.min(100, Math.round(mt.review_s * 100 / Math.max(w.span_s, 1)))}%"></i></span><span class="n">${hours(mt.review_s)}</span>
+  </div><div class="note">${mt.worker_rounds} worker round${mt.worker_rounds === 1 ? '' : 's'}, ${mt.review_rounds} review round${mt.review_rounds === 1 ? '' : 's'} · the bar is the share of the window's ${hours(w.span_s)}${mt.empty_rounds ? ` · <span class="chip warn" title="a session the harness or server never answered — Claude signed out, a model server down — retried by the loop">${mt.empty_rounds} empty round${mt.empty_rounds > 1 ? 's' : ''}</span>` : ''}</div>`;
+  // the beads finished in the window, newest first
+  const from = scoreWin === 'all' ? 0 : st.now - { '24h': 86400, '7d': 7 * 86400, '30d': 30 * 86400 }[scoreWin];
+  const fin = st.finished.filter((b) => b.closed >= from);
+  const shown = scoreAll ? fin : fin.slice(0, FINISHED_SHOWN);
+  const more = fin.length > FINISHED_SHOWN ? ` <button class="hist" onclick="setScoreAll(${!scoreAll})">${scoreAll ? '▾ the first ' + FINISHED_SHOWN : '▸ all ' + fin.length}</button>` : '';
+  const finished = fin.length === 0 ? '<div class="empty">nothing finished in this window</div>'
+    : `<table><tr><th>bead</th><th>title</th><th></th><th class="num">rounds</th><th>landed by</th><th class="num">to land</th><th class="num">closed</th></tr>${shown.map((b) => `
+    <tr><td class="id">${esc(b.id)}${st.repos.length > 1 ? ` <span class="muted">${esc(b.slug)}</span>` : ''}</td><td class="title"><span class="t" title="${esc(b.title)}">${b.url ? `<a href="${esc(b.url)}" target="_blank" rel="noopener">${esc(b.title)} ↗</a>` : esc(b.title)}</span></td>
+        <td class="fit">${b.how === 'landed' ? '<span class="chip ok">landed</span>' : '<span class="chip hand" title="closed by hand after the loop had worked it">by hand</span>'}${b.escalated ? ' <span class="chip warn" title="escalated to the last stage by hand">escalated</span>' : ''}${b.answers ? ` <span class="chip" title="answers you gave">${b.answers} answer${b.answers > 1 ? 's' : ''}</span>` : ''}</td>
+        <td class="num">${b.rounds}</td><td class="mono muted fit">${b.how === 'landed' ? esc(b.worker) : ''}</td><td class="num">${b.how === 'landed' ? dur(b.time_to_land_s) : ''}</td><td class="num muted">${ago(b.closed, s.now)} ago</td></tr>`).join('')}</table>`;
+  const perRepo = st.repos.length > 1 ? ` · ${Object.entries(w.by_repo).map(([k, v]) => `${esc(k)} ${v.landed}`).join(', ')}` : '';
+  return `<section class="card" id="score">
+    <h2>Scoreboard <span class="cfg">what the loop landed and what it cost · ${scoreWin === 'all' ? `since ${since}` : `the last ${scoreWin}`}${perRepo} · counted ${ago(st.now, s.now)} ago</span>${seg}</h2>
+    <div class="tiles">${tiles}</div>
+    <div class="score-cols">
+      <div><h3>Where rounds go back<span class="n">${sb.total}</span></h3>${bars}${extra ? `<div class="note">${extra}</div>` : ''}</div>
+      <div><h3>By model</h3>${modelRows}</div>
+      <div><h3>Model hours</h3>${time}</div>
+    </div>
+    <h3>Finished<span class="n">${fin.length}</span><span class="note">newest first · rounds counts the one that landed</span>${more}</h3>${finished}
+  </section>`;
+}
+
 function repo(r, now, ticking) {
   const stages = r.stages.map((s, i) => `<span title="stage ${i + 1}: takes the next ${s.failures} failure${s.failures > 1 ? 's' : ''}"><span class="mono">${esc(s.worker)}</span>${s.reviewer ? ` ⇢ <span class="mono">${esc(s.reviewer)}</span>` : ''} ×${s.failures}</span>`).join(' &nbsp;→&nbsp; ');
   // The human queue: each bead with the question it stopped on — the BLOCKED line, the
@@ -441,7 +540,7 @@ function render() {
     : `<pre class="log" id="log">${lines.map((l) => `<span class="t">${clock(l.t)}</span>  <span class="${l.cls}">${esc(l.m)}</span>`).join("\n")}</pre>`;
   const sysBox = `<label class="opt" title="systemd’s Starting/Finished/Stopped lines for the unit"><input type="checkbox" ${showSys ? 'checked' : ''} onchange="setSys(this.checked)">systemd lines</label>`;
   $('main').innerHTML = (last.error ? `<div class="banner">status failed: ${esc(last.error)}</div>` : '')
-    + (last.repos.length === 0 ? '<section class="card"><div class="empty">no repos: set <span class="mono">repos</span> in ~/.config/bead-loop/config.toml</div></section>' : lanesPane(last))
+    + (last.repos.length === 0 ? '<section class="card"><div class="empty">no repos: set <span class="mono">repos</span> in ~/.config/bead-loop/config.toml</div></section>' : lanesPane(last) + scoreboard(last))
     + last.repos.map((r) => repo(r, last.now, last.service.available && (last.service.active === 'active' || last.service.active === 'activating'))).join("")
     + `<section class="card"><h3 class="log">Supervisor log${sysBox}</h3>${log}</section>`;
   const el = $('log'); if (el) el.scrollTop = el.scrollHeight;

@@ -471,6 +471,16 @@ case_status_json_and_ui() {
   jq '. + [{id:"t-5", title:"Parked one", description:"p", status:"in_progress", priority:2, labels:["delegate:local"], notes:"someone: a human note\nbead-loop 2026-09-18T17:05+00:00: stages exhausted after REJECT: x.ts:1 wrong"}]' "$BD_STATE/issues.json" >"$BD_STATE/i.tmp" && mv "$BD_STATE/i.tmp" "$BD_STATE/issues.json"
   # t-8: a decision — a question for the human, type decision (a needs-human label does the same).
   jq '. + [{id:"t-8", title:"Which ntfy topic?", description:"The loop can post to ntfy. Which topic, and for which events?", status:"open", priority:1, issue_type:"decision", labels:[]}]' "$BD_STATE/issues.json" >"$BD_STATE/i.tmp" && mv "$BD_STATE/i.tmp" "$BD_STATE/issues.json"
+  # t-9: landed by the loop an hour ago, one send-back on the way; a session log for its round.
+  jq '. + [{id:"t-9", title:"Landed one", description:"l", status:"closed", priority:2, labels:["delegate:local"], started_at:((now-7200)|todate), closed_at:((now-3600)|todate),
+          close_reason:"bead-loop: https://github.com/example/repo/pull/3 merged; checks at merge: ci=SUCCESS",
+          notes:("bead-loop round 1 (stub/worker) " + ((now-5400)|strftime("%Y-%m-%dT%H:%M+00:00")) + ": gate failed twice: make")}]' "$BD_STATE/issues.json" >"$BD_STATE/i.tmp" && mv "$BD_STATE/i.tmp" "$BD_STATE/issues.json"
+  mkdir -p "$R/logs"; printf '{"a":1}\n{"b":2}\n' >"$R/logs/t-9.$(date -d @$(($(date +%s) - 7000)) +%Y%m%dT%H%M%S).worker.jsonl"; : >"$R/logs/t-9.$(date -d @$(($(date +%s) - 300)) +%Y%m%dT%H%M%S).worker.jsonl"
+  st=$(sup stats "$REPO")
+  assert_match "$st" "24h  landed 1 (first try 0%, without Claude 100%)  rounds/landed 2.0  time to land 1h00  send-backs 1" "stats: the landing, its rounds and its hour"
+  assert_match "$st" "empty rounds 1" "stats: the session the server never answered"
+  assert_match "$st" "send-backs by reason: gate 1" "stats: why the round went back"
+  assert_eq "$(sup --json stats "$REPO" | jq -r '.windows["7d"].landed_by["stub/worker"], .windows["7d"].model_time.worker_rounds, .finished[0].id, .finished[0].how, .finished[0].rounds' | tr '\n' ' ')" "1 1 t-9 landed 2 " "stats --json: by model, the rounds, the finished list"
   j=$(sup --json status "$REPO")
   assert_eq "$(printf '%s' "$j" | jq -r '.slug, .attach, .lanes.dev.id, (.queues.dev | map(.id) | join(",")), (.queues.review[0].title), (.queues.merge[0].red), (.parked | map(.id) | join(","))' | tr '\n' ' ')" \
     "repo http://oc.test:4096 t-6 t-2,t-3,t-7 Fourth true t-5 " "bd's beads laid into the queues, the lanes and parked"
@@ -485,6 +495,9 @@ case_status_json_and_ui() {
   mkdir -p "$T/gpu"; echo game >"$T/gpu/mode"; echo auto >"$T/gpu/by"
   GPU_MODE_STATE=$T/gpu BEAD_LOOP_UI_PORT=$port BEAD_SUPERVISOR=$SUP node "$HERE/../bin/bead-loop-ui" >"$T/ui.log" 2>&1 & upid=$!
   for _ in $(seq 50); do "$REAL_CURL" -sf -m 1 "http://127.0.0.1:$port/api/state" >"$T/state.json" 2>/dev/null && break; sleep 0.1; done
+  # The scoreboard comes a moment later: computed off the request path, pushed when done.
+  for _ in $(seq 100); do "$REAL_CURL" -sf -m 2 "http://127.0.0.1:$port/api/state" >"$T/state.json" 2>/dev/null && jq -e '.stats.windows' "$T/state.json" >/dev/null 2>&1 && break; sleep 0.2; done
+  assert_eq "$(jq -r '.stats.windows["24h"].landed' "$T/state.json")" 1 "/api/state carries the scoreboard"
   assert_eq "$(jq -r '.repos[0].slug, (.repos[0].worktrees[0].sessions[0].state), (.repos[0].queues.dev[0].id), (.error // "none")' "$T/state.json" | tr '\n' ' ')" "repo orphan t-2 none " "/api/state carries the supervisor's JSON"
   assert_match "$("$REAL_CURL" -s -m 3 "http://127.0.0.1:$port/")" "<title>bead-loop</title>" "the page"
   assert_eq "$(jq -r '.gpu | "\(.available) \(.mode) \(.by)"' "$T/state.json")" "true game auto" "gpu-mode read from its state dir"
@@ -492,6 +505,13 @@ case_status_json_and_ui() {
   # claude/opus stage) and where it sits, and nothing else.
   html=$(render_page "$T/state.json")
   node --check "$T/page.js" 2>/dev/null && ok || bad "the page's script parses"
+  # The scoreboard card: the tiles from the 7d window (the default), the landing listed.
+  score=$(printf '%s' "$html" | tr '\n' ' ' | grep -o '<section class="card" id="score">.*' | head -c 6000)
+  assert_match "$score" '<div class="label">Landed</div><div class="value ">1<small>' "the Landed tile"
+  assert_match "$score" '<div class="label">Without Claude</div><div class="value ">100%</div>' "the Without Claude tile"
+  assert_match "$score" '<span class="k">gate</span><span class="bar" title="1 of 1">' "where rounds go back"
+  assert_match "$score" 'class="id">t-9</td>.*<span class="chip ok">landed</span>.*<td class="num">2</td><td class="mono muted fit">stub/worker</td><td class="num">1h00</td>' "the finished row: rounds, who landed it, how long"
+  assert_match "$score" '<button class="cur" onclick="setWin(.7d.)">7d</button>' "the window picker, 7d by default"
   # The decision under Needs you: the question, its text in full, and the answer box.
   assert_match "$(printf '%s' "$html" | grep -o '<h3 class="human">Needs you<span class="n">[0-9]*</span>')" '<span class="n">2</span>' "Needs you counts the decision with the parked bead"
   dec=$(printf '%s' "$html" | tr '\n' ' ' | grep -o '<table class="decisions">.*' | head -c 1200)
