@@ -424,6 +424,12 @@ dev_one() {
   json=$(bdr show "$id" --json)
   [ "$(printf '%s' "$json" | jq 'length')" -gt 0 ] || die "$SLUG: bd show $id returned nothing"
   title=$(printf '%s' "$json" | jq -r '.[0].title')
+  # A bead may pick its worker's harness: label harness:aider puts the stage's opencode
+  # model under aider, harness:opencode takes an aider: model out; claude/* stays Claude Code.
+  case "$(printf '%s' "$json" | jq -r '.[0].labels // [] | if index("harness:aider") then "aider" elif index("harness:opencode") then "opencode" else "" end')" in
+    opencode) case $MODEL in aider:*) MODEL=${MODEL#aider:}; log "$SLUG: $id: label harness:opencode: worker $MODEL runs in opencode, not aider" ;; esac ;;
+    aider)    case $MODEL in aider:*|claude/*) ;; *) MODEL=aider:$MODEL; log "$SLUG: $id: label harness:aider: worker $MODEL runs in aider, not opencode" ;; esac ;;
+  esac
   branch=bead/$id
   wt=$RS/wt/$id
   stamp=$(date +%Y%m%dT%H%M%S)

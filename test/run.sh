@@ -347,6 +347,30 @@ case_aider_stage() {
   assert_match "$(cat "$T/sup.log")" "no baseURL for opencode provider stub" "said so"
   assert_branch bead/t-1 "still worked"
 }
+case_harness_label() {
+  # A bead's label picks its worker's harness over the stage's: harness:opencode takes an
+  # aider: model out of aider, harness:aider puts an opencode model under it; claude/* is not touched.
+  setup true auto '' "$(printf '[[stages]]\nworker = "aider:stub/worker"\n')"
+  jq '.[0].labels += ["harness:opencode"]' "$BD_STATE/issues.json" >"$BD_STATE/i.tmp" && mv "$BD_STATE/i.tmp" "$BD_STATE/issues.json"
+  sup work "$REPO"
+  assert_eq "$(cut -d' ' -f1,3,4 "$TEST_CTRL/calls")" "bead-worker stub/worker none" "worked by opencode, not aider"
+  assert_nofile "$TEST_CTRL/aider.args" "aider never ran"
+  assert_match "$(cat "$T/sup.log")" "label harness:opencode: worker stub/worker runs in opencode, not aider" "the choice and why, logged"
+  assert_branch bead/t-1 "pushed"
+  setup true auto '' "$(stages stub/worker::1)"
+  echo base >"$REPO/work.txt"; git -C "$REPO" add -A && git -C "$REPO" commit -qm "work.txt" && git -C "$REPO" push -q origin main
+  jq '.[0].labels += ["harness:aider"]' "$BD_STATE/issues.json" >"$BD_STATE/i.tmp" && mv "$BD_STATE/i.tmp" "$BD_STATE/issues.json"
+  sup work "$REPO"
+  assert_eq "$(cut -d' ' -f1,3,4 "$TEST_CTRL/calls")" "bead-worker openai/worker aider" "worked by aider, not opencode"
+  assert_match "$(sed -n 2p "$TEST_CTRL/aider.args")" " work.txt$" "with the bead's file"
+  assert_match "$(cat "$T/sup.log")" "label harness:aider: worker aider:stub/worker runs in aider, not opencode" "the choice and why, logged"
+  assert_branch bead/t-1 "pushed"
+  setup true auto '' "$(stages claude/opus::1)"
+  jq '.[0].labels += ["harness:aider"]' "$BD_STATE/issues.json" >"$BD_STATE/i.tmp" && mv "$BD_STATE/i.tmp" "$BD_STATE/issues.json"
+  sup work "$REPO"
+  assert_eq "$(cut -d' ' -f3,4 "$TEST_CTRL/calls")" "claude/opus claude" "claude/* stays in Claude Code"
+  ! grep -q 'harness:' "$T/sup.log" && ok || bad "nothing changed, nothing logged"
+}
 
 case_adopts_foreign_bead_prs() {
   setup
