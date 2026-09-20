@@ -500,11 +500,14 @@ failure charged — the gate, CI, the merge and recover are the guard. A bead th
 
 ## Checks and the pipeline
 
-`cargo test` covers the pure logic (config layering, the stage table, queue order, the
-merge verdicts, branch-name parsing, the notes the page reads). `test/run.sh` drives the
+`cargo test` covers everything with a shape and no tool behind it: config layering and
+parsing, the stage table, the dev and review queue order and the one-place invariant,
+the merge verdicts, the prompts the worker and reviewer get, the rejection that travels,
+the PR body, the harness label, the status JSON and its text. `test/run.sh` drives the
 binary through every row of the outcome table above and every exit in
 docs/state-machine.md with stub `bd`, `opencode`, `claude`, `aider`, `gh` and `curl`
-(`test/bin/`) and a real git origin: no model, no network, a minute. `test/lint-skills.sh`
+(`test/bin/`) and a real git origin: no model, no network, the cases side by side
+(`JOBS=1` for one at a time, with a time per case), seconds. `test/lint-skills.sh`
 checks the frontmatter opencode needs. `scripts/ci.sh rust|scripts|suite` are the three
 steps, and `.buildkite/pipeline.yml` is the one place they run: `main`'s protection
 requires the `buildkite/bead-loop` status. (Buildkite posts it only once its GitHub App

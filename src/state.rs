@@ -186,7 +186,11 @@ pub fn review_queue(repo: &Repo) -> Vec<String> {
 /// in the review or merge queue, or on a lane, is not handed out again whatever bd says
 /// (invariant: one place).
 pub fn dev_queue(repo: &Repo) -> Vec<String> {
-    let ready = crate::shell::bd_ready(repo);
+    order_dev(repo, crate::shell::bd_ready(repo))
+}
+
+/// The dev queue from what `bd ready` said, in the loop's order.
+pub fn order_dev(repo: &Repo, ready: Vec<String>) -> Vec<String> {
     let mut v: Vec<(u64, usize, String)> = ready
         .into_iter()
         .enumerate()
@@ -224,5 +228,92 @@ mod tests {
         assert_eq!(stage_for(&s, "park", 60, 0).unwrap().timeout, 60);
         s[0].timeout = Some(7);
         assert_eq!(stage_for(&s, "park", 60, 0).unwrap().timeout, 7);
+    }
+    #[test]
+    fn last_stage_start_is_the_first_count_that_lands_there() {
+        let d = crate::config::scratch("last-stage");
+        let repo = crate::config::test_repo(&d, &["fast::2", "slow::2", "claude/opus:claude/opus:1"]);
+        assert_eq!(repo.last_stage_start(), 4);
+        assert_eq!(repo.stage_for(4).unwrap().model, "claude/opus");
+        assert!(repo.stage_for(4).unwrap().last);
+        let one = crate::config::test_repo(&d, &["only::3"]);
+        assert_eq!(one.last_stage_start(), 0);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+    #[test]
+    fn failures_are_a_file() {
+        let d = crate::config::scratch("failures");
+        let repo = crate::config::test_repo(&d, &["a"]);
+        assert_eq!(repo.failures_of("t-1"), 0, "no file: none");
+        repo.set_failures("t-1", 2);
+        assert_eq!(repo.failures_of("t-1"), 2);
+        assert_eq!(std::fs::read_to_string(repo.rs.join("failures/t-1")).unwrap(), "2\n");
+        std::fs::write(repo.rs.join("failures/t-2"), "junk").unwrap();
+        assert_eq!(repo.failures_of("t-2"), 0, "an unreadable count is none");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+    #[test]
+    fn dev_queue_order_and_the_one_place_invariant() {
+        // fewest failures first, bd's order within a count; a bead in the review or merge
+        // queue or on a lane is not handed out again whatever bd says.
+        let d = crate::config::scratch("dev-queue");
+        let repo = crate::config::test_repo(&d, &["a::3"]);
+        let ids = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        repo.set_failures("t-1", 1);
+        repo.set_failures("t-7", 2);
+        assert_eq!(order_dev(&repo, ids(&["t-1", "t-2", "t-7", "t-3"])), ids(&["t-2", "t-3", "t-1", "t-7"]));
+        write_file(&repo.review_path("t-2"), "DONE: x\n");
+        write_file(&repo.inflight_path("t-3"), "https://example/pull/7\n");
+        assert_eq!(order_dev(&repo, ids(&["t-1", "t-2", "t-7", "t-3"])), ids(&["t-1", "t-7"]), "review and merge queues excluded");
+        repo.lane_set("dev", "t-1");
+        assert_eq!(order_dev(&repo, ids(&["t-1", "t-7"])), ids(&["t-7"]), "the bead on a lane excluded");
+        repo.lane_clear("dev");
+        repo.lane_set("review", "t-7");
+        assert_eq!(order_dev(&repo, ids(&["t-1", "t-7"])), ids(&["t-1"]));
+        assert_eq!(repo.lane_bead("review").as_deref(), Some("t-7"));
+        assert!(repo.lane_busy("review") && !repo.lane_busy("dev"));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+    #[test]
+    fn review_queue_is_fewest_failures_then_oldest() {
+        let d = crate::config::scratch("review-queue");
+        let repo = crate::config::test_repo(&d, &["a::3"]);
+        for (id, age) in [("t-1", 30), ("t-2", 20), ("t-3", 10)] {
+            write_file(&repo.review_path(id), "DONE\n");
+            let t = crate::util::now() - age;
+            let times = [libc::timespec { tv_sec: t, tv_nsec: 0 }, libc::timespec { tv_sec: t, tv_nsec: 0 }];
+            let c = std::ffi::CString::new(repo.review_path(id).to_string_lossy().as_bytes()).unwrap();
+            unsafe { libc::utimensat(libc::AT_FDCWD, c.as_ptr(), times.as_ptr(), 0) };
+        }
+        repo.set_failures("t-1", 1);
+        assert_eq!(review_queue(&repo), vec!["t-2", "t-3", "t-1"]);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+    #[test]
+    fn inflight_count_skips_adopted_and_markers() {
+        let d = crate::config::scratch("inflight");
+        let repo = crate::config::test_repo(&d, &["a"]);
+        assert_eq!(repo.inflight_count(), 0);
+        write_file(&repo.inflight_path("t-1.2"), "url\n");
+        write_file(&repo.inflight_path("x-1"), "url\n");
+        touch(&repo.mark("x-1", "adopted"));
+        touch(&repo.mark("t-1.2", "red"));
+        assert_eq!(repo.inflight_ids(), vec!["t-1.2", "x-1"], "the markers are not PRs");
+        assert_eq!(repo.inflight_count(), 1, "a dotted id counts; an adopted PR does not");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+    #[test]
+    fn hold_is_said_once_per_reason() {
+        let d = crate::config::scratch("hold");
+        let repo = crate::config::test_repo(&d, &["a"]);
+        assert!(repo.hold("t-1", "setup failed: false"), "a new hold");
+        assert!(!repo.hold("t-1", "setup failed: false\n"), "the same reason again is silent");
+        assert!(repo.hold("t-1", "gh cannot read the PR"), "a new reason is a new hold");
+        assert_eq!(repo.held_why("t-1").as_deref(), Some("gh cannot read the PR"));
+        assert!(repo.held_since("t-1") > 0);
+        assert!(repo.release("t-1"));
+        assert!(!repo.release("t-1"), "nothing to release");
+        assert!(repo.held_why("t-1").is_none());
+        let _ = std::fs::remove_dir_all(&d);
     }
 }

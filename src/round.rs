@@ -271,18 +271,96 @@ fn apply_harness_label(repo: &Repo, id: &str, json: &Value, model: &mut String) 
         .and_then(|l| l.as_array())
         .map(|a| a.iter().filter_map(|v| v.as_str()).collect())
         .unwrap_or_default();
+    let (m, why) = harness_for(&labels, model);
+    *model = m;
+    if let Some(why) = why {
+        log(&format!("{}: {id}: {why}", repo.slug));
+    }
+}
+
+/// `harness:aider` puts an opencode model under aider, `harness:opencode` takes an
+/// `aider:` model out of it; `claude/*` is not touched. The worker to run, and the
+/// reason to log when the label changed it.
+pub fn harness_for(labels: &[&str], model: &str) -> (String, Option<String>) {
     if labels.contains(&"harness:aider") {
         if !model.starts_with("aider:") && !model.starts_with("claude/") {
-            *model = format!("aider:{model}");
-            log(&format!("{}: {id}: label harness:aider: worker {model} runs in aider, not opencode", repo.slug));
+            let m = format!("aider:{model}");
+            return (m.clone(), Some(format!("label harness:aider: worker {m} runs in aider, not opencode")));
         }
     } else if labels.contains(&"harness:opencode") {
         if let Some(m) = model.strip_prefix("aider:") {
-            let m = m.to_string();
-            *model = m;
-            log(&format!("{}: {id}: label harness:opencode: worker {model} runs in opencode, not aider", repo.slug));
+            return (m.to_string(), Some(format!("label harness:opencode: worker {m} runs in opencode, not aider")));
         }
     }
+    (model.to_string(), None)
+}
+
+/// The rebase work order a conflict round carries under the bead.
+pub fn rebase_order(base: &str) -> String {
+    format!(
+        "\n\nThis branch has an open pull request that GitHub cannot merge: it conflicts with {base}. Your job this round is the rebase, not new work. Run: git fetch origin && git rebase origin/{base}. Resolve every conflict so that both what this branch set out to do (the bead above, and the commits already on the branch) and what {base} changed since are kept; do not drop either side to make the conflict go away. Then run the gate if one is given, make sure the acceptance criteria still hold, and end with DONE: <what conflicted and how you resolved it>. Do not squash or rewrite the branch beyond the rebase."
+    )
+}
+
+/// The worker's prompt: the bead, the branch and whether it is resumed, the rebase order
+/// of a conflict round, and the notes of the rounds sent back before (the last three).
+pub fn dev_prompt(json: &Value, branch: &str, base: &str, resumed: bool, rebase: &str, hist: &str) -> String {
+    let history_block = if hist.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "\n\nEarlier rounds on this bead were sent back; their notes follow. A note that begins \"review (...) rejected:\" is a work order from the senior reviewer: do exactly what its \"What to do\" says, prove it with its \"How to check\", and leave alone what it says to leave alone. Read them before you start and do not repeat them.\n\n<previous-attempts>\n{hist}\n</previous-attempts>"
+        )
+    };
+    format!(
+        "Work the bead below in this repository, following the bead-workflow skill.\n\n<bead>\n{}\n</bead>\n\nYou are on branch {branch}{}. Commit your work on this branch and leave .beads/ untouched. End your turn with one line: DONE: <evidence> or BLOCKED: <note>.{rebase}{history_block}",
+        render_bead(json),
+        if resumed {
+            ", which already carries your earlier commit(s) for this bead: fix them in place rather than starting over".to_string()
+        } else {
+            format!(", a fresh worktree of {base}")
+        }
+    )
+}
+
+/// The gate's fix prompt: the round's prompt with what the gate said.
+pub fn gate_fix_prompt(prompt: &str, gate: &str, gate_out: &str) -> String {
+    format!(
+        "{prompt}\n\nYour commit on this branch failed the repository's gate: `{gate}`. Fix exactly what it reports, run it again until it passes, commit, and end with DONE: or BLOCKED:.\n\n<gate-output>\n{gate_out}\n</gate-output>"
+    )
+}
+
+/// The reviewer's prompt: the bead, the worker's report, the diff against the base.
+pub fn review_prompt(json: &Value, base: &str, report: &str, stat: &str, diff: &str) -> String {
+    format!(
+        "Review the commit(s) on this branch for the bead below. The diff against {base} is under <diff>; read any file you need for context.\n\n<bead>\n{}\n</bead>\n\n<worker-report>\n{report}\n</worker-report>\n\n<diff>\n{stat}{diff}\n</diff>\n\nEnd with APPROVE: <what you checked> on one line, or REJECT: <file:line, what is wrong> followed by the 'For the worker:' block your instructions describe — the worker acts on that block alone.",
+        render_bead(json)
+    )
+}
+
+/// The whole of a rejection travels — the REJECT line and everything under it, the
+/// work order for the worker — not a summary of it.
+pub fn reject_block(text: &str) -> String {
+    let mut out = Vec::new();
+    let mut on = false;
+    for l in text.lines() {
+        if l.starts_with("REJECT:") {
+            on = true;
+        }
+        if on {
+            out.push(l);
+        }
+    }
+    out.join("\n")
+}
+
+/// The PR's body: the bead, its acceptance criteria quoted, the two last words.
+pub fn pr_body(id: &str, title: &str, ac: &str, worker_line: &str, reviewer_line: &str) -> String {
+    let ac_quoted: String = ac.lines().map(|l| format!("> {l}")).collect::<Vec<_>>().join("\n");
+    let ac_quoted = if ac.is_empty() { "> ".to_string() } else { ac_quoted };
+    format!(
+        "Bead `{id}`: {title}\n\n{ac_quoted}\n\nWorker: {worker_line}\n{reviewer_line}\n\nOpened by bead-loop; the bead closes when this merges.\n"
+    )
 }
 
 /// `dev_one [ID]`
@@ -347,7 +425,7 @@ pub fn dev_one(repo: &Repo, opts: &Opts, id: Option<&str>, last_id: &mut Option<
     // base. The worker is conflict_worker (default: the last stage's), and its order is
     // the rebase, not the bead. No failure was charged.
     let mut conflict = false;
-    let mut rebase_order = String::new();
+    let mut rebase = String::new();
     if repo.mark(&id, "conflict").exists() {
         conflict = true;
         if !repo.conflict_worker.is_empty() {
@@ -360,31 +438,13 @@ pub fn dev_one(repo: &Repo, opts: &Opts, id: Option<&str>, last_id: &mut Option<
             bd_status(repo, &id, "open");
             return Pass::Nothing;
         }
-        rebase_order = format!(
-            "\n\nThis branch has an open pull request that GitHub cannot merge: it conflicts with {base}. Your job this round is the rebase, not new work. Run: git fetch origin && git rebase origin/{base}. Resolve every conflict so that both what this branch set out to do (the bead above, and the commits already on the branch) and what {base} changed since are kept; do not drop either side to make the conflict go away. Then run the gate if one is given, make sure the acceptance criteria still hold, and end with DONE: <what conflicted and how you resolved it>. Do not squash or rewrite the branch beyond the rebase.",
-            base = repo.base
-        );
+        rebase = rebase_order(&repo.base);
         log(&format!("{}: {id}: conflict round: rebase onto {} by {model}", repo.slug, repo.base));
     }
     // A branch left from an earlier round (sent back by review or CI) is resumed, not
     // restarted: the worker fixes its commit. A dev-side failure deleted the branch.
     let resumed = branch_exists(repo, &branch);
-    let history_block = if hist.is_empty() {
-        String::new()
-    } else {
-        format!(
-            "\n\nEarlier rounds on this bead were sent back; their notes follow. A note that begins \"review (...) rejected:\" is a work order from the senior reviewer: do exactly what its \"What to do\" says, prove it with its \"How to check\", and leave alone what it says to leave alone. Read them before you start and do not repeat them.\n\n<previous-attempts>\n{hist}\n</previous-attempts>"
-        )
-    };
-    let prompt = format!(
-        "Work the bead below in this repository, following the bead-workflow skill.\n\n<bead>\n{}\n</bead>\n\nYou are on branch {branch}{}. Commit your work on this branch and leave .beads/ untouched. End your turn with one line: DONE: <evidence> or BLOCKED: <note>.{rebase_order}{history_block}",
-        render_bead(&json),
-        if resumed {
-            ", which already carries your earlier commit(s) for this bead: fix them in place rather than starting over".to_string()
-        } else {
-            format!(", a fresh worktree of {}", repo.base)
-        }
-    );
+    let prompt = dev_prompt(&json, &branch, &repo.base, resumed, &rebase, &hist);
     log(&format!(
         "{}: dev: bead {id} — {title} ({n} failures, worker {model}, reviewer {}{}{})",
         repo.slug,
@@ -480,10 +540,7 @@ pub fn dev_one(repo: &Repo, opts: &Opts, id: Option<&str>, last_id: &mut Option<
     if !run_gate(repo, &wt, &gate_log) {
         log(&format!("{}: {id}: gate failed, fix round", repo.slug));
         let gate_out = tail_lines(&read_to_string(&gate_log).unwrap_or_default(), 40);
-        let fix_prompt = format!(
-            "{prompt}\n\nYour commit on this branch failed the repository's gate: `{}`. Fix exactly what it reports, run it again until it passes, commit, and end with DONE: or BLOCKED:.\n\n<gate-output>\n{gate_out}\n</gate-output>",
-            repo.gate
-        );
+        let fix_prompt = gate_fix_prompt(&prompt, &repo.gate, &gate_out);
         let fix_log = std::path::PathBuf::from(format!("{}.worker-gate.jsonl", logf.display()));
         let r2 =
             run_agent(repo, "bead-worker", &model, &wt, &fix_log, &fix_prompt, &format!("{id} · worker · gate fix"), timeout, Some(&json));
@@ -573,11 +630,7 @@ pub fn review_one(repo: &Repo, opts: &Opts, id: Option<&str>, lane: Option<&Lane
         let stat = git_out(&wt, &["diff", &format!("origin/{}...HEAD", repo.base), "--stat"]);
         let diff = git_out(&wt, &["diff", &format!("origin/{}...HEAD", repo.base)]);
         let diff = cut_bytes(&diff, 60000);
-        let prompt = format!(
-            "Review the commit(s) on this branch for the bead below. The diff against {} is under <diff>; read any file you need for context.\n\n<bead>\n{}\n</bead>\n\n<worker-report>\n{final_text}\n</worker-report>\n\n<diff>\n{stat}{diff}\n</diff>\n\nEnd with APPROVE: <what you checked> on one line, or REJECT: <file:line, what is wrong> followed by the 'For the worker:' block your instructions describe — the worker acts on that block alone.",
-            repo.base,
-            render_bead(&json)
-        );
+        let prompt = review_prompt(&json, &repo.base, &final_text, &stat, diff);
         let review_log = std::path::PathBuf::from(format!("{}.review.jsonl", logf.display()));
         let r = run_agent(
             repo,
@@ -604,25 +657,12 @@ pub fn review_one(repo: &Repo, opts: &Opts, id: Option<&str>, lane: Option<&Lane
             let _ = std::fs::remove_file(repo.review_path(&id));
             // The whole of the reviewer's verdict travels — the REJECT line and the block for
             // the worker under it — not a 600-character summary of it: it is the work order.
-            let from_reject: String = {
-                let mut out = Vec::new();
-                let mut on = false;
-                for l in r.text.lines() {
-                    if l.starts_with("REJECT:") {
-                        on = true;
-                    }
-                    if on {
-                        out.push(l);
-                    }
-                }
-                out.join("\n")
-            };
             send_back(
                 repo,
                 &id,
                 &wt,
                 true,
-                &format!("review ({review_model}) rejected:\n{}", cut_bytes(&from_reject, 4000)),
+                &format!("review ({review_model}) rejected:\n{}", cut_bytes(&reject_block(&r.text), 4000)),
                 &model,
                 false,
             );
@@ -653,17 +693,13 @@ pub fn review_one(repo: &Repo, opts: &Opts, id: Option<&str>, lane: Option<&Lane
         Err(e) => die(&format!("git push: {e}")),
     }
     let ac = json.get(0).and_then(|b| b.get("acceptance_criteria")).and_then(|v| v.as_str()).unwrap_or("");
-    let ac_quoted: String = ac.lines().map(|l| format!("> {l}")).collect::<Vec<_>>().join("\n");
-    let ac_quoted = if ac.is_empty() { "> ".to_string() } else { ac_quoted };
     let worker_line = cut_bytes(final_text.lines().last().unwrap_or(""), 500).to_string();
     let reviewer_line = if review_model.is_empty() {
         String::new()
     } else {
         format!("Reviewer ({review_model}): {}", cut_bytes(&last_line_starting(&verdict, "APPROVE:").unwrap_or_default(), 500))
     };
-    let body = format!(
-        "Bead `{id}`: {title}\n\n{ac_quoted}\n\nWorker: {worker_line}\n{reviewer_line}\n\nOpened by bead-loop; the bead closes when this merges.\n"
-    );
+    let body = pr_body(&id, &title, ac, &worker_line, &reviewer_line);
     // A branch sent back by CI already has its PR: the push updated it.
     let existing = crate::shell::gh_stdout_any(
         repo,
@@ -734,5 +770,87 @@ mod tests {
     fn last_line() {
         assert_eq!(last_line_starting("x\nDONE: a\nDONE: b\n", "DONE:").as_deref(), Some("DONE: b"));
         assert!(last_line_starting("nothing", "DONE:").is_none());
+    }
+    #[test]
+    fn render_bead_carries_everything_the_prompt_needs() {
+        let j: Value = serde_json::json!([{"id":"t-1","title":"Do the thing","description":"Edit work.txt","acceptance_criteria":"work.txt exists",
+            "priority":"1","issue_type":"bug","design":"like so","notes":"operator 2026: use the other flag"}]);
+        let s = render_bead(&j);
+        assert!(s.contains("type: bug   priority: P1"), "a string priority reads like a number: {s}");
+        assert!(s.contains("ACCEPTANCE CRITERIA:\nwork.txt exists"));
+        assert!(s.contains("\n\nDESIGN:\nlike so"));
+        assert!(s.ends_with("\n\nNOTES:\noperator 2026: use the other flag"), "the notes come last, so the next round reads the answer");
+        assert!(render_bead(&serde_json::json!([])).starts_with("id: \ntitle: "), "an empty array renders empty fields");
+    }
+    #[test]
+    fn harness_label_picks_the_worker_harness() {
+        assert_eq!(
+            harness_for(&["harness:opencode"], "aider:stub/worker"),
+            ("stub/worker".into(), Some("label harness:opencode: worker stub/worker runs in opencode, not aider".into()))
+        );
+        assert_eq!(
+            harness_for(&["harness:aider"], "stub/worker"),
+            ("aider:stub/worker".into(), Some("label harness:aider: worker aider:stub/worker runs in aider, not opencode".into()))
+        );
+        assert_eq!(harness_for(&["harness:aider"], "claude/opus"), ("claude/opus".into(), None), "claude/* stays in Claude Code");
+        assert_eq!(harness_for(&["harness:aider"], "aider:x/y"), ("aider:x/y".into(), None), "already under aider: nothing to say");
+        assert_eq!(harness_for(&["harness:opencode"], "stub/worker"), ("stub/worker".into(), None));
+        assert_eq!(harness_for(&["delegate:local"], "aider:x/y"), ("aider:x/y".into(), None), "no harness label: the stage's choice");
+    }
+    #[test]
+    fn dev_prompt_says_fresh_or_resumed_and_carries_the_history() {
+        let j: Value = serde_json::json!([{"id":"t-1","title":"T","description":"D"}]);
+        let fresh = dev_prompt(&j, "bead/t-1", "main", false, "", "");
+        assert!(fresh.contains("<bead>\nid: t-1\n"), "the bead rendered into the prompt");
+        assert!(fresh.contains("You are on branch bead/t-1, a fresh worktree of main."));
+        assert!(!fresh.contains("<previous-attempts>"), "first attempt has no history");
+        assert!(fresh.ends_with("DONE: <evidence> or BLOCKED: <note>."));
+        let hist = "round 1 (stub/fast): worker made no commit\nround 2 (stub/fast): review (r) rejected: REJECT: work.txt:1 For the worker: - What is wrong: x";
+        let again = dev_prompt(&j, "bead/t-1", "main", true, "", hist);
+        assert!(
+            again.contains("which already carries your earlier commit(s) for this bead: fix them in place rather than starting over"),
+            "told to fix, not restart"
+        );
+        assert!(again.contains("a work order from the senior reviewer"), "told to act on it");
+        assert!(again.contains(&format!("<previous-attempts>\n{hist}\n</previous-attempts>")), "the notes verbatim");
+        let rebase = dev_prompt(&j, "bead/t-1", "main", true, &rebase_order("main"), "");
+        assert!(rebase.contains("Your job this round is the rebase, not new work. Run: git fetch origin && git rebase origin/main"));
+        assert!(rebase.find("rebase origin/main").unwrap() > rebase.find("</bead>").unwrap(), "the order comes after the bead");
+    }
+    #[test]
+    fn gate_fix_prompt_feeds_the_gate_back() {
+        let p = gate_fix_prompt("PROMPT", "cargo test", "error[E0308]\n  --> x.rs:1");
+        assert!(p.starts_with("PROMPT\n\nYour commit on this branch failed the repository's gate: `cargo test`."));
+        assert!(p.ends_with("<gate-output>\nerror[E0308]\n  --> x.rs:1\n</gate-output>"));
+    }
+    #[test]
+    fn review_prompt_carries_report_and_diff() {
+        let j: Value = serde_json::json!([{"id":"t-1","title":"T","description":"D"}]);
+        let p = review_prompt(&j, "main", "DONE: did it", " work.txt | 1 +\n", "diff --git a/work.txt");
+        assert!(p.contains("The diff against main is under <diff>"));
+        assert!(p.contains("<worker-report>\nDONE: did it\n</worker-report>"));
+        assert!(p.contains("<diff>\n work.txt | 1 +\ndiff --git a/work.txt\n</diff>"), "stat, then the diff");
+        assert!(p.ends_with("the worker acts on that block alone."));
+    }
+    #[test]
+    fn the_whole_rejection_travels() {
+        let text = "I looked at it.\nREJECT: work.txt:1 wrong, fix it\nFor the worker:\n- What is wrong: work.txt:1 says round 1\n- What to do: append the word fixed\n- How to check: grep -c fixed work.txt prints 1";
+        let block = reject_block(text);
+        assert!(block.starts_with("REJECT: work.txt:1 wrong, fix it\nFor the worker:"), "from the REJECT line on");
+        assert!(block.ends_with("- How to check: grep -c fixed work.txt prints 1"), "to the end");
+        assert!(!block.contains("I looked at it."), "what came before it does not");
+        assert_eq!(reject_block("APPROVE: fine"), "", "nothing without a REJECT line");
+    }
+    #[test]
+    fn pr_body_quotes_the_criteria() {
+        let b = pr_body("t-1", "Do the thing", "a\nb", "DONE: did it", "Reviewer (stub/reviewer): APPROVE: checked");
+        assert!(b.starts_with("Bead `t-1`: Do the thing\n\n> a\n> b\n\nWorker: DONE: did it\nReviewer (stub/reviewer): APPROVE: checked\n"));
+        assert!(b.ends_with("Opened by bead-loop; the bead closes when this merges.\n"));
+        assert!(pr_body("t-1", "T", "", "w", "").contains("\n\n> \n\nWorker: w\n\n\n"), "no criteria: an empty quote, no reviewer line");
+    }
+    #[test]
+    fn hold_backoff_reads_the_environment() {
+        // Set only here; the integration suite sets it to 0 for the runs that need a hold to age.
+        assert_eq!(hold_backoff(), 300);
     }
 }

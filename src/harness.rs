@@ -195,7 +195,10 @@ fn clean_aider(dir: &Path) {
 /// The agent file's body — everything after the frontmatter's closing `---`.
 fn agent_body(agent: &str) -> String {
     let p = loop_home().join("agents").join(format!("{agent}.md"));
-    let text = read_to_string(&p).unwrap_or_default();
+    agent_body_of(&read_to_string(&p).unwrap_or_default())
+}
+
+pub fn agent_body_of(text: &str) -> String {
     let mut seen = 0;
     let mut out = Vec::new();
     for line in text.lines() {
@@ -219,7 +222,11 @@ pub fn opencode_provider(provider: &str) -> (String, String) {
     let path = std::env::var_os("OPENCODE_CONFIG")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| crate::util::home().join(".config/opencode/opencode.json"));
-    let v: Value = match read_to_string(&path).and_then(|s| serde_json::from_str(&s).ok()) {
+    opencode_provider_in(&path, provider)
+}
+
+pub fn opencode_provider_in(path: &Path, provider: &str) -> (String, String) {
+    let v: Value = match read_to_string(path).and_then(|s| serde_json::from_str(&s).ok()) {
         Some(v) => v,
         None => return (String::new(), String::new()),
     };
@@ -305,5 +312,55 @@ pub fn runnable(model: &str) -> bool {
         claude_ok()
     } else {
         true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn files_named_are_the_ones_the_description_names_that_exist() {
+        let d = crate::config::scratch("files-named");
+        std::fs::create_dir_all(d.join("lib")).unwrap();
+        for f in ["work.txt", "README", "lib/x.ts"] {
+            std::fs::write(d.join(f), "").unwrap();
+        }
+        let bead =
+            serde_json::json!([{"description": "Edit work.txt (leave README alone); see docs/none.md, then lib/x.ts: and `work.txt`."}]);
+        assert_eq!(
+            files_named(Some(&bead), &d),
+            vec!["lib/x.ts", "work.txt"],
+            "sorted, unique, punctuation trimmed; README has no dot or slash"
+        );
+        assert!(files_named(None, &d).is_empty());
+        let _ = std::fs::remove_dir_all(&d);
+    }
+    #[test]
+    fn opencode_provider_from_its_config() {
+        let d = crate::config::scratch("opencode-json");
+        let f = d.join("opencode.json");
+        assert_eq!(opencode_provider_in(&f, "stub"), (String::new(), String::new()), "no file: nothing");
+        std::fs::write(&f, r#"{"provider":{"stub":{"options":{"baseURL":"http://stub.test/v1","apiKey":"not-needed"}}, "bare":{}}}"#)
+            .unwrap();
+        assert_eq!(opencode_provider_in(&f, "stub"), ("http://stub.test/v1".into(), "not-needed".into()));
+        assert_eq!(opencode_provider_in(&f, "bare"), (String::new(), String::new()), "a provider without options");
+        assert_eq!(opencode_provider_in(&f, "nope"), (String::new(), String::new()));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+    #[test]
+    fn agent_body_is_what_follows_the_frontmatter() {
+        assert_eq!(agent_body_of("---\nname: x\n---\nYou are the reviewer.\n\nBe strict.\n"), "You are the reviewer.\n\nBe strict.\n");
+        assert_eq!(agent_body_of("no frontmatter"), "", "nothing before a second ---");
+        assert_eq!(agent_body_of(""), "");
+        let real = agent_body_of(&std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/agents/bead-worker.md")).unwrap());
+        assert!(real.contains("delegated developer for one bead"), "the worker agent's body is the system prompt");
+        let real = agent_body_of(&std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/agents/bead-reviewer.md")).unwrap());
+        assert!(real.contains("senior reviewer"));
+    }
+    #[test]
+    fn only_claude_models_need_a_probe() {
+        assert!(runnable("stub/worker"));
+        assert!(runnable("aider:stub/worker"));
+        assert!(runnable(""));
     }
 }

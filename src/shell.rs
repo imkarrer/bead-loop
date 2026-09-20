@@ -210,3 +210,17 @@ pub fn curl_get(url: &str, dir: Option<&str>, secs: u32) -> Option<String> {
 pub fn curl_post(url: &str, secs: u32) -> bool {
     matches!(output(cmd("curl").args(["-sf", "-m", &secs.to_string(), "-X", "POST", url])), Ok(o) if o.status.success())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn bd_output_is_always_an_array() {
+        assert_eq!(parse_array("[{\"id\":\"t-1\"}]"), serde_json::json!([{"id":"t-1"}]));
+        assert_eq!(parse_array("{\"id\":\"t-1\"}"), serde_json::json!([{"id":"t-1"}]), "one object is a one-element array");
+        assert_eq!(parse_array(""), serde_json::json!([]), "nothing is empty");
+        assert_eq!(parse_array("null"), serde_json::json!([]));
+        assert_eq!(parse_array("not json"), serde_json::json!([]));
+        assert_eq!(ids_of("[{\"id\":\"t-1\"},{\"title\":\"no id\"},{\"id\":\"t-2\"}]"), vec!["t-1", "t-2"]);
+    }
+}

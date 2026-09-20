@@ -27,16 +27,24 @@ pub struct Layers {
 /// `toml_json FILE`: the file as one JSON object ({} when absent or empty); a parse error
 /// is a loud stop naming the file.
 pub fn toml_json(path: &Path) -> Value {
+    match parse_toml(path) {
+        Ok(v) => v,
+        Err(e) => die(&e),
+    }
+}
+
+/// The file as one JSON object; Err names the file and what did not parse.
+pub fn parse_toml(path: &Path) -> Result<Value, String> {
     let text = match std::fs::read_to_string(path) {
         Ok(t) => t,
-        Err(_) => return Value::Object(Default::default()),
+        Err(_) => return Ok(Value::Object(Default::default())),
     };
     if text.trim().is_empty() {
-        return Value::Object(Default::default());
+        return Ok(Value::Object(Default::default()));
     }
     match text.parse::<toml::Table>() {
-        Ok(t) => serde_json::to_value(t).unwrap_or(Value::Object(Default::default())),
-        Err(e) => die(&format!("{}: {}", path.display(), e.message())),
+        Ok(t) => Ok(serde_json::to_value(t).unwrap_or(Value::Object(Default::default()))),
+        Err(e) => Err(format!("{}: {}", path.display(), e.message())),
     }
 }
 
@@ -214,23 +222,7 @@ impl Repo {
         }
         let state_dir = state_dir();
         let rs = state_dir.join(&slug);
-        for d in ["inflight", "logs", "wt", "review", "failures", "held"] {
-            let _ = std::fs::create_dir_all(rs.join(d));
-        }
-        // attempts/ was the older name for failures/: same counter, carried over file by
-        // file (a status run may have made failures/ first), then the old directory goes.
-        let old = rs.join("attempts");
-        if old.is_dir() {
-            if let Ok(rd) = std::fs::read_dir(&old) {
-                for e in rd.flatten() {
-                    let dst = rs.join("failures").join(e.file_name());
-                    if !dst.exists() {
-                        let _ = std::fs::rename(e.path(), dst);
-                    }
-                }
-            }
-            let _ = std::fs::remove_dir_all(&old);
-        }
+        make_state_dirs(&rs);
         Repo {
             label: cfg.str("label", "delegate:local"),
             merge: cfg.str("merge", "auto"),
@@ -253,6 +245,84 @@ impl Repo {
             state_dir,
         }
     }
+}
+
+/// The repo's state directories, and the older `attempts/` carried into `failures/`:
+/// same counter, file by file (a status run may have made failures/ first), then the
+/// old directory goes.
+pub fn make_state_dirs(rs: &Path) {
+    for d in ["inflight", "logs", "wt", "review", "failures", "held"] {
+        let _ = std::fs::create_dir_all(rs.join(d));
+    }
+    let old = rs.join("attempts");
+    if old.is_dir() {
+        if let Ok(rd) = std::fs::read_dir(&old) {
+            for e in rd.flatten() {
+                let dst = rs.join("failures").join(e.file_name());
+                if !dst.exists() {
+                    let _ = std::fs::rename(e.path(), dst);
+                }
+            }
+        }
+        let _ = std::fs::remove_dir_all(&old);
+    }
+}
+
+/// A `Repo` over a scratch directory, for the unit tests: no git, no bd, no config
+/// files — `root/repo` as the checkout, `root/state` as the state dir, the stages given
+/// as `worker[:reviewer[:failures]]`.
+#[cfg(test)]
+pub fn test_repo(root: &Path, stages: &[&str]) -> Repo {
+    let repo = root.join("repo");
+    let state_dir = root.join("state");
+    let rs = state_dir.join("repo");
+    let _ = std::fs::create_dir_all(&repo);
+    let _ = std::fs::create_dir_all(&state_dir);
+    make_state_dirs(&rs);
+    let stages: Vec<Stage> = stages
+        .iter()
+        .map(|s| {
+            let mut it = s.split(':');
+            Stage {
+                worker: it.next().unwrap_or("").to_string(),
+                reviewer: it.next().unwrap_or("").to_string(),
+                failures: it.next().and_then(|n| n.parse().ok()).unwrap_or(1),
+                timeout: None,
+            }
+        })
+        .collect();
+    let model = stages.first().map(|s| s.worker.clone()).unwrap_or_default();
+    let review_model = stages.first().map(|s| s.reviewer.clone()).unwrap_or_default();
+    Repo {
+        slug: "repo".into(),
+        label: "delegate:local".into(),
+        merge: "auto".into(),
+        merge_label: "automerge".into(),
+        setup: String::new(),
+        gate: String::new(),
+        on_exhaust: "park".into(),
+        conflict_worker: String::new(),
+        adopt: true,
+        max_inflight: u64::MAX,
+        worker_timeout: 60,
+        attach: String::new(),
+        base: "main".into(),
+        model,
+        review_model,
+        stages,
+        repo,
+        rs,
+        state_dir,
+    }
+}
+
+/// A fresh scratch directory under the system temp dir, unique to the test.
+#[cfg(test)]
+pub fn scratch(name: &str) -> PathBuf {
+    let d = std::env::temp_dir().join(format!("bead-loop-test-{}-{name}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&d);
+    let _ = std::fs::create_dir_all(&d);
+    d
 }
 
 /// `need NAME`: die when a tool the config asks for is not installed.
@@ -473,5 +543,56 @@ mod tests {
     fn a_stage_without_a_count_takes_one() {
         let l = layers("[[stages]]\nworker = \"a\"", "");
         assert_eq!(l.stages()[0].failures, 1);
+    }
+
+    #[test]
+    fn scalars_read_as_yq_printed_them() {
+        let l = layers("adopt = \"false\"\nmax_inflight = \"2\"\ngate = true\nrepos = [\"a\", \"b\"]", "");
+        assert!(!l.bool("adopt", true), "a quoted false is false");
+        assert_eq!(l.u64("max_inflight", 9), 2, "a quoted number is a number");
+        assert_eq!(l.str("gate", ""), "true", "a bare true prints as true");
+        assert_eq!(l.str("repos", ""), "a b", "an array joins by spaces");
+        assert_eq!(l.u64("nope", 7), 7);
+        assert!(l.bool("nope", true));
+    }
+
+    #[test]
+    fn a_config_file_parses_or_says_why() {
+        let d = scratch("toml");
+        let f = d.join("c.toml");
+        assert_eq!(parse_toml(&f).unwrap(), serde_json::json!({}), "an absent file is empty");
+        std::fs::write(&f, "  \n").unwrap();
+        assert_eq!(parse_toml(&f).unwrap(), serde_json::json!({}), "an empty file is empty");
+        std::fs::write(&f, "gate = 'true'   # trailing comment\nmerge = \"auto\"\n").unwrap();
+        let v = parse_toml(&f).unwrap();
+        assert_eq!(v["gate"], "true", "a trailing comment is not part of the value");
+        assert_eq!(v["merge"], "auto");
+        std::fs::write(&f, "gate = \"unterminated\n").unwrap();
+        let err = parse_toml(&f).unwrap_err();
+        assert!(err.starts_with(&f.display().to_string()), "the error names the file: {err}");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn attempts_carry_over_into_failures() {
+        // The older attempts/ counter moves into failures/ file by file, even when
+        // failures/ already exists, and the old directory goes.
+        let d = scratch("attempts");
+        let rs = d.join("rs");
+        std::fs::create_dir_all(rs.join("attempts")).unwrap();
+        std::fs::create_dir_all(rs.join("failures")).unwrap();
+        std::fs::write(rs.join("attempts/t-1"), "2\n").unwrap();
+        std::fs::write(rs.join("attempts/t-1.notes"), "round 1 (x): y\n").unwrap();
+        std::fs::write(rs.join("attempts/t-9"), "1\n").unwrap();
+        std::fs::write(rs.join("failures/t-9"), "5\n").unwrap();
+        make_state_dirs(&rs);
+        assert_eq!(std::fs::read_to_string(rs.join("failures/t-1")).unwrap(), "2\n");
+        assert_eq!(std::fs::read_to_string(rs.join("failures/t-1.notes")).unwrap(), "round 1 (x): y\n", "the history too");
+        assert_eq!(std::fs::read_to_string(rs.join("failures/t-9")).unwrap(), "5\n", "an existing counter is not overwritten");
+        assert!(!rs.join("attempts").exists(), "attempts/ gone");
+        for sub in ["inflight", "logs", "wt", "review", "failures", "held"] {
+            assert!(rs.join(sub).is_dir(), "{sub}/ made");
+        }
+        let _ = std::fs::remove_dir_all(&d);
     }
 }
