@@ -150,7 +150,7 @@ the global one; the global one wins over the default. Anything may go in either.
 | `base` | origin's HEAD | branch to fork from and PR into |
 | `setup` | none | runs in a fresh worktree before the worker (`npm ci`); not again on a branch sent back |
 | `gate` | none (CI is the gate) | runs after the worker, before the review queue; one fix round on failure |
-| `model` | none | the dev lane's worker when no `[[stages]]` table applies |
+| `model` | none | the dev lane's worker when no `[[stages]]` table applies. The name picks the harness: `provider/model` runs in opencode, `claude/<alias>` in Claude Code, `aider:provider/model` in aider on that opencode provider's server (see Harnesses) |
 | `review_model` | none (no review) | the review lane's model when no `[[stages]]` table applies; none: straight to PR |
 | `[[stages]]` | one stage of `model`/`review_model`, `failures = 3` | `worker`, `reviewer`, `failures` (1: how many send-backs this stage absorbs before the next takes over; `attempts` still reads), `timeout` (`worker_timeout`), in order |
 | `on_exhaust` | `"park"` | after the last stage: `park` for you, or `repeat` the stages |
@@ -416,4 +416,27 @@ every step inside this repo's `.flox/` through the imkarrer/flox plugin.
 - Every claim is checked by something that is not the model that made it: the gate,
   the reviewer, CI, and the merge check are independent refusals.
 - `run_agent` in `bin/bead-supervisor` is the one seam to the harness: opencode for local
-  models, Claude Code for `claude/*`; adding aider would be one more case there.
+  models, Claude Code for `claude/*`, aider for `aider:*`; each is one case there.
+
+### Harnesses
+
+The worker's model name picks its harness. `provider/model` is an opencode agent: the
+model reads the repo with tools, finds the files to touch, runs commands, commits, and
+ends with `DONE:` or `BLOCKED:`. `claude/<alias>` is the same round in Claude Code.
+`aider:provider/model` runs aider (`aider --yes-always --no-auto-commits --message ...`)
+on the same provider's server — its `baseURL` in `~/.config/opencode/opencode.json`,
+spoken as `openai/model` — handing it the files the bead's DESCRIPTION names (every
+token with a slash or a dot that exists in the worktree) and the `gate` as its
+`--lint-cmd`. Aider explores nothing and commits nothing: the loop commits what it
+edited, a zero exit with a diff is done, a non-zero exit is a failure, and there is no
+`DONE:` line. Aider is the better choice for a small model on a file-scoped bead with a
+runnable gate: the edit format is stricter than tool calls, the files are given, and
+the gate runs after each edit inside aider's own loop. Opencode is the better choice
+when the bead needs the model to find its files, run the tests it names, or stop with
+`BLOCKED:` and a reason. The reviewer is never aider: a review reads, it does not edit.
+
+A bead can pick its worker's harness over the stage's, by label: `harness:aider` puts
+the stage's opencode model under aider (`devbox/coder` runs as `aider:devbox/coder`),
+`harness:opencode` takes an `aider:` model out of it. A `claude/*` stage is not touched by
+either. The dev lane logs the harness it chose and the label that chose it, once per
+round; the stage's reviewer and failure count are the same either way.

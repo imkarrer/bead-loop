@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# Stub aider for bead-loop tests. Same $TEST_CTRL contract as the opencode stub, as the
+# worker only: the calls line says aider, the message goes to prompt.<n>, the environment
+# and the command line (message elided) to aider.args. Edits the files it was given
+# (nothing committed: --no-auto-commits); no DONE: line, the diff is the report.
+set -euo pipefail
+model='' prompt='' files=() args=()
+while [ $# -gt 0 ]; do
+  case $1 in
+    --model) model=$2; args+=("$1" "$2"); shift;;
+    --message) prompt=$2; args+=("$1" "<message>"); shift;;
+    --lint-cmd|--chat-history-file|--input-history-file) args+=("$1" "$2"); shift;;
+    --*) args+=("$1");;
+    *) files+=("$1"); args+=("$1");;
+  esac; shift
+done
+printf '%s\n' "base=${OPENAI_API_BASE:-unset} key=${OPENAI_API_KEY:-unset}" "${args[*]}" >"$TEST_CTRL/aider.args"
+n=$(( $(wc -l <"$TEST_CTRL/calls" 2>/dev/null || echo 0) + 1 ))
+printf 'bead-worker %s %s aider\n' "$PWD" "${model:-none}" >>"$TEST_CTRL/calls"
+printf '%s' "$prompt" >"$TEST_CTRL/prompt.$n"
+mkdir -p .aider.tags.cache.v4 && : >.aider.tags.cache.v4/cache.db   # what the real one leaves in the cwd
+round=$(grep -c '^bead-worker' "$TEST_CTRL/calls")
+for f in "${files[@]}"; do echo "aider round $round" >>"$f"; done
+echo "Applied edit to ${files[*]:-nothing}"

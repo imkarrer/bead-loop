@@ -64,13 +64,13 @@ cfg() {
     '($r[$k] // $g[$k] // empty) | if type == "array" then map(tostring) | join(" ") else tostring end')
   printf '%s' "${v:-${2-}}"
 }
-# stages_words: the stages table as "worker:reviewer:failures:timeout" words, the
-# form stage_for walks; empty when no file sets one. `attempts` is the older name
-# for `failures` and still reads.
+# stages_words: the stages table as "worker|reviewer|failures|timeout" words, the
+# form stage_for walks (| because a model name may carry a colon: aider:x/y); empty
+# when no file sets one. `attempts` is the older name for `failures` and still reads.
 stages_words() {
   jq -rn --argjson r "${R_JSON:-{\}}" --argjson g "$G_JSON" '($r.stages // $g.stages // [])
     | map(if .worker == null then error("a stage needs a worker") else . end)
-    | map([.worker, (.reviewer // ""), (.failures // .attempts // 1), (.timeout // "")] | map(tostring) | join(":")) | join(" ")'
+    | map([.worker, (.reviewer // ""), (.failures // .attempts // 1), (.timeout // "")] | map(tostring) | join("|")) | join(" ")'
 }
 
 DRY=0 LOCAL=0 JSON=0 ONCE=0 SERIAL=0 MODEL_FLAG=
@@ -113,10 +113,11 @@ load_repo() {
   GATE=$(cfg gate)
   MODEL=${MODEL_FLAG:-$(cfg model)}
   REVIEW_MODEL=$(cfg review_model)
-  STAGES=$(stages_words); STAGES=${STAGES:-$MODEL:$REVIEW_MODEL:3}
+  STAGES=$(stages_words); STAGES=${STAGES:-"$MODEL|$REVIEW_MODEL|3"}
   ON_EXHAUST=$(cfg on_exhaust park)
   ADOPT=$(cfg adopt true)
-  case " $STAGES " in *" claude/"*|*":claude/"*) need claude ;; esac
+  case " $STAGES " in *" claude/"*|*"|claude/"*) need claude ;; esac
+  case " $STAGES " in *" aider:"*) need aider ;; esac
   MAX_INFLIGHT=$(cfg max_inflight 1)
   WORKER_TIMEOUT=$(cfg worker_timeout 3600)
   ATTACH=$(cfg attach)
@@ -165,11 +166,34 @@ inflight_count() {
 # ---- the models -------------------------------------------------------------
 # run_agent AGENT MODEL DIR LOG PROMPT [TITLE]: one non-interactive session, in the harness
 # the model name selects: "claude/<alias>" is Claude Code (claude -p, the agent file's
-# body as its system prompt, tools by role); anything else is an opencode agent.
+# body as its system prompt, tools by role); "aider:<provider>/<model>" is aider on the
+# opencode provider's server (the dev lane only: aider edits, it does not review);
+# anything else is an opencode agent.
 # Prints the last text the agent wrote; returns the harness's exit code.
 run_agent() {
   local agent=$1 model=$2 dir=$3 logf=$4 prompt=$5 title=${6:-} rc=0
   case $model in
+    aider:*)
+      # Aider explores nothing: it edits the files it is handed, so the files are the ones
+      # the bead's DESCRIPTION names (the workflow skill makes it name them) that exist in
+      # the worktree; the bead's json is the caller's $json. The server is the provider's
+      # baseURL in opencode's config, spoken as openai/<model>; local servers ignore the
+      # key. Aider's scratch (.aider*) leaves the worktree, or settle_worktree would commit
+      # it; the chat goes beside the log.
+      local provider=${model#aider:} base key f files=()
+      provider=${provider%%/*}
+      { read -r base; read -r key; } <<<"$(jq -r --arg p "$provider" '.provider[$p].options // {} | (.baseURL // ""), (.apiKey // "")' \
+        "${OPENCODE_CONFIG:-$HOME/.config/opencode/opencode.json}" 2>/dev/null || printf '\n\n')"
+      [ -n "$base" ] || log "$SLUG: no baseURL for opencode provider $provider in opencode.json; aider uses its own OPENAI_API_BASE"
+      while read -r f; do [ -n "$f" ] && [ -f "$dir/$f" ] && files+=("$f"); done <<<"$(printf '%s' "${json:-}" | jq -r '.[0].description // ""' \
+        | tr -s '[:space:]' '\n' | sed 's/^[^A-Za-z0-9_./]*//; s/[^A-Za-z0-9_/-]*$//' | grep '[/.]' | sort -u || true)"
+      (cd "$dir" && env ${base:+OPENAI_API_BASE="$base"} OPENAI_API_KEY="${key:-${OPENAI_API_KEY:-unused}}" \
+          timeout --foreground "$WORKER_TIMEOUT" aider --yes-always --no-auto-commits --no-gitignore \
+          --model "openai/${model#aider:*/}" --chat-history-file "$logf.chat.md" --input-history-file "$logf.input" \
+          --message "$prompt" ${GATE:+--lint-cmd "$GATE"} "${files[@]}") >"$logf" 2>"$logf.err" || rc=$?
+      rm -rf "$dir"/.aider*
+      tail -20 "$logf"
+      ;;
     claude/*)
       local tools sys
       case $agent in
@@ -241,14 +265,14 @@ run_gate() {
 # A bead's failure count is how many times it has been sent back to the dev queue:
 # from dev itself (BLOCKED, no commit, the gate failing twice), from review (REJECT),
 # from merge (CI red). failures/ID holds the count, failures/ID.notes the history the
-# next worker reads. STAGES is "worker:reviewer:failures:timeout" words, one per
+# next worker reads. STAGES is "worker|reviewer|failures|timeout" words, one per
 # [[stages]] table, in order: a stage takes the bead for the next N failures, so a
 # bead with more failures lands on a later, stronger stage. stage_for N resolves a
 # failure count into S_MODEL S_REVIEW S_TIMEOUT S_LAST, or returns 1 when exhausted.
 failures_of() { cat "$RS/failures/$1" 2>/dev/null || echo 0; }
 stage_for() {
   local n=$1 total=0 s a
-  for s in $STAGES; do IFS=: read -r _ _ a _ <<<"$s"; total=$((total + ${a:-1})); done
+  for s in $STAGES; do IFS="|" read -r _ _ a _ <<<"$s"; total=$((total + ${a:-1})); done
   if [ "$n" -ge "$total" ]; then
     [ "$ON_EXHAUST" = repeat ] || return 1
     n=$((n % total))
@@ -256,7 +280,7 @@ stage_for() {
   local i=0 count=0
   set -- $STAGES
   for s in "$@"; do
-    i=$((i + 1)); IFS=: read -r S_MODEL S_REVIEW a S_TIMEOUT <<<"$s"
+    i=$((i + 1)); IFS="|" read -r S_MODEL S_REVIEW a S_TIMEOUT <<<"$s"
     count=$((count + ${a:-1}))
     if [ "$n" -lt "$count" ]; then
       S_TIMEOUT=${S_TIMEOUT:-$WORKER_TIMEOUT}; S_LAST=$([ "$i" = $# ] && echo 1 || echo 0)
@@ -294,8 +318,8 @@ pick_runnable() {
 last_stage_start() {
   local total=0 s a n=0
   set -- $STAGES
-  for s in "$@"; do IFS=: read -r _ _ a _ <<<"$s"; total=$((total + ${a:-1})); done
-  IFS=: read -r _ _ a _ <<<"${*: -1}"
+  for s in "$@"; do IFS="|" read -r _ _ a _ <<<"$s"; total=$((total + ${a:-1})); done
+  IFS="|" read -r _ _ a _ <<<"${*: -1}"
   echo $((total - ${a:-1}))
 }
 # escalate ID: "work this with Claude" — the failure count set to the first value that
@@ -400,6 +424,12 @@ dev_one() {
   json=$(bdr show "$id" --json)
   [ "$(printf '%s' "$json" | jq 'length')" -gt 0 ] || die "$SLUG: bd show $id returned nothing"
   title=$(printf '%s' "$json" | jq -r '.[0].title')
+  # A bead may pick its worker's harness: label harness:aider puts the stage's opencode
+  # model under aider, harness:opencode takes an aider: model out; claude/* stays Claude Code.
+  case "$(printf '%s' "$json" | jq -r '.[0].labels // [] | if index("harness:aider") then "aider" elif index("harness:opencode") then "opencode" else "" end')" in
+    opencode) case $MODEL in aider:*) MODEL=${MODEL#aider:}; log "$SLUG: $id: label harness:opencode: worker $MODEL runs in opencode, not aider" ;; esac ;;
+    aider)    case $MODEL in aider:*|claude/*) ;; *) MODEL=aider:$MODEL; log "$SLUG: $id: label harness:aider: worker $MODEL runs in aider, not opencode" ;; esac ;;
+  esac
   branch=bead/$id
   wt=$RS/wt/$id
   stamp=$(date +%Y%m%dT%H%M%S)
@@ -869,7 +899,7 @@ status_json() {
     --argjson claude_ok "$(case " $STAGES " in *claude/*) claude_ok && echo true || echo false ;; *) echo null ;; esac)" \
     --argjson open "$(bdr ready -l "$LABEL" --json -n 0 2>/dev/null | jq -c '. // []' 2>/dev/null || echo '[]')" \
     --argjson inprog "$(bdr list --status in_progress -l "$LABEL" --json -n 0 2>/dev/null | jq -c '. // []' 2>/dev/null || echo '[]')" '
-    ($stages | split(" ") | map(split(":") | {worker: .[0], reviewer: .[1], failures: (.[2] | tonumber)})) as $st
+    ($stages | split(" ") | map(split("|") | {worker: .[0], reviewer: .[1], failures: (.[2] | tonumber)})) as $st
     # stage_for, in jq: the stage a failure count lands on (null when exhausted and on_exhaust = park).
     | def stage_of($n): ($st | map(.failures) | add) as $total
         | (if $n >= $total then (if $on_exhaust == "repeat" then ($n % $total) else null end) else $n end) as $k
