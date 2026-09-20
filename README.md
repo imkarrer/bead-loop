@@ -382,7 +382,8 @@ there, uncommitted, for you to commit with your own work.
 stub `bd`, `opencode` and `gh` (`test/bin/`) and a real git origin: no model, no network,
 a few seconds. `test/lint-skills.sh` checks the frontmatter opencode needs. Both run with
 shellcheck in `.github/workflows/ci.yml` on every push and PR, and `main` requires that
-check green.
+check green. The same checks run on Buildkite (`.buildkite/pipeline.yml`, queue `self`),
+every step inside this repo's `.flox/` through the imkarrer/flox plugin.
 
 ## Why this shape
 
