@@ -145,6 +145,9 @@
 <script>
 'use strict';
 const $ = (id) => document.getElementById(id);
+// js(v): a JavaScript literal for use inside an onclick="…" attribute: JSON, then the
+// quotes HTML-escaped, so the attribute is not cut short at the first inner ".
+const js = (v) => esc(JSON.stringify(v));
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const ago = (t, now) => { const d = Math.max(0, now - t); return d < 90 ? `${d}s` : d < 5400 ? `${Math.floor(d / 60)}m` : `${Math.floor(d / 3600)}h${String(Math.floor((d % 3600) / 60)).padStart(2, '0')}`; };
 const clock = (t) => new Date(t * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
@@ -237,8 +240,8 @@ const count = (n, label) => `<div class="count ${n ? '' : 'zero'}">${n}<small>${
 const lastStage = (r) => r.stages[r.stages.length - 1];
 const claudeBtn = (r, b) => (!lastStage(r) || (b.stage && b.stage.index === r.stages.length)) ? '' :
   (r.claude_ok === false && /^claude\//.test(lastStage(r).worker)) ? `<button disabled title="Claude is signed out on this box — Sign in at the top first">Work with ${esc(lastStage(r).worker.replace(/^claude\//, 'Claude '))}</button>` :
-  `<button ${busyAction ? 'disabled' : ''} title="to the last stage (${esc(lastStage(r).worker)}) and back into the dev queue now" onclick="act('escalate',{repo:${JSON.stringify(r.repo)},id:${JSON.stringify(b.id)}},'Work ${esc(b.id)} with ${esc(lastStage(r).worker)} now? It goes to the last stage and back into the dev queue, ahead of its failure count.')">Work with ${esc(lastStage(r).worker.replace(/^claude\//, 'Claude '))}</button>`;
-const abortBtn = (r, sess, label) => `<button class="danger" ${busyAction ? 'disabled' : ''} onclick="act('abort',{attach:${JSON.stringify(r.attach)},session:${JSON.stringify(sess.id)}},'Abort ${esc(label)}?')">Abort</button>`;
+  `<button ${busyAction ? 'disabled' : ''} title="to the last stage (${esc(lastStage(r).worker)}) and back into the dev queue now" onclick="act('escalate',{repo:${js(r.repo)},id:${js(b.id)}},'Work ${esc(b.id)} with ${esc(lastStage(r).worker)} now? It goes to the last stage and back into the dev queue, ahead of its failure count.')">Work with ${esc(lastStage(r).worker.replace(/^claude\//, 'Claude '))}</button>`;
+const abortBtn = (r, sess, label) => `<button class="danger" ${busyAction ? 'disabled' : ''} onclick="act('abort',{attach:${js(r.attach)},session:${js(sess.id)}},'Abort ${esc(label)}?')">Abort</button>`;
 
 // A PR in the merge queue: what GitHub says now (p.pr, a minute old at most), then the
 // loop's own markers. Merged or closed on GitHub means the next reconcile finishes it.
@@ -330,12 +333,12 @@ function repo(r, now, ticking) {
   const human = r.parked.length === 0 ? '<div class="empty">nothing waiting on you</div>' : `<table>${r.parked.map((b) => `
     <tr><td class="id">${esc(b.id)}</td><td class="title"><span class="t" title="${esc(b.title || '')}">${esc(b.title || '')}</span></td>
         <td class="fit">${b.question ? '<span class="chip warn">question</span>' : b.stage ? '<span class="chip">stopped</span>' : '<span class="chip bad">exhausted</span>'} ${failChip(b.failures)}${histToggle(b)}</td>
-        <td class="act">${claudeBtn(r, b)} <button ${busyAction ? 'disabled' : ''} onclick="act('reopen',{repo:${JSON.stringify(r.repo)},id:${JSON.stringify(b.id)}})" title="back in the dev queue as is">Reopen</button></td></tr>${histRow(b, 3)}
+        <td class="act">${claudeBtn(r, b)} <button ${busyAction ? 'disabled' : ''} onclick="act('reopen',{repo:${js(r.repo)},id:${js(b.id)}})" title="back in the dev queue as is">Reopen</button></td></tr>${histRow(b, 3)}
     <tr class="sub"><td></td><td colspan="3" class="why">${b.why ? `${b.why.when ? `<span class="muted">${esc(b.why.when.replace('T', ' ').slice(0, 16))}${b.why.round ? ' ·' + esc(b.why.round) : ''} — </span>` : ''}${esc(b.why.what)}` : '<span class="muted">no note from the loop — parked by hand, or before the loop kept notes</span>'}
       <div class="reply">
         <textarea id="ans-${esc(b.id)}" rows="2" placeholder="Your answer, or what to do differently — goes on the bead; the next round reads it"></textarea>
-        <button ${busyAction ? 'disabled' : ''} onclick="act('answer',{repo:${JSON.stringify(r.repo)},id:${JSON.stringify(b.id)},text:document.getElementById('ans-${esc(b.id)}').value})">Answer &amp; resume</button>
-        <span class="muted">or work it with Claude yourself, in its worktree:</span> <code class="cmd">${esc(b.open_cmd)}</code> <button onclick="navigator.clipboard.writeText(${JSON.stringify(b.open_cmd)})" title="copy">Copy</button>
+        <button ${busyAction ? 'disabled' : ''} onclick="act('answer',{repo:${js(r.repo)},id:${js(b.id)},text:document.getElementById('ans-${esc(b.id)}').value})">Answer &amp; resume</button>
+        <span class="muted">or work it with Claude yourself, in its worktree:</span> <code class="cmd">${esc(b.open_cmd)}</code> <button onclick="navigator.clipboard.writeText(${js(b.open_cmd)})" title="copy">Copy</button>
       </div></td></tr>`).join('')}</table>`;
   return `<section class="card" id="repo-${esc(r.slug)}">
     <h2>${esc(r.slug)} <span class="cfg">${esc(r.label)} · ${esc(r.base)} · merge ${esc(r.merge)} · stages: ${stages} · then ${esc(r.on_exhaust)}${r.attach ? '' : ' · <b>no attach</b>: sessions not visible'}</span></h2>
