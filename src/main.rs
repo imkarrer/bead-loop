@@ -26,6 +26,7 @@
 //!   bead-supervisor stats [REPO...]       the scoreboard: landed, first-try, without Claude, rounds and time per
 //!                                         landing, send-backs by reason and model, model cost — 24h/7d/30d/all
 //!   bead-supervisor log REPO [BEAD_ID]    follow the newest worker/reviewer session: tool calls and text
+//!   bead-supervisor doctor [--json]         one line per dependency probe (green/red), or JSON array
 //!
 //!   --dry-run    pick the bead, print the prompt, change nothing
 //!   --once       tick: one pass of each lane, in turn, whether or not more is queued
@@ -46,11 +47,13 @@ mod state;
 mod stats;
 mod status;
 mod util;
+mod doctor;
 
 use config::{config_dir, Layers, Repo};
 use round::Opts;
 use std::path::PathBuf;
 use util::{die, log};
+use doctor::run as doctor_run;
 
 fn usage() -> ! {
     let src = include_str!("main.rs");
@@ -221,6 +224,7 @@ fn main() {
             let repo = repo_at(0);
             status::log_follow(&repo, rest.get(1).map(String::as_str));
         }
+        "doctor" => doctor_run(json),
         other => die(&format!("unknown command {other}")),
     }
 }
