@@ -157,6 +157,7 @@ src/                      the supervisor: config, state, the rounds, the merge q
 Cargo.toml                one binary, bead-supervisor; serde_json, toml, libc
 skills/beads/             bd syntax                        -> ~/.config/opencode/skills/beads
 skills/bead-workflow/     one bead, start to finish        -> ~/.config/opencode/skills/bead-workflow
+skills/delegate/          writing and labelling a bead for the loop; the harness choice   -> ~/.claude/skills/delegate (for you, planning)
 agents/bead-worker.md     implementor agent                -> ~/.config/opencode/agents/
 agents/bead-reviewer.md   reviewer agent                   -> ~/.config/opencode/agents/
 agents/bead-briefer.md    the brief of a parked bead       -> ~/.config/opencode/agents/
