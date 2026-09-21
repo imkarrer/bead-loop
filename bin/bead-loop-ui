@@ -25,6 +25,7 @@ const SUPERVISOR = process.env.BEAD_SUPERVISOR
   || [path.join(HOME, 'target', 'release', 'bead-supervisor'), path.join(HOME, 'target', 'debug', 'bead-supervisor')].find((p) => fs.existsSync(p))
   || 'bead-supervisor';
 const PAGE = path.join(HOME, 'ui', 'index.html');
+const FAVICON = path.join(HOME, 'ui', 'favicon.svg');
 const PORT = Number(process.env.BEAD_LOOP_UI_PORT || 4097);
 const HOST = process.env.BEAD_LOOP_UI_HOST || '127.0.0.1';
 const UNIT = 'bead-supervisor';
@@ -394,6 +395,7 @@ const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
   try {
     if (req.method === 'GET' && url.pathname === '/') return send(res, 200, fs.readFileSync(PAGE, 'utf8'), 'text/html');
+    if (req.method === 'GET' && url.pathname === '/favicon.svg') return send(res, 200, fs.readFileSync(FAVICON, 'utf8'), 'image/svg+xml');
     if (req.method === 'GET' && url.pathname === '/api/state') return send(res, 200, await state());
     if (req.method === 'GET' && url.pathname === '/api/events') return subscribe(res);
     if (req.method === 'GET' && url.pathname === '/api/log') return send(res, 200, await logFile(url.searchParams.get('repo'), url.searchParams.get('file')), 'text/plain');
