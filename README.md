@@ -55,7 +55,7 @@ flowchart LR
   B -.-> watcher
 
   W -.- GPU[(devbox/coder<br/>Qwen3-Coder-30B<br/>RTX 4080, this box)]
-  V -.- CPU[(acbox/coder<br/>Qwen3-Coder-Next 80B<br/>ac-box, CPU)]
+  V -.- CPU[(acbox/reviewer<br/>gpt-oss-120b<br/>ac-box, CPU)]
 
   classDef model fill:#f3f0ff,stroke:#7c5cff,color:#222
   classDef stop fill:#fff3f0,stroke:#e0503c,color:#222
@@ -339,7 +339,7 @@ bead-supervisor stats                                     # the scoreboard, one 
 05:40:01 inquire-platform: inq-85h.5: review approved
 05:40:03 inquire-platform: opened https://github.com/imkarrer/inquire-platform/pull/44
 
-inquire-platform  label=delegate:local base=master merge=pipeline stages=devbox/coder⇢acbox/coder×3 → acbox/coder⇢acbox/instruct×2 → claude/sonnet⇢claude/sonnet×1  [priority]
+inquire-platform  label=delegate:local base=master merge=pipeline stages=devbox/coder⇢acbox/coder×3 → acbox/coder⇢acbox/reviewer×2 → claude/sonnet⇢claude/sonnet×1  [priority]
   dev lane:    inq-ufz.13 grading.dlq: 30-day retention as a per-topic config (2m)
   review lane: idle
   dev queue (4):
@@ -443,12 +443,12 @@ on_exhaust = "repeat"
 
 [[stages]]
 worker = "devbox/coder"
-reviewer = "acbox/coder"
+reviewer = "acbox/reviewer"
 failures = 3
 
 [[stages]]
 worker = "acbox/coder"
-reviewer = "acbox/instruct"
+reviewer = "acbox/reviewer"
 failures = 2
 timeout = 14400
 

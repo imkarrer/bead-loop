@@ -1,7 +1,7 @@
 ---
 description: Reviews one bead's diff against its acceptance criteria for the bead-loop supervisor, without editing. Ends with APPROVE or REJECT.
 mode: primary
-model: acbox/coder
+model: acbox/reviewer
 temperature: 0.1
 permission:
   edit: deny
