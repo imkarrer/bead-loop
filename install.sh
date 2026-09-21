@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Build the supervisor, link this checkout into opencode (user skills + agents), put
-# the binary and the UI server on PATH, install the user units. Re-runnable; what the
-# pipeline's deploy step runs on this box after every merge to main (scripts/deploy.sh).
+# the binary and the UI server on PATH, install and start the user units so the loop is
+# running when this script returns. Re-runnable; what the pipeline's deploy step runs on
+# this box after every merge to main (scripts/deploy.sh).
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 OC=${XDG_CONFIG_HOME:-$HOME/.config}/opencode
@@ -65,8 +66,31 @@ CFG
 fi
 cp "$HERE"/systemd/*.service "$HERE"/systemd/*.timer "$HOME/.config/systemd/user/"
 systemctl --user daemon-reload
-echo "ui     bead-loop-ui.service: http://127.0.0.1:4097 once started"
-echo "loop   bead-supervisor.service is the resident loop; bead-supervisor.timer keeps it up. Start with:"
-echo "       systemctl --user enable --now opencode-web.service bead-loop-ui.service bead-supervisor.timer"
+
+# bead-supervisor.service is the resident loop; bead-supervisor.timer is its keeper (it
+# starts the service at once and again a minute after it stops — gpu-mode's start/stop
+# unit, see systemd/bead-supervisor.timer). Enabling the timer, not the service, is what
+# makes the loop survive: `enable --now` on an already-running unit only starts it if it
+# isn't running, so a re-run (every deploy) never interrupts sessions in flight.
+if systemctl --user enable --now opencode-web.service bead-loop-ui.service bead-supervisor.timer; then
+  echo "loop   started: bead-supervisor is running, bead-loop-ui at http://127.0.0.1:4097"
+else
+  echo "loop   could not start the units here (no systemd --user session?); by hand:"
+  echo "       systemctl --user enable --now opencode-web.service bead-loop-ui.service bead-supervisor.timer"
+fi
+
+# Linger: without it, user units stop at logout and only restart at the next login — no
+# good on a box nobody logs into. Granting it to yourself needs root, so this can only
+# ask, once, rather than always fix it.
+me=$(id -un)
+linger=$(loginctl show-user "$me" -p Linger --value 2>/dev/null || echo "")
+if [ "$linger" != "yes" ] && loginctl enable-linger "$me" 2>/dev/null; then linger=yes; fi
+if [ "$linger" = "yes" ]; then
+  echo "linger enabled for $me: the loop stays up across logout and reboot"
+else
+  echo "linger not enabled for $me — the loop stops at logout without it; once, as root:"
+  echo "       sudo loginctl enable-linger $me"
+fi
+
 echo "deploy bead-loop-deploy.timer pulls origin/main here every two minutes and redeploys when it moved:"
 echo "       systemctl --user enable --now bead-loop-deploy.timer"
