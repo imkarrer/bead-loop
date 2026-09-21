@@ -307,8 +307,9 @@ event stream; nobody presses refresh):
 - **The supervisor's log**, live.
 
 The levers, each one command you would otherwise type: **Wake**, **Stop / Start / Off**,
-**Pause / Resume lane** (that lane starts no new round; the other goes on — drain review,
-or hold the CPU box; resume is instant), **★ priority** per repo, **Work with Claude** on
+**Pause / Resume lane** (the round that lane is on finishes and it starts no new one —
+not the next repo's bead, not its own bead's reviewer round — while the other goes on:
+drain review, or hold the CPU box; resume is instant), **★ priority** per repo, **Work with Claude** on
 any bead (to the last stage and back into the dev queue now, ahead of its failure count;
 `bead-supervisor escalate REPO ID`), and **Sign in** in the header when `claude` is signed
 out — a banner, since a `claude/*` round cannot run then: such beads wait in their queue
@@ -404,7 +405,7 @@ bead-supervisor tick                                    # one pass to idle: reco
 bead-supervisor run                                     # what the service runs: the resident loop
 bead-supervisor wake                                    # ring the bell
 bead-supervisor priority ~/src/repo                     # this repo first on every pass; `priority none` clears
-bead-supervisor pause review                            # that lane starts no new round until resume
+bead-supervisor pause review                            # that lane finishes its round and starts no new one until resume
 bead-supervisor answer ~/src/repo inq-abc.1 "use --dry-run"   # reply to a bead in the human queue; back to dev
 bead-supervisor open ~/src/repo inq-abc.1               # you + Claude Code in the bead's worktree, question in hand
 bead-supervisor recover                                 # what run does first, by hand

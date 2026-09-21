@@ -189,7 +189,7 @@ The watcher looks at every `inflight/ID` on each pass (30 s while any is open).
 | starting / recovering | the first seconds | automatic |
 | running | lanes on the bell or on rounds | — |
 | a lane dead | the parent's `wait` returns for it | restarted after a backoff; logged; the page shows "dev lane restarted N times" |
-| a lane paused | `pause.NAME` | `resume`, touches the bell |
+| a lane paused | `pause.NAME`, read before every round — between repos and before a bead's reviewer round, not once per pass (until 21 Sep 2026 a lane busy when the flag appeared took the next repo's bead on its way back to the top of its loop) | `resume`, touches the bell |
 | crash loop | `systemd` `StartLimitBurst` hit | the service stays failed; the page's service panel says so; you fix the script (this is the update-and-re-exec case going wrong) |
 | a server down | probe fails (opencode provider `/models`, `claude auth status`, `gh auth status`) | held beads on that server; the lane re-probes every heartbeat; a page banner per server |
 | the global lock held by another supervisor | `flock` fails | the second exits; `work` by hand while the loop runs becomes "put this bead at the head of the dev queue and ring the bell" (`want/ID`), not a second loop |

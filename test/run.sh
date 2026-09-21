@@ -755,6 +755,47 @@ case_pause_one_lane() {
   assert_branch bead/t-1 "and pushed"
 }
 
+# second_repo: a second watched repo — its own origin, the same config, one ready bead t-2 in
+# a backlog of its own ($BD_STATE/repo2.json; the stub bd picks it by the repo's dir name) —
+# so a lane's pass has somewhere to walk on to after a round.
+second_repo() {
+  git init -q --bare "$T/origin2.git"; git clone -q "$T/origin2.git" "$T/repo2" 2>/dev/null
+  REPO2=$T/repo2; mkdir -p "$REPO2/.beads"; echo base >"$REPO2/README"; touch "$REPO2/.beads/issues.jsonl"
+  git -C "$REPO2" add -A && git -C "$REPO2" commit -qm base && git -C "$REPO2" branch -qM main && git -C "$REPO2" push -q -u origin main
+  cp "$REPO/.bead-loop.toml" "$REPO2/.bead-loop.toml"
+  jq -n '[{id:"t-2", title:"Second", description:"y", acceptance_criteria:"y", status:"open", priority:2, issue_type:"task", labels:["delegate:local"]}]' >"$BD_STATE/repo2.json"
+  sed -i "s|^repos = .*|repos = [\"$REPO\", \"$REPO2\"]|" "$BEAD_LOOP_CONFIG/config.toml"
+}
+case_pause_mid_round() {
+  # `pause LANE` while the lane's round is in flight (21 Sep 2026: pause gpu and pause cpu
+  # while both were on a round; each finished it and took the next repo's bead, and only
+  # the idle claude lane said "paused"). The round in flight finishes; after it the lane
+  # starts nothing — not the next repo's bead, nor its own bead's reviewer round — and
+  # says so once. Resume, and it goes on.
+  setup; second_repo; echo 1 >"$TEST_CTRL/slow"
+  setsid "$SUP" --serial tick 2>>"$T/sup.log" & pid=$!
+  for _ in $(seq 100); do grep -q '^bead-worker' "$TEST_CTRL/calls" 2>/dev/null && break; sleep 0.1; done
+  sup pause dev; wait "$pid" || true
+  assert_eq "$(calls)" "bead-worker bead-reviewer" "the round in flight finished and was reviewed; the dev lane took no second bead"
+  assert_eq "$(jq -r '.[0].status' "$BD_STATE/repo2.json")" open "the other repo's bead was not started"
+  assert_eq "$(grep -c 'dev lane paused; starting nothing' "$T/sup.log")" 1 "said so, once"
+  rm "$TEST_CTRL/slow"; sup resume dev; sup --once lane dev
+  assert_eq "$(calls)" "bead-worker bead-reviewer bead-worker" "resumed: the other bead is taken"
+  assert_match "$(sed -n 3p "$TEST_CTRL/calls")" " $BEAD_LOOP_STATE/repo2/wt/t-2 " "in the other repo"
+  # A lane that reviews its own worker rounds ([[lanes]] with both roles): paused during
+  # the worker round, it does not go on to the bead's reviewer round; the bead waits in
+  # the review queue, and the resumed lane reviews it.
+  setup; printf '[[lanes]]\nname = "all"\nmodels = ["*"]\n' >>"$BEAD_LOOP_CONFIG/config.toml"; echo 1 >"$TEST_CTRL/slow"
+  setsid "$SUP" --serial tick 2>>"$T/sup.log" & pid=$!
+  for _ in $(seq 100); do grep -q '^bead-worker' "$TEST_CTRL/calls" 2>/dev/null && break; sleep 0.1; done
+  sup pause all; wait "$pid" || true
+  assert_eq "$(calls)" "bead-worker" "the worker round finished; no reviewer round started"
+  assert_file "$BEAD_LOOP_STATE/repo/review/t-1" "the bead waits in the review queue"
+  assert_eq "$(grep -c 'all lane paused; starting nothing' "$T/sup.log")" 1 "said so, once"
+  rm "$TEST_CTRL/slow"; sup resume all; sup --serial tick
+  assert_eq "$(calls)" "bead-worker bead-reviewer" "resumed: reviewed"
+  assert_file "$BEAD_LOOP_STATE/repo/inflight/t-1" "and pushed to a PR"
+}
 case_stale_assignee_does_not_block() {
   # A bead sent back to open keeps its old assignee; bd refuses --claim for another actor.
   # The loop takes it anyway: an open bead's assignee is stale by definition.

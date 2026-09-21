@@ -4,6 +4,7 @@
 #   abort-delay seconds the server takes for the next abort, once (curl stub): the stop's race
 #   review      one line per round: approve | reject
 #   brief       shape (default: WHAT HAPPENED / WHY / QUESTION) | plain (no shape) | crash
+#   slow        seconds every run takes before it answers: a round in flight while the test pauses its lane
 #   calls       appended: "<agent> <dir> <model> <attach>" per run, prompt saved to prompt.<n>
 set -euo pipefail
 [ "$1" = run ] || { echo "stub opencode: only run" >&2; exit 2; }
@@ -18,6 +19,7 @@ done
 n=$(( $(wc -l <"$TEST_CTRL/calls" 2>/dev/null || echo 0) + 1 ))
 printf '%s %s %s %s\n' "$agent" "$dir" "${model:-none}" "${attach:-none}" >>"$TEST_CTRL/calls"
 printf '%s' "$prompt" >"$TEST_CTRL/prompt.$n"
+[ -e "$TEST_CTRL/slow" ] && sleep "$(cat "$TEST_CTRL/slow")"
 say() { jq -cn --arg t "$1" '{type:"text", part:{text:$t}}'; }
 case $agent in
   bead-worker)

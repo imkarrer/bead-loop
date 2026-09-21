@@ -216,7 +216,9 @@ fn lane_pass(repo: &Repo, opts: &Opts, spec: &LaneSpec) -> Pass {
         if let (Some(id), true) = (last, spec.reviewer) {
             if repo.review_path(&id).exists() {
                 let reviewer = repo.stage_for(repo.failures_of(&id)).map(|s| s.review).unwrap_or_default();
-                if reviewer.is_empty() || spec.takes(&reviewer) {
+                // The reviewer round is a round: under the pause flag it does not start,
+                // and the bead waits in the review queue for the resume.
+                if (reviewer.is_empty() || spec.takes(&reviewer)) && !repo.paused(&spec.name) {
                     review_one(repo, opts, Some(&id), Some(spec));
                 }
             }
@@ -224,6 +226,36 @@ fn lane_pass(repo: &Repo, opts: &Opts, spec: &LaneSpec) -> Pass {
         return Pass::Worked;
     }
     Pass::Nothing
+}
+
+/// `pause.NAME` under the state dir: the operator's hand on the lane (`pause NAME`, the
+/// page's Pause). Read before every round — `lane` says so once and waits on the bell.
+pub fn paused(state_dir: &Path, name: &str) -> bool {
+    state_dir.join(format!("pause.{name}")).exists()
+}
+
+/// One pass of a lane over the repos, in this pass's order: `round` runs the lane's
+/// rounds on one repo. The pause flag is read before every repo, not once per pass: a
+/// lane busy when the flag appears ends its round in the middle of a pass, and the next
+/// repo's bead must not be its next round. (21 Sep 2026: `pause cpu` during a bead-loop
+/// round; the cpu lane finished it and took inquire-platform's bead two seconds later,
+/// never having looked — only the idle claude lane, at the top of its loop, said
+/// "paused".) With `once`, the pass ends at its first round. Returns whether a round
+/// happened.
+fn walk(repos: &[PathBuf], state_dir: &Path, name: &str, pass: usize, once: bool, mut round: impl FnMut(&Path) -> Pass) -> bool {
+    let mut moved = false;
+    for r in repos_in_order(repos, state_dir, pass) {
+        if paused(state_dir, name) {
+            break;
+        }
+        if round(&r) == Pass::Worked {
+            moved = true;
+            if once {
+                break;
+            }
+        }
+    }
+    moved
 }
 
 /// `lane NAME`: one lane's passes over every repo. With `until_idle` it leaves when it
@@ -242,7 +274,7 @@ pub fn lane(ctx: &Ctx, spec: &LaneSpec, pass_counter: Arc<AtomicUsize>) {
     let mut said_paused = false;
     loop {
         // Paused by hand (pause NAME, or the UI): start nothing new.
-        if ctx.state_dir.join(format!("pause.{name}")).exists() {
+        if paused(&ctx.state_dir, name) {
             if ctx.until_idle {
                 log(&format!("{name} lane paused; starting nothing"));
                 return;
@@ -256,25 +288,17 @@ pub fn lane(ctx: &Ctx, spec: &LaneSpec, pass_counter: Arc<AtomicUsize>) {
         }
         said_paused = false;
         let pass = pass_counter.fetch_add(1, Ordering::SeqCst);
-        let mut moved = false;
         set_passing(name, true);
-        for r in repos_in_order(&ctx.repos, &ctx.state_dir, pass) {
-            let repo = Repo::load(&r, ctx.opts.model_flag.as_deref());
-            if lane_pass(&repo, &ctx.opts, spec) == Pass::Worked {
-                moved = true;
-                if ctx.once {
-                    set_passing(name, false);
-                    return;
-                }
-            }
-        }
+        let moved = walk(&ctx.repos, &ctx.state_dir, name, pass, ctx.once, |r| {
+            lane_pass(&Repo::load(r, ctx.opts.model_flag.as_deref()), &ctx.opts, spec)
+        });
         set_passing(name, false);
+        if ctx.once {
+            return;
+        }
         if moved {
             idle = 0;
             continue;
-        }
-        if ctx.once {
-            return;
         }
         if ctx.until_idle {
             // Nothing for this lane now; another may still hand something over. The others
@@ -495,6 +519,49 @@ mod tests {
         crate::util::write_file(&t.join("priority"), "b\n");
         assert_eq!(repos_in_order(&repos, &t, 0)[0], PathBuf::from("/b"));
         assert!(repos_in_order(&[], &t, 3).is_empty());
+        let _ = std::fs::remove_dir_all(&t);
+    }
+    #[test]
+    fn a_pass_stops_at_the_pause_flag_between_repos() {
+        let t = crate::config::scratch("pause-walk");
+        let repos = vec![PathBuf::from("/a"), PathBuf::from("/b")];
+        let mut seen = Vec::new();
+        assert!(walk(&repos, &t, "cpu", 0, false, |r| {
+            seen.push(r.to_path_buf());
+            Pass::Worked
+        }));
+        assert_eq!(seen, repos, "no flag: every repo");
+        // The flag appears during the first repo's round: pause cpu while the lane is busy.
+        let flag = t.join("pause.cpu");
+        seen.clear();
+        assert!(walk(&repos, &t, "cpu", 0, false, |r| {
+            seen.push(r.to_path_buf());
+            touch(&flag);
+            Pass::Worked
+        }));
+        assert_eq!(seen, vec![PathBuf::from("/a")], "the round in flight ends; the next repo's does not start");
+        seen.clear();
+        assert!(
+            !walk(&repos, &t, "cpu", 0, false, |r| {
+                seen.push(r.to_path_buf());
+                Pass::Worked
+            }),
+            "with the flag set, nothing"
+        );
+        assert!(seen.is_empty());
+        seen.clear();
+        assert!(!walk(&repos, &t, "gpu", 0, false, |r| {
+            seen.push(r.to_path_buf());
+            Pass::Nothing
+        }));
+        assert_eq!(seen, repos, "another lane's flag is not this lane's");
+        std::fs::remove_file(&flag).unwrap();
+        seen.clear();
+        assert!(walk(&repos, &t, "cpu", 0, true, |r| {
+            seen.push(r.to_path_buf());
+            Pass::Worked
+        }));
+        assert_eq!(seen, vec![PathBuf::from("/a")], "--once: the pass ends at its first round");
         let _ = std::fs::remove_dir_all(&t);
     }
     #[test]
