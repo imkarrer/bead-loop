@@ -199,6 +199,7 @@ first, on a model that can afford to read.
 ```toml
 research_model = "acbox/coder"        # empty (the default): no research round
 research = "first"                    # first: once, before round 1 · every: again after each send-back
+research_aider = true                 # a brief whose Files all exist puts the worker under aider
 ```
 
 - **A research round is a lane round**, not an inline call: it is long and it belongs
@@ -218,8 +219,15 @@ research = "first"                    # first: once, before round 1 · every: ag
   it, naming functions and values), **Check** (the command whose output proves it, and
   what it must print), **Pitfalls** (what the code does that the bead's text does not
   say). The text is the file, and every later worker prompt carries it under
-  `<research>` above the bead's own history. It is also what makes `harness:aider`
-  usable on a bead the planner could not scope: the files are now named.
+  `<research>` above the bead's own history.
+- **A complete brief picks aider.** With `research_aider = true` (the default), a
+  worker round after research runs under aider — handed the brief's **Files** and the
+  DESCRIPTION's — when every path the brief lists exists in the worktree, the repo has
+  a `gate`, and the stage's worker is an opencode model. A brief naming a path that does
+  not exist is not trusted: the round stays in opencode, and the log names the path.
+  `harness:opencode` on the bead opts out, `harness:aider` needs no brief, as today. So
+  a bead the planner could not scope to files gets the stricter harness once the big
+  model has scoped it, which is where the small model's rounds were being lost.
 - **`BLOCKED:` from the researcher** — a claim in the bead is false, a file it names
   does not exist — parks the bead with that as the question, before a single edit has
   been tried. The researcher is the cheapest place to find out.
