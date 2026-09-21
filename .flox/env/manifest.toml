@@ -16,7 +16,6 @@ git.outputs = "all"
 gh.pkg-path = "gh"
 jq.pkg-path = "jq"
 jq.outputs = "all"
-yq.pkg-path = "yq-go"          # mikefarah's yq, v4; nothing here calls it since the Rust rewrite (bl-c6o drops it)
 curl.pkg-path = "curl"
 curl.outputs = "all"
 opencode.pkg-path = "opencode"
