@@ -103,6 +103,11 @@ opencode, installs the user units, and seeds `~/.config/bead-loop/config.toml`. 
 time it needs `bd`, `git`, `gh`, `opencode` and `curl`; the UI needs `node`. `flox
 activate` in this checkout provides all of them plus the Rust toolchain.
 
+The three units (`bead-supervisor`, `bead-loop-ui`, `opencode-web`) run their command
+through `flox activate -d ~/src/bead-loop --`, so every tool resolves from
+`.flox/env/manifest.toml` the same way on every box; `systemctl --user show -p
+Environment` carries no `PATH=` line. `flox activate` on a warm env adds under 100ms.
+
 Per repo: label the beads the model may work (`bd label add <id> delegate:local`; each
 needs a DESCRIPTION naming the files and an ACCEPTANCE CRITERIA the worker can run — `bd
 dep add B A` is the ordering; the `delegate` skill, linked into `~/.claude/skills` for
