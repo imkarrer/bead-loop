@@ -11,7 +11,7 @@ Type=simple
 ExecStart=%h/.local/bin/bead-supervisor run
 Restart=on-failure
 RestartSec=10
-# opencode, bd, gh, jq, git, claude come from the login profile.
+# opencode, bd, gh, git, curl, claude come from the login profile.
 Environment=PATH=%h/.local/bin:%h/.nix-profile/bin:/run/current-system/sw/bin:/usr/bin:/bin
 
 [Install]

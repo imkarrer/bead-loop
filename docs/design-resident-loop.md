@@ -1,7 +1,12 @@
 # Design: a resident loop — the queues wake the lanes, no tick
 
-Status: proposal, for grilling. Nothing here is built. Written 2026-09-20, from one
-night of the journal and `gh pr view` on the PRs it opened.
+Status: **built** — `bead-supervisor run` (PR #33, the Rust rewrite) is this design; the
+README's "How the loop waits" describes it as it runs. Kept as the record of why. Written
+2026-09-20 against the bash supervisor of the time, from one night of the journal and
+`gh pr view` on the PRs it opened; "today" below means that supervisor. Of the questions
+at the end: the bell is a one-second poll, not inotify; the watcher polls; Claude's
+sign-in is re-probed on every wake; the config is re-read every round; and lanes per
+server followed in #35.
 
 ## What the tick is for, and what it is not
 

@@ -1,12 +1,12 @@
 # bead-loop working on itself: the supervisor's own backlog, worked by the loop it
-# implements. Stages (GPU x3 -> CPU x1 -> Sonnet once, repeat) come from
+# implements. Stages (GPU x3 -> CPU x1 -> Sonnet once, repeat) and lanes come from
 # ~/.config/bead-loop/config.toml. The gate is the same proof CI runs: the crate builds
 # and its tests pass, the scripts pass shellcheck, the skills lint and the state-machine
 # suite against the fresh binary, so a worktree that passes it is one CI would pass. It
 # runs inside .flox/ (cargo, shellcheck, node from the manifest, not the login profile:
 # 24 rounds failed on `cargo: command not found` before 2026-09-21). A merge to main is
-# deployed to this box by the pipeline (scripts/deploy.sh): the running loop re-execs
-# the new binary at its next idle moment.
+# released by the pipeline and pulled to this box by bead-loop-deploy.timer
+# (scripts/deploy.sh), which restarts the loop; it rejoins the sessions it was on.
 label = "delegate:local"
 base = "main"
 gate = "flox activate -- bash -c 'cargo build --quiet && cargo test --quiet && bash -n install.sh scripts/*.sh test/run.sh test/lint-skills.sh test/bin/* && node --check bin/bead-loop-ui test/ui-onclicks.js && shellcheck -S warning install.sh scripts/*.sh test/run.sh test/lint-skills.sh test/bin/* && test/lint-skills.sh && test/run.sh'"

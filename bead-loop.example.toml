@@ -3,36 +3,40 @@
 label = "delegate:qwen30b"            # bd ready -l LABEL picks the work           (default "delegate:local")
 base = "master"                        # branch to fork from and PR into           (default: origin's HEAD)
 setup = "npm ci"                       # runs in the fresh worktree before the worker (no node_modules there)
-gate = "npm run typecheck && npm run lint"   # after the worker, before push; unset = CI is the gate
+gate = "npm run typecheck && npm run lint"   # after the worker, before review; unset = CI is the gate
 merge = "auto"                         # auto: the merge watcher squash-merges once every CI check is green
                                        # pipeline: the loop labels the PR (merge_label, default "automerge") and CI merges it
                                        # manual: PR only (the bead is held for you once green)
-review_model = "acbox/coder"           # the senior model that judges the diff before the push; unset = no review
+review_model = "acbox/reviewer"        # the model that judges the diff before the push, when no [[stages]] table
+                                       # applies; unset = no review. A different family from the worker catches more
 on_exhaust = "repeat"                  # repeat: cycle the stages until it lands | park: leave it for you (default)
-# conflict_worker = "claude/sonnet"   # who rebases a PR that conflicts with the base (default: the last stage's worker)
-# brief_model = "claude/sonnet"       # who writes the brief when a bead is parked for you — what each round tried, why it
+# conflict_worker = "claude/sonnet"    # who rebases a PR that conflicts with the base (default: the last stage's worker)
+# brief_model = "claude/sonnet"        # who writes the brief when a bead is parked for you — what each round tried, why it
                                        # failed, the question to answer (default: the last stage's worker; "none" for no brief)
 # adopt = true                         # open bead/* PRs from anyone join the loop and merge on green
 # max_inflight = 2                     # PRs in the merge queue before the dev lane pauses; unset = no cap, bd's
                                        # dependencies are the only gate (the queues absorb the rest)
 # merge_label = "automerge"            # the label merge = "pipeline" puts on each PR
+# worker_timeout = 3600                # seconds per model session
 
 # Escalation, in order. Every send-back to the dev queue — the gate failing twice, a
 # REJECT from review, CI red — is one failure; a stage takes the bead for the next
-# `failures` of them, then the next stage does. So the bead reaches Opus below after
-# 3 + 2 = 5 failures. Usually set once, globally. (`attempts` is the older name.)
+# `failures` of them, then the next stage does. So the bead reaches Claude below after
+# 3 + 1 = 4 failures. Usually set once, globally, with [[lanes]] beside it (one lane per
+# model server, so a round on the CPU box never holds the GPU's queue; README: Config).
+# (`attempts` is the older name for `failures` and still reads.)
 [[stages]]
 worker = "devbox/coder"                # an opencode agent on the devbox provider; "aider:devbox/coder" is aider on
-reviewer = "acbox/coder"               # the same server, given the files the bead names and the gate as its lint
+reviewer = "acbox/reviewer"            # the same server, given the files the bead names and the gate as its lint
 failures = 3
 
 [[stages]]
-worker = "acbox/coder"
-reviewer = "acbox/instruct"
-failures = 2
+worker = "acbox/coder"                 # the 80B implements; the same reviewer judges
+reviewer = "acbox/reviewer"
+failures = 1
 timeout = 14400                        # seconds; default worker_timeout
 
 [[stages]]
-worker = "claude/sonnet"                 # runs in Claude Code instead of opencode
+worker = "claude/sonnet"               # runs in Claude Code instead of opencode
 reviewer = "claude/sonnet"
 failures = 1
