@@ -6,6 +6,7 @@
 //! the next round).
 use crate::util::{die, expand_tilde, home};
 use serde_json::Value;
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 /// One `[[stages]]` table: a stage takes the bead for the next `failures` send-backs.
@@ -22,6 +23,28 @@ pub struct Stage {
 pub struct Layers {
     pub global: Value,
     pub repo: Value,
+}
+
+/// One `[targets.NAME]` table: a checkout the round works in and the GitHub repo its PR
+/// goes to, named by a bead's `work:NAME` label (docs/design-targets.md). Every field but
+/// `name` and `path` is `None` when the target does not set it, so `Repo::for_bead` can
+/// tell "the target says so" from "inherit the beads repo's".
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Target {
+    pub name: String,
+    pub path: PathBuf,
+    pub base: Option<String>,
+    pub base_remote: Option<String>,
+    pub push_remote: Option<String>,
+    pub pr_repo: Option<String>,
+    pub setup: Option<String>,
+    pub gate: Option<String>,
+    pub merge: Option<String>,
+    pub merge_label: Option<String>,
+    pub adopt: Option<bool>,
+    pub max_inflight: Option<u64>,
+    pub open_pr: Option<String>,
+    pub pr_style: Option<String>,
 }
 
 /// `toml_json FILE`: the file as one JSON object ({} when absent or empty); a parse error
@@ -122,6 +145,43 @@ impl Layers {
             })
             .collect()
     }
+
+    /// `[targets.NAME]` tables, repo file only — a target's configuration lives beside the
+    /// beads it comes from, never in the global file.
+    pub fn targets(&self) -> BTreeMap<String, Target> {
+        let mut out = BTreeMap::new();
+        if let Some(Value::Object(map)) = self.repo.get("targets") {
+            for (name, v) in map {
+                let Value::Object(_) = v else { continue };
+                out.insert(
+                    name.clone(),
+                    Target {
+                        name: name.clone(),
+                        path: v.get("path").and_then(|p| p.as_str()).map(expand_tilde).unwrap_or_default(),
+                        base: v.get("base").map(scalar),
+                        base_remote: v.get("base_remote").map(scalar),
+                        push_remote: v.get("push_remote").map(scalar),
+                        pr_repo: v.get("pr_repo").map(scalar),
+                        setup: v.get("setup").map(scalar),
+                        gate: v.get("gate").map(scalar),
+                        merge: v.get("merge").map(scalar),
+                        merge_label: v.get("merge_label").map(scalar),
+                        adopt: v.get("adopt").and_then(|x| match x {
+                            Value::Bool(b) => Some(*b),
+                            Value::String(s) => Some(s == "true"),
+                            _ => None,
+                        }),
+                        max_inflight: v
+                            .get("max_inflight")
+                            .and_then(|x| x.as_u64().or_else(|| x.as_str().and_then(|s| s.trim().parse().ok()))),
+                        open_pr: v.get("open_pr").map(scalar),
+                        pr_style: v.get("pr_style").map(scalar),
+                    },
+                );
+            }
+        }
+        out
+    }
 }
 
 /// The global config's path: `$BEAD_LOOP_CONFIG/config.toml`, default `~/.config/bead-loop`.
@@ -163,9 +223,21 @@ pub fn loop_home() -> PathBuf {
 }
 
 /// Everything the bash's `load_repo` set, for one repo.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Repo {
+    /// the checkout a round works in: the beads repo itself for the default target,
+    /// a `[targets.NAME]` path after `for_bead` resolves a `work:NAME` label
     pub repo: PathBuf,
+    /// where `bd` runs and `.bead-loop.toml` lives — the beads repo's own path, always;
+    /// `for_bead` never changes it
+    pub beads: PathBuf,
+    /// `""` for the default target (the beads repo itself), else the `[targets.NAME]` name
+    /// `for_bead` resolved to
+    pub target: String,
+    /// the `[targets.NAME]` tables from the beads repo's `.bead-loop.toml`
+    pub targets: BTreeMap<String, Target>,
+    /// the label prefix that names a target (config key `target_label`, default `"work"`)
+    pub target_label: String,
     pub slug: String,
     pub label: String,
     pub merge: String,
@@ -184,6 +256,18 @@ pub struct Repo {
     pub worker_timeout: u64,
     pub attach: String,
     pub base: String,
+    /// where `bead/*` branches fork from and PR into; default `origin` — for a target,
+    /// `upstream` when that remote exists there, else `origin`
+    pub base_remote: String,
+    /// where `bead/*` branches are pushed; default `origin`
+    pub push_remote: String,
+    /// `owner/repo` the PR is opened against; default `base_remote`'s GitHub repo
+    pub pr_repo: String,
+    /// `auto` (the loop opens the PR) or `ask` (the operator publishes it); default `auto`
+    pub open_pr: String,
+    /// `loop` (today's `ID: title` / "Opened by bead-loop" PR) or `plain` (a contribution,
+    /// no loop id or line); default `loop`
+    pub pr_style: String,
     /// `$STATE_DIR/<slug>`
     pub rs: PathBuf,
     pub state_dir: PathBuf,
@@ -192,15 +276,15 @@ pub struct Repo {
 impl Repo {
     /// `load_repo REPO`, with the worker model flag (`--model M`) applied.
     pub fn load(path: &Path, model_flag: Option<&str>) -> Repo {
-        let repo = match std::fs::canonicalize(path) {
+        let beads = match std::fs::canonicalize(path) {
             Ok(p) if p.is_dir() => p,
             _ => die(&format!("no such repo: {}", path.display())),
         };
-        if !repo.join(".beads").is_dir() {
-            die(&format!("{} has no .beads/", repo.display()));
+        if !beads.join(".beads").is_dir() {
+            die(&format!("{} has no .beads/", beads.display()));
         }
-        let cfg = Layers::load(&config_dir().join("config.toml"), Some(&repo.join(".bead-loop.toml")));
-        let slug = repo.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+        let cfg = Layers::load(&config_dir().join("config.toml"), Some(&beads.join(".bead-loop.toml")));
+        let slug = beads.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
         let model = model_flag.map(str::to_string).unwrap_or_else(|| cfg.str("model", ""));
         let review_model = cfg.str("review_model", "");
         let mut stages = cfg.stages();
@@ -215,13 +299,15 @@ impl Repo {
                 need("aider");
             }
         }
+        let base_remote = cfg.str("base_remote", "origin");
         let mut base = cfg.str("base", "");
         if base.is_empty() {
-            base = origin_head(&repo);
+            base = remote_head(&beads, &base_remote);
         }
         if base.is_empty() {
             die(&format!("{slug}: cannot tell the base branch; set base in .bead-loop.toml"));
         }
+        let pr_repo = cfg.str("pr_repo", &remote_owner_repo(&beads, &base_remote));
         let state_dir = state_dir();
         let rs = state_dir.join(&slug);
         make_state_dirs(&rs);
@@ -238,15 +324,78 @@ impl Repo {
             max_inflight: cfg.u64("max_inflight", u64::MAX),
             worker_timeout: cfg.u64("worker_timeout", 3600),
             attach: cfg.str("attach", ""),
+            base_remote,
+            push_remote: cfg.str("push_remote", "origin"),
+            pr_repo,
+            open_pr: cfg.str("open_pr", "auto"),
+            pr_style: cfg.str("pr_style", "loop"),
+            target: String::new(),
+            targets: cfg.targets(),
+            target_label: cfg.str("target_label", "work"),
             model,
             review_model,
             stages,
             base,
             slug,
-            repo,
+            repo: beads.clone(),
+            beads,
             rs,
             state_dir,
         }
+    }
+
+    /// The bead's `work:NAME`-style labels (prefix `target_label`) resolved against this
+    /// beads repo's `[targets]`: no such label is the default target (a clone of `self`);
+    /// exactly one is a clone with `repo` at the target's path and every key it sets
+    /// layered over `self`'s (target > beads repo file > global > default — `self` already
+    /// carries the last three); two, or one naming no `[targets]` entry, or a path that is
+    /// not a directory, is a config mistake, named in the `Err`.
+    // No caller yet outside the tests below: the dev lane starts calling this at claim
+    // (bl-6hg, docs/design-targets.md).
+    #[allow(dead_code)]
+    pub fn for_bead(&self, labels: &[&str]) -> Result<Repo, String> {
+        let prefix = format!("{}:", self.target_label);
+        let names: Vec<&str> = labels.iter().filter_map(|l| l.strip_prefix(prefix.as_str())).collect();
+        let name = match names.as_slice() {
+            [] => return Ok(self.clone()),
+            [name] => *name,
+            _ => return Err(format!("more than one {prefix}* label: {}", names.join(", "))),
+        };
+        let target = match self.targets.get(name) {
+            Some(t) => t,
+            None => return Err(format!("{prefix}{name}: no [targets.{name}] in .bead-loop.toml")),
+        };
+        if !target.path.is_dir() {
+            return Err(format!("{prefix}{name}: {} is not a directory", target.path.display()));
+        }
+        let path = match std::fs::canonicalize(&target.path) {
+            Ok(p) => p,
+            Err(e) => return Err(format!("{prefix}{name}: {e}")),
+        };
+        let base_remote =
+            target
+                .base_remote
+                .clone()
+                .unwrap_or_else(|| if remote_exists(&path, "upstream") { "upstream".into() } else { "origin".into() });
+        let push_remote = target.push_remote.clone().unwrap_or_else(|| "origin".into());
+        let pr_repo = target.pr_repo.clone().unwrap_or_else(|| remote_owner_repo(&path, &base_remote));
+        let base = target.base.clone().unwrap_or_else(|| remote_head(&path, &base_remote));
+        let mut r = self.clone();
+        r.repo = path;
+        r.target = name.to_string();
+        r.base_remote = base_remote;
+        r.push_remote = push_remote;
+        r.pr_repo = pr_repo;
+        r.base = base;
+        r.setup = target.setup.clone().unwrap_or(r.setup);
+        r.gate = target.gate.clone().unwrap_or(r.gate);
+        r.merge = target.merge.clone().unwrap_or(r.merge);
+        r.merge_label = target.merge_label.clone().unwrap_or(r.merge_label);
+        r.adopt = target.adopt.unwrap_or(r.adopt);
+        r.max_inflight = target.max_inflight.unwrap_or(r.max_inflight);
+        r.open_pr = target.open_pr.clone().unwrap_or(r.open_pr);
+        r.pr_style = target.pr_style.clone().unwrap_or(r.pr_style);
+        Ok(r)
     }
 }
 
@@ -311,9 +460,18 @@ pub fn test_repo(root: &Path, stages: &[&str]) -> Repo {
         worker_timeout: 60,
         attach: String::new(),
         base: "main".into(),
+        base_remote: "origin".into(),
+        push_remote: "origin".into(),
+        pr_repo: String::new(),
+        open_pr: "auto".into(),
+        pr_style: "loop".into(),
+        target: String::new(),
+        targets: BTreeMap::new(),
+        target_label: "work".into(),
         model,
         review_model,
         stages,
+        beads: repo.clone(),
         repo,
         rs,
         state_dir,
@@ -336,26 +494,26 @@ pub fn need(name: &str) {
     }
 }
 
-/// origin's HEAD branch, from the clone's `refs/remotes/origin/HEAD`, else `git remote
-/// show origin`; empty when neither says.
-fn origin_head(repo: &Path) -> String {
+/// REMOTE's HEAD branch, from the clone's `refs/remotes/REMOTE/HEAD`, else `git remote
+/// show REMOTE`; empty when neither says.
+fn remote_head(repo: &Path, remote: &str) -> String {
     let o = crate::util::output(crate::util::cmd("git").args(["-C"]).arg(repo).args([
         "symbolic-ref",
         "-q",
         "--short",
-        "refs/remotes/origin/HEAD",
+        &format!("refs/remotes/{remote}/HEAD"),
     ]));
     if let Ok(o) = o {
         if o.status.success() {
             let s = crate::util::stdout_str(&o).trim().to_string();
-            if let Some(b) = s.strip_prefix("origin/") {
+            if let Some(b) = s.strip_prefix(&format!("{remote}/")) {
                 if !b.is_empty() {
                     return b.to_string();
                 }
             }
         }
     }
-    let o = crate::util::output(crate::util::cmd("git").args(["-C"]).arg(repo).args(["remote", "show", "origin"]));
+    let o = crate::util::output(crate::util::cmd("git").args(["-C"]).arg(repo).args(["remote", "show", remote]));
     if let Ok(o) = o {
         for line in crate::util::stdout_str(&o).lines() {
             if let Some(b) = line.trim().strip_prefix("HEAD branch: ") {
@@ -364,6 +522,41 @@ fn origin_head(repo: &Path) -> String {
         }
     }
     String::new()
+}
+
+/// `git -C DIR remote get-url NAME` succeeds: whether that remote exists.
+#[allow(dead_code)] // only `for_bead` calls this so far
+fn remote_exists(dir: &Path, name: &str) -> bool {
+    crate::util::output(crate::util::cmd("git").args(["-C"]).arg(dir).args(["remote", "get-url", name]))
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+/// REMOTE's `owner/repo`, parsed from `git -C DIR remote get-url REMOTE`; empty when the
+/// remote is absent or its url does not parse.
+fn remote_owner_repo(dir: &Path, remote: &str) -> String {
+    match crate::util::output(crate::util::cmd("git").args(["-C"]).arg(dir).args(["remote", "get-url", remote])) {
+        Ok(o) if o.status.success() => owner_repo(crate::util::stdout_str(&o).trim()).unwrap_or_default(),
+        _ => String::new(),
+    }
+}
+
+/// `owner/repo` out of a git remote url, ssh (`git@host:owner/repo.git`) or https
+/// (`https://host/owner/repo.git`); `None` when the shape does not match either.
+fn owner_repo(url: &str) -> Option<String> {
+    let path = if let Some(rest) = url.strip_prefix("git@") {
+        rest.split_once(':').map(|(_, p)| p)?
+    } else {
+        let idx = url.find("://")?;
+        url[idx + 3..].split_once('/').map(|(_, p)| p)?
+    };
+    let path = path.strip_suffix(".git").unwrap_or(path).trim_matches('/');
+    let (rest, repo) = path.rsplit_once('/')?;
+    let owner = rest.rsplit('/').next()?;
+    if owner.is_empty() || repo.is_empty() {
+        return None;
+    }
+    Some(format!("{owner}/{repo}"))
 }
 
 /// One lane: it takes the rounds whose model matches `models` (globs: `devbox/*`, or
@@ -597,6 +790,85 @@ mod tests {
         for sub in ["inflight", "logs", "wt", "review", "failures", "held", "rejoin"] {
             assert!(rs.join(sub).is_dir(), "{sub}/ made");
         }
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    fn git(dir: &Path, args: &[&str]) {
+        assert!(std::process::Command::new("git").args(args).current_dir(dir).status().unwrap().success(), "git {args:?} in {dir:?}");
+    }
+
+    #[test]
+    fn for_bead_with_no_target_label_is_the_default_target() {
+        let d = scratch("target-none");
+        let r = test_repo(&d, &["m"]);
+        assert_eq!(r.for_bead(&[]).unwrap(), r);
+        assert_eq!(r.for_bead(&["priority:high", "delegate:local"]).unwrap(), r, "no work: label among these");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn for_bead_resolves_a_configured_target() {
+        let d = scratch("target-t");
+        let checkout = d.join("checkout");
+        std::fs::create_dir_all(&checkout).unwrap();
+        git(&checkout, &["init", "-q"]);
+        // a local, unreachable path is enough: `remote_exists` only reads .git/config, and
+        // `remote_head`'s fallback fails fast on a path that is not a repo, no network.
+        git(&checkout, &["remote", "add", "upstream", d.join("nonexistent-upstream").to_str().unwrap()]);
+
+        let mut r = test_repo(&d, &["m"]);
+        r.targets.insert("t".into(), Target { name: "t".into(), path: checkout.clone(), ..Default::default() });
+
+        let out = r.for_bead(&["work:t"]).unwrap();
+        assert_eq!(out.repo, std::fs::canonicalize(&checkout).unwrap());
+        assert_eq!(out.beads, r.beads, "beads unchanged");
+        assert_eq!(out.base_remote, "upstream");
+        assert_eq!(out.push_remote, "origin");
+        assert_eq!(out.target, "t");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_target_key_overrides_the_repo_files_and_an_unset_one_inherits_it() {
+        let d = scratch("target-override");
+        let checkout = d.join("checkout");
+        std::fs::create_dir_all(&checkout).unwrap();
+        let mut r = test_repo(&d, &["m"]);
+        r.gate = "repo gate".into();
+        r.setup = "repo setup".into();
+        r.targets.insert("t".into(), Target { name: "t".into(), path: checkout, gate: Some("target gate".into()), ..Default::default() });
+
+        let out = r.for_bead(&["work:t"]).unwrap();
+        assert_eq!(out.gate, "target gate", "the target's own key wins");
+        assert_eq!(out.setup, "repo setup", "an unset target key inherits the repo's");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn for_bead_errs_on_two_labels_or_an_unconfigured_target() {
+        let d = scratch("target-err");
+        let r = test_repo(&d, &["m"]);
+        let err = r.for_bead(&["work:t", "work:u"]).unwrap_err();
+        assert!(err.contains("t, u"), "names both labels: {err}");
+        let err = r.for_bead(&["work:nope"]).unwrap_err();
+        assert!(err.contains("work:nope"), "names the label: {err}");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn target_label_changes_which_prefix_names_a_target() {
+        let d = scratch("target-label");
+        let checkout = d.join("checkout");
+        std::fs::create_dir_all(&checkout).unwrap();
+        let mut r = test_repo(&d, &["m"]);
+        r.target_label = "target".into();
+        r.targets.insert("t".into(), Target { name: "t".into(), path: checkout, ..Default::default() });
+
+        let out = r.for_bead(&["target:t"]).unwrap();
+        assert_eq!(out.target, "t", "target: is the configured prefix");
+        let out = r.for_bead(&["work:t"]).unwrap();
+        assert_eq!(out.target, "", "work: names nothing under this prefix");
+        assert_eq!(out.repo, r.repo, "so it is the default target");
         let _ = std::fs::remove_dir_all(&d);
     }
 }

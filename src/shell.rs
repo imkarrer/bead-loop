@@ -10,7 +10,7 @@ use std::process::Output;
 /// and the audit trail say the model did it; a BEADS_ACTOR in the environment still wins.
 pub fn bd(repo: &Repo, args: &[&str]) -> std::io::Result<Output> {
     let actor = std::env::var("BEADS_ACTOR").unwrap_or_else(|_| repo.label.clone());
-    output(cmd("bd").args(args).current_dir(&repo.repo).env("BEADS_ACTOR", actor))
+    output(cmd("bd").args(args).current_dir(&repo.beads).env("BEADS_ACTOR", actor))
 }
 
 /// bd's stdout, or "" on a non-zero exit (the bash `2>/dev/null || true` shape).
