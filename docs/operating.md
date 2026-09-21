@@ -48,7 +48,18 @@
   clears itself when the world changes. Last, only when there is one, a session the
   server is still running that is on no lane (an orphan of a killed round, a hand-run
   `work`), with Abort.
-- **The supervisor's log**, live.
+- **The supervisor's log**, live. It follows its tail until you scroll up to read
+  something, and again once you scroll back down.
+
+The page is patched in place on every push, never rebuilt: what you have typed into an
+answer or note box, the cursor in it, an open history and how far down a log you are all
+stay as they were, and a bead that moves up its queue takes its open box along. A box
+also keeps its draft across a reload of the page (in the browser, per box) until it is
+sent. **Ctrl+Enter** in a box presses its button. No browser dialogs: a lever that asks
+first (Stop, Off, Game, Abort, Work with Claude) gives way to its question and a yes in
+its own place — Escape or Cancel puts the button back — and what a lever said, or the
+error it hit, comes as a note at the bottom right. The tab's title counts what waits on
+you.
 
 The server binds to loopback and refuses cross-site requests; it needs `node`, and
 `systemctl`/`journalctl` for the units and log (without them, those parts say so and the

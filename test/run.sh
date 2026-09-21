@@ -657,7 +657,7 @@ case_status_json_and_ui() {
   dec=$(printf '%s' "$html" | tr '\n' ' ' | grep -o '<table class="decisions">.*' | cut -c1-1200)
   assert_match "$dec" 'class="id">t-8</td><td class="title"><b>Which ntfy topic?</b>' "the decision, first"
   assert_match "$dec" 'Which topic, and for which events?' "with its text in full"
-  assert_match "$dec" "onclick=\"act('decide',{repo:" "and the Answer &amp; close lever"
+  assert_match "$dec" "<button class=\"primary\" onclick=\"send('decide',{repo:" "and the Answer &amp; close lever, the box's text with it"
   assert_match "$(printf '%s' "$html" | grep -o '<div class="q claude">.*' | cut -c1-400)" '<h3>Claude<span class="n">1</span></h3>' "the Claude column, with its count"
   assert_match "$(printf '%s' "$html" | grep -o '<div class="q claude">.*' | cut -c1-600)" 'class="id">t-7</td>.*dev queue #3' "t-7 in it, with where it sits"
   assert_match "$(printf '%s' "$html" | grep -o '<div class="q dev">.*' | cut -c1-3000)" 'title="sent back to dev 2 times">2×</span> <button class="hist" onclick="toggleHist(.t-7.)"[^>]*>▸ 2 rounds</button>' "t-7's round history behind a toggle, closed"
@@ -672,15 +672,24 @@ case_status_json_and_ui() {
   assert_match "$hum" 'toggleFold(&quot;notes:t-5&quot;)">▸ the bead&#39;s notes</button>' "the notes folded"
   assert_eq "$(printf '%s' "$hum" | grep -c 'WHAT HAPPENED')" 0 "closed: the brief not shown"
   opened=$(render_page "$T/state.json" "toggleHist('t-5'); toggleFold('brief:t-5')" | tr '\n' ' ' | grep -o '<h3 class="human">.*' | cut -c1-6000)
-  assert_match "$opened" '<div class="round"><div class="head">round 1 <span class="chip worker">stub/worker</span><span class="muted">stage 1</span><span class="muted">2026-09-18 17:00</span></div><pre class="note">gate failed twice: npm test boom: 1 of 2 tests failed</pre><div class="logs">logs: <button class="link " onclick="toggleLog(&quot;'"$REPO"'&quot;,&quot;t-5.20260918T170000.gate&quot;)" title="t-5.20260918T170000.gate">▸ gate</button></div></div>' "round 1: who, when, the note in full, its gate log to open"
-  assert_match "$opened" '<div class="round"><div class="head">round 2 .*<pre class="note">review (stub/reviewer) rejected: REJECT: x.ts:1 wrong</pre></div>' "round 2, no logs"
+  assert_match "$opened" '<div class="round" data-key="1"><div class="head">round 1 <span class="chip worker">stub/worker</span><span class="muted">stage 1</span><span class="muted">2026-09-18 17:00</span></div><pre class="note">gate failed twice: npm test boom: 1 of 2 tests failed</pre><div class="logs">logs: <button class="link " onclick="toggleLog(&quot;'"$REPO"'&quot;,&quot;t-5.20260918T170000.gate&quot;)" title="t-5.20260918T170000.gate">▸ gate</button></div></div>' "round 1: who, when, the note in full, its gate log to open"
+  assert_match "$opened" '<div class="round" data-key="2"><div class="head">round 2 .*<pre class="note">review (stub/reviewer) rejected: REJECT: x.ts:1 wrong</pre></div>' "round 2, no logs"
   assert_match "$opened" '<pre class="text">WHAT HAPPENED: round 1 broke a test. WHY: the bead asks for two things.</pre>' "the brief, opened"
   assert_match "$(printf '%s' "$html" | grep -o '<div class="q dev">.*' | cut -c1-3000)" 'onclick="toggleHist(.t-7.)"' "a queue row has the same toggle"
   # A note to a bead in a queue, from its row: the lever, the box under the row once
   # opened, and the action — an operator note on the bead, nothing else moved.
   assert_match "$(printf '%s' "$html" | grep -o '<div class="q dev">.*' | cut -c1-3000)" 'onclick="toggleNote(&quot;t-2&quot;)" title="a note on the bead; its next round reads it">✎ note</button>' "each queue row offers a note"
   assert_eq "$(printf '%s' "$html" | grep -c 'id="note-t-2"')" 0 "no box until opened"
-  assert_match "$(render_page "$T/state.json" "toggleNote('t-2')" | tr '\n' ' ' | grep -o '<div class="q dev">.*' | cut -c1-4000)" '<textarea id="note-t-2" rows="2" placeholder="Context it lacked.*<button  onclick="act(.note.,{repo:' "opened: the box and Add note under the row"
+  assert_match "$(render_page "$T/state.json" "toggleNote('t-2')" | tr '\n' ' ' | grep -o '<div class="q dev">.*' | cut -c1-4000)" '<textarea id="note-t-2" rows="2" placeholder="Context it lacked.*<button class="primary" onclick="send(.note.,{repo:' "opened: the box and Add note under the row"
+  # A box keeps its draft across a reload of the page: rendered into the textarea from
+  # the browser's storage, under the box's id.
+  assert_match "$(render_page "$T/state.json" "global.localStorage = { getItem: (k) => k === 'draft:ans-t-5' ? 'half an answer' : null, setItem() {}, removeItem() {} }; setScoreAll(false)" | grep -o '<textarea id="ans-t-5"[^>]*>[^<]*</textarea>')" '>half an answer</textarea>' "the answer box carries its draft"
+  # A lever that asks first is not a dialog: pressed once, the button gives way to its
+  # question and a yes, in place; Cancel (or Escape) puts the button back.
+  asked=$(render_page "$T/state.json" "act('escalate', { repo: $(jq -c .repos[0].repo "$T/state.json"), id: 't-2' }, 'asked')" | tr '\n' ' ' | grep -o '<div class="q dev">.*' | cut -c1-2000)
+  assert_match "$asked" '<td class="act"><span class="confirm" data-key="confirm"><span class="q">Work t-2 with claude/opus now? It goes to the last stage and back into the dev queue, ahead of its failure count.</span><button class="yes " onclick="act(.escalate.,{repo:[^}]*,id:&quot;t-2&quot;})">Work with Claude opus</button><button class="no" onclick="unask()">Cancel</button></span></td>' "the question and the yes, in the button's place"
+  assert_eq "$(printf '%s' "$asked" | grep -o 'class="confirm"' | wc -l)" 1 "only that lever asks"
+  assert_eq "$(render_page "$T/state.json" "act('escalate', { repo: $(jq -c .repos[0].repo "$T/state.json"), id: 't-2' }, 'asked'); unask()" | grep -c 'class="confirm"')" 0 "cancelled: the button is back"
   assert_match "$("$REAL_CURL" -s -m 3 -X POST -H 'content-type: application/json' -d "{\"repo\":\"$REPO\",\"id\":\"t-2\",\"text\":\"the flag is --dry-run, see lib/x.ts:9\"}" "http://127.0.0.1:$port/api/note")" '"noted":"t-2"' "note from the page"
   assert_match "$(jq -r '.[]|select(.id=="t-2")|.notes' "$BD_STATE/issues.json")" "^operator 20[0-9-]*T[0-9:]*+00:00: the flag is --dry-run, see lib/x.ts:9$" "an operator note on the bead, dated as answer's are"
   assert_eq "$(jq -r '.[]|select(.id=="t-2")|.status' "$BD_STATE/issues.json")" open "nothing else moved"
@@ -692,7 +701,7 @@ case_status_json_and_ui() {
   assert_match "$("$REAL_CURL" -s -m 3 "http://127.0.0.1:$port/api/log?repo=$REPO&file=t-9.none")" "no such log" "a name that is not there"
   # The supervisor log with systemd's own lines in it: hidden by default, the box unchecked.
   jq '.log = [{t: now, msg: "Starting bead-supervisor.service - the bead loop..."}, {t: now, msg: "03:50:01 repo: dev: bead t-2 to stub/worker"}, {t: now, msg: "Finished bead-supervisor.service - the bead loop."}]' "$T/state.json" >"$T/state-log.json"
-  log=$(render_page "$T/state-log.json" | grep -o '<section class="card"><h3 class="log">.*')
+  log=$(render_page "$T/state-log.json" | grep -o '<section class="card" id="journal"><h3 class="log">.*')
   assert_match "$log" '<input type="checkbox"  onchange="setSys(this.checked)">systemd lines</label>' "the systemd lines box, unchecked"
   assert_match "$log" '<span class="pick">repo: dev: bead t-2 to stub/worker</span>' "the loop's line shown"
   assert_eq "$(printf '%s' "$log" | grep -c 'class="sys"')" 0 "systemd's lines hidden"
