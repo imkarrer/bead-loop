@@ -40,3 +40,24 @@ timeout = 14400                        # seconds; default worker_timeout
 worker = "claude/sonnet"               # runs in Claude Code instead of opencode
 reviewer = "claude/sonnet"
 failures = 1
+
+# target_label = "work"                 # the label prefix that names a target (default "work")
+                                       # a bead's work:NAME label sends the round to a [targets.NAME]
+                                       # checkout instead of this beads repo; no such label, or none of
+                                       # these tables, is today's behaviour unchanged (docs/design-targets.md)
+
+# [targets.example]
+# path = "~/src/euclid"                # the checkout the round works in; required
+# base = "main"                        # branch to fork from and PR into           (default: base_remote's HEAD)
+# base_remote = "upstream"              # remote base forks from                    (default: "upstream" when that
+                                       # remote exists in the checkout, else "origin")
+# push_remote = "origin"                # remote bead/* branches are pushed to       (default "origin")
+# pr_repo = "brownnrl/euclid"           # owner/repo the PR is opened against        (default: base_remote's GitHub repo)
+# setup = "npm ci"                      # runs in the fresh worktree before the worker
+# gate = "npm test"                     # after the worker, before review
+# merge = "external"                    # auto | pipeline | manual | external (someone else merges; the loop watches)
+# merge_label = "automerge"             # the label merge = "pipeline" puts on each PR
+# adopt = true                          # bead/* PRs from anyone on this target join the loop
+# max_inflight = 1                      # PRs in the merge queue before the dev lane pauses on this target
+# open_pr = "ask"                       # auto | ask (the operator publishes it)     (default "auto")
+# pr_style = "plain"                    # loop | plain (a contribution, no loop id or line) (default "loop")
