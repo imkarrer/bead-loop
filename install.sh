@@ -41,7 +41,7 @@ if [ ! -f "$HOME/.config/bead-loop/config.toml" ]; then
 # bead-loop global config. A key in a repo's .bead-loop.toml wins over the same key here.
 repos = []                       # e.g. ["~/src/inquire-platform"]; each has .beads/ and a .bead-loop.toml
 model = "devbox/coder"           # worker, when no stages table is set
-# review_model = "acbox/coder"   # the senior model that judges the diff before the push
+# review_model = "acbox/reviewer" # the model that judges the diff before the push -- a different family from the worker
 # attach = "http://127.0.0.1:4096"   # run sessions inside opencode-web.service; watch them live in the browser
 worker_timeout = 3600            # seconds per model session
 # max_inflight = 2               # unset: no cap — bd's dependencies are the only gate on the dev lane
