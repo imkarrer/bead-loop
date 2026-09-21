@@ -363,7 +363,7 @@ pub fn rebase_order(base: &str) -> String {
 
 /// The worker's prompt: the bead, the branch and whether it is resumed, the rebase order
 /// of a conflict round, and the notes of the rounds sent back before (the last three).
-pub fn dev_prompt(json: &Value, branch: &str, base: &str, resumed: bool, rebase: &str, hist: &str) -> String {
+pub fn dev_prompt(json: &Value, branch: &str, base: &str, resumed: bool, gate: &str, rebase: &str, hist: &str) -> String {
     let history_block = if hist.is_empty() {
         String::new()
     } else {
@@ -371,8 +371,13 @@ pub fn dev_prompt(json: &Value, branch: &str, base: &str, resumed: bool, rebase:
             "\n\nEarlier rounds on this bead were sent back; their notes follow. A note that begins \"review (...) rejected:\" is a work order from the senior reviewer: do exactly what its \"What to do\" says, prove it with its \"How to check\", and leave alone what it says to leave alone. Read them before you start and do not repeat them.\n\n<previous-attempts>\n{hist}\n</previous-attempts>"
         )
     };
+    let gate_block = if gate.is_empty() {
+        String::new()
+    } else {
+        format!(" The gate this branch must pass before review: `{gate}`. Run it before you write DONE:.")
+    };
     format!(
-        "Work the bead below in this repository, following the bead-workflow skill.\n\n<bead>\n{}\n</bead>\n\nYou are on branch {branch}{}. Commit your work on this branch and leave .beads/ untouched. End your turn with one line: DONE: <evidence> or BLOCKED: <note>.{rebase}{history_block}",
+        "Work the bead below in this repository, following the bead-workflow skill.\n\n<bead>\n{}\n</bead>\n\nYou are on branch {branch}{}.{gate_block} Commit your work on this branch and leave .beads/ untouched. End your turn with one line: DONE: <evidence> or BLOCKED: <note>.{rebase}{history_block}",
         render_bead(json),
         if resumed {
             ", which already carries your earlier commit(s) for this bead: fix them in place rather than starting over".to_string()
@@ -505,7 +510,7 @@ pub fn dev_one(repo: &Repo, opts: &Opts, id: Option<&str>, last_id: &mut Option<
     // A branch left from an earlier round (sent back by review or CI) is resumed, not
     // restarted: the worker fixes its commit. A dev-side failure deleted the branch.
     let resumed = branch_exists(repo, &branch);
-    let prompt = dev_prompt(&json, &branch, &repo.base, resumed, &rebase, &hist);
+    let prompt = dev_prompt(&json, &branch, &repo.base, resumed, &repo.gate, &rebase, &hist);
     // A worker session of this bead still running on the server since the last process
     // (recover found it): the round is that session, waited on, not a new one — and the
     // worktree it works in is left alone. Without the worktree there is nothing to rejoin.
@@ -918,20 +923,30 @@ mod tests {
     #[test]
     fn dev_prompt_says_fresh_or_resumed_and_carries_the_history() {
         let j: Value = serde_json::json!([{"id":"t-1","title":"T","description":"D"}]);
-        let fresh = dev_prompt(&j, "bead/t-1", "main", false, "", "");
+        let fresh = dev_prompt(&j, "bead/t-1", "main", false, "", "", "");
         assert!(fresh.contains("<bead>\nid: t-1\n"), "the bead rendered into the prompt");
         assert!(fresh.contains("You are on branch bead/t-1, a fresh worktree of main."));
         assert!(!fresh.contains("<previous-attempts>"), "first attempt has no history");
+        assert!(!fresh.contains("The gate this branch must pass"), "no gate line when the gate is empty");
         assert!(fresh.ends_with("DONE: <evidence> or BLOCKED: <note>."));
+        let gated = dev_prompt(&j, "bead/t-1", "main", false, "cargo test", "", "");
+        assert!(
+            gated.contains("You are on branch bead/t-1, a fresh worktree of main. The gate this branch must pass before review: `cargo test`. Run it before you write DONE:."),
+            "the gate line follows the branch sentence"
+        );
+        assert!(
+            gated.find("The gate this branch must pass").unwrap() < gated.find("DONE: <evidence> or BLOCKED: <note>.").unwrap(),
+            "gate line comes before the DONE line"
+        );
         let hist = "round 1 (stub/fast): worker made no commit\nround 2 (stub/fast): review (r) rejected: REJECT: work.txt:1 For the worker: - What is wrong: x";
-        let again = dev_prompt(&j, "bead/t-1", "main", true, "", hist);
+        let again = dev_prompt(&j, "bead/t-1", "main", true, "", "", hist);
         assert!(
             again.contains("which already carries your earlier commit(s) for this bead: fix them in place rather than starting over"),
             "told to fix, not restart"
         );
         assert!(again.contains("a work order from the senior reviewer"), "told to act on it");
         assert!(again.contains(&format!("<previous-attempts>\n{hist}\n</previous-attempts>")), "the notes verbatim");
-        let rebase = dev_prompt(&j, "bead/t-1", "main", true, &rebase_order("main"), "");
+        let rebase = dev_prompt(&j, "bead/t-1", "main", true, "", &rebase_order("main"), "");
         assert!(rebase.contains("Your job this round is the rebase, not new work. Run: git fetch origin && git rebase origin/main"));
         assert!(rebase.find("rebase origin/main").unwrap() > rebase.find("</bead>").unwrap(), "the order comes after the bead");
     }
