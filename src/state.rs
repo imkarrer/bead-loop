@@ -125,6 +125,7 @@ impl Repo {
         let p = self.held_path(id);
         let old = read_to_string(&p).unwrap_or_default();
         if old.trim() == why.trim() {
+            crate::util::touch(&p);
             return false;
         }
         write_file(&p, &format!("{why}\n"));
@@ -333,7 +334,13 @@ mod tests {
         let d = crate::config::scratch("hold");
         let repo = crate::config::test_repo(&d, &["a"]);
         assert!(repo.hold("t-1", "setup failed: false"), "a new hold");
+        let old = crate::util::now() - 1000;
+        let times = [libc::timespec { tv_sec: old, tv_nsec: 0 }, libc::timespec { tv_sec: old, tv_nsec: 0 }];
+        let c = std::ffi::CString::new(repo.held_path("t-1").to_string_lossy().as_bytes()).unwrap();
+        unsafe { libc::utimensat(libc::AT_FDCWD, c.as_ptr(), times.as_ptr(), 0) };
+        assert_eq!(repo.held_since("t-1"), old, "backdated for the check below");
         assert!(!repo.hold("t-1", "setup failed: false\n"), "the same reason again is silent");
+        assert!(repo.held_since("t-1") > old, "a second hold with the same reason still restarts the backoff clock");
         assert!(repo.hold("t-1", "gh cannot read the PR"), "a new reason is a new hold");
         assert_eq!(repo.held_why("t-1").as_deref(), Some("gh cannot read the PR"));
         assert!(repo.held_since("t-1") > 0);
