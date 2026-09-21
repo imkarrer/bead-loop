@@ -3,8 +3,8 @@ Description=opencode server + web UI at http://127.0.0.1:4096: watch bead-loop s
 After=network.target
 
 [Service]
-# opencode comes from %h/src/bead-loop/.flox/env/manifest.toml, the same way on every box.
-ExecStart=/run/current-system/sw/bin/flox activate -d %h/src/bead-loop -- opencode serve --port 4096 --hostname 127.0.0.1
+# opencode comes from @HERE@/.flox/env/manifest.toml, the same way on every box.
+ExecStart=/run/current-system/sw/bin/flox activate -d @HERE@ -- opencode serve --port 4096 --hostname 127.0.0.1
 Environment=OPENCODE_DISABLE_CLAUDE_CODE_SKILLS=1
 Restart=on-failure
 RestartSec=5

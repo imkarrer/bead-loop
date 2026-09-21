@@ -4,9 +4,9 @@ After=network.target
 
 [Service]
 # node for the server; bead-supervisor (and through it bd, jq, yq, gh, curl) come from
-# %h/src/bead-loop/.flox/env/manifest.toml, the same way on every box; systemctl and
+# @HERE@/.flox/env/manifest.toml, the same way on every box; systemctl and
 # journalctl, for what it shows, are on the system PATH flox activate inherits.
-ExecStart=/run/current-system/sw/bin/flox activate -d %h/src/bead-loop -- bead-loop-ui
+ExecStart=/run/current-system/sw/bin/flox activate -d @HERE@ -- bead-loop-ui
 Restart=on-failure
 RestartSec=5
 

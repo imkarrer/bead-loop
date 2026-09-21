@@ -9,9 +9,9 @@ After=network-online.target
 # it cut short, with no failure charged.
 Type=simple
 # flox activate resolves bd, gh, opencode, git, curl and the binary itself from
-# %h/src/bead-loop/.flox/env/manifest.toml, the same way on every box; only flox's own
+# @HERE@/.flox/env/manifest.toml, the same way on every box; only flox's own
 # path (a NixOS system fact, not a login profile) is hardcoded.
-ExecStart=/run/current-system/sw/bin/flox activate -d %h/src/bead-loop -- bead-supervisor run
+ExecStart=/run/current-system/sw/bin/flox activate -d @HERE@ -- bead-supervisor run
 Restart=on-failure
 RestartSec=10
 
