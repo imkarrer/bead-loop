@@ -21,9 +21,10 @@
   send-back), **Without Claude** (landed by a local model: the point of the local stack),
   **Rounds per landing**, **Time to land** (first claim to merge), **Needed you**; under
   them where rounds go back (by reason: no commit, gate, review, CI red, blocked, timed
-  out, crashed), by model, model hours by role with the **empty rounds** (a session the
-  server never answered), and the beads finished, newest first. Read from what the beads
-  and the session logs already carry, once a minute (`bead-supervisor --json stats`).
+  out, crashed), by model, model cost by role (what each session's own transcript says it
+  spent — $0 for a local model) with the **empty rounds** (a session the server never
+  answered), and the beads finished, newest first. Read from what the beads and the
+  session logs already carry, once a minute (`bead-supervisor --json stats`).
 - **Per repo**, with **★ make priority** on its heading: the three queues in their order
   — **dev** (#1 is next; each bead's failures and the stage that puts it on), **review**
   (how long each has waited), **merge** (each PR with GitHub's word on it: CI running

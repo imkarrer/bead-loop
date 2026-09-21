@@ -133,7 +133,7 @@
 
   /* the scoreboard: a row of tiles, the one number each in the bright ink, its reading
      under it; below, three columns — where rounds go back (bars in one hue, the count
-     beside each), what each model landed and lost, and the model hours. */
+     beside each), what each model landed and lost, and the model cost. */
   #score h2 .seg { margin-left: auto; font-size: 12.5px; }
   #score h2 .seg button { padding: 2px 10px; }
   .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-top: 14px; }
@@ -468,8 +468,8 @@ function claudeCol(r) {
 // all. The server computes it (`bead-supervisor --json stats`) from what the beads and
 // the session logs already record, once a minute. Six tiles answer the questions in
 // order: is work landing, how much of it first time, how much without Claude, at what
-// cost in rounds and hours, and how often it needed you. Under them: where rounds go
-// back, what each model landed and lost, the model hours — and the last beads finished.
+// cost in rounds and dollars, and how often it needed you. Under them: where rounds go
+// back, what each model landed and lost, the model cost — and the last beads finished.
 let scoreWin = '7d';
 try { scoreWin = localStorage.getItem('scoreWin') || '7d'; } catch { /* the default, every load */ }
 window.setWin = (w) => { scoreWin = w; try { localStorage.setItem('scoreWin', w); } catch { /* not remembered, still applied */ } render(); };
@@ -478,6 +478,7 @@ window.setScoreAll = (on) => { scoreAll = !!on; render(); };
 const FINISHED_SHOWN = 8;
 const dur = (s) => { if (s == null) return '–'; const m = Math.round(s / 60); return m < 60 ? `${m}m` : m < 60 * 48 ? `${Math.floor(m / 60)}h${String(m % 60).padStart(2, '0')}` : `${(m / 1440).toFixed(1)}d`; };
 const hours = (s) => `${(s / 3600).toFixed(1)}h`;
+const usd = (n) => `$${n.toFixed(2)}`;
 const pct = (n, of) => of ? `${Math.round(n * 100 / of)}%` : '–';
 const tile = (label, value, sub, cls) => `<div class="tile"><div class="label">${label}</div><div class="value ${cls || ''}">${value}</div><div class="sub">${sub}</div></div>`;
 function scoreboard(s) {
@@ -511,11 +512,14 @@ function scoreboard(s) {
       const why = Object.entries(lost.by_reason).sort((a, b) => b[1] - a[1]).map(([k, n]) => `${esc(k)} ${n}`).join(' · ');
       return `<tr><td class="mono">${esc(m)}</td><td class="num">${w.landed_by[m] || 0}</td><td class="num">${lost.total}</td><td class="reasons">${why}</td></tr>`;
     }).join('')}</table>`;
-  // model time: hours by role, as a share of the window; empty rounds are a leak to see
+  // model cost: what each role's sessions say they spent (Claude Code's total_cost_usd,
+  // opencode's per-step cost; $0 for a local model), the bar its share of the window's
+  // spend; empty rounds are a leak to see
+  const totalUsd = Math.max(mt.worker_usd + mt.review_usd, 0.01);
   const time = `<div class="bars">
-    <span class="k">worker</span><span class="bar" title="${hours(mt.worker_s)} of ${hours(w.span_s)}"><i style="width:${Math.min(100, Math.round(mt.worker_s * 100 / Math.max(w.span_s, 1)))}%"></i></span><span class="n">${hours(mt.worker_s)}</span>
-    <span class="k">reviewer</span><span class="bar" title="${hours(mt.review_s)} of ${hours(w.span_s)}"><i style="width:${Math.min(100, Math.round(mt.review_s * 100 / Math.max(w.span_s, 1)))}%"></i></span><span class="n">${hours(mt.review_s)}</span>
-  </div><div class="note">${mt.worker_rounds} worker round${mt.worker_rounds === 1 ? '' : 's'}, ${mt.review_rounds} review round${mt.review_rounds === 1 ? '' : 's'} · the bar is the share of the window's ${hours(w.span_s)}${mt.empty_rounds ? ` · <span class="chip warn" title="a session the harness or server never answered — Claude signed out, a model server down — retried by the loop">${mt.empty_rounds} empty round${mt.empty_rounds > 1 ? 's' : ''}</span>` : ''}</div>`;
+    <span class="k">worker</span><span class="bar" title="${usd(mt.worker_usd)} · ${hours(mt.worker_s)}"><i style="width:${Math.min(100, Math.round(mt.worker_usd * 100 / totalUsd))}%"></i></span><span class="n">${usd(mt.worker_usd)}</span>
+    <span class="k">reviewer</span><span class="bar" title="${usd(mt.review_usd)} · ${hours(mt.review_s)}"><i style="width:${Math.min(100, Math.round(mt.review_usd * 100 / totalUsd))}%"></i></span><span class="n">${usd(mt.review_usd)}</span>
+  </div><div class="note">${mt.worker_rounds} worker round${mt.worker_rounds === 1 ? '' : 's'} (${hours(mt.worker_s)}), ${mt.review_rounds} review round${mt.review_rounds === 1 ? '' : 's'} (${hours(mt.review_s)}) · ${usd(mt.worker_usd + mt.review_usd)} this window${mt.empty_rounds ? ` · <span class="chip warn" title="a session the harness or server never answered — Claude signed out, a model server down — retried by the loop">${mt.empty_rounds} empty round${mt.empty_rounds > 1 ? 's' : ''}</span>` : ''}</div>`;
   // the beads finished in the window, newest first
   const from = scoreWin === 'all' ? 0 : st.now - { '24h': 86400, '7d': 7 * 86400, '30d': 30 * 86400 }[scoreWin];
   const fin = st.finished.filter((b) => b.closed >= from);
@@ -533,7 +537,7 @@ function scoreboard(s) {
     <div class="score-cols">
       <div><h3>Where rounds go back<span class="n">${sb.total}</span></h3>${bars}${extra ? `<div class="note">${extra}</div>` : ''}</div>
       <div><h3>By model</h3>${modelRows}</div>
-      <div><h3>Model hours</h3>${time}</div>
+      <div><h3>Model cost</h3>${time}</div>
     </div>
     <h3>Finished<span class="n">${fin.length}</span><span class="note">newest first · rounds counts the one that landed</span>${more}</h3>${finished}
   </section>`;

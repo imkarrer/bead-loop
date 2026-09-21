@@ -24,7 +24,7 @@
 //!   bead-supervisor status [REPO...]      what is in flight: PRs, ready beads, worktrees and their sessions
 //!   bead-supervisor watch [REPO...]       status every 5 s (BEAD_LOOP_WATCH=N), the last log lines above it
 //!   bead-supervisor stats [REPO...]       the scoreboard: landed, first-try, without Claude, rounds and time per
-//!                                         landing, send-backs by reason and model, model hours — 24h/7d/30d/all
+//!                                         landing, send-backs by reason and model, model cost — 24h/7d/30d/all
 //!   bead-supervisor log REPO [BEAD_ID]    follow the newest worker/reviewer session: tool calls and text
 //!
 //!   --dry-run    pick the bead, print the prompt, change nothing
