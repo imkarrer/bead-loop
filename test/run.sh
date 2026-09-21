@@ -1036,6 +1036,21 @@ case_harness_down_is_held() {
   assert_eq "$(calls)" "bead-worker bead-reviewer bead-reviewer" "reviewed once the hold aged"
   assert_file "$BEAD_LOOP_STATE/repo/inflight/t-1" "and pushed to a PR"
 }
+case_repeated_hold_restarts_backoff() {
+  # A second hold for the same reason used to return without touching the file, so its
+  # mtime stayed at the first hold; once that aged past the backoff, every later hold
+  # with the same reason was born already expired and the pick retried at once — a
+  # tight loop rung by its own bell (bl-8ol). It must instead restart the backoff clock
+  # each time, silently: no second note, no second log line, but the file's age resets.
+  setup; echo crash >"$TEST_CTRL/worker"
+  BEAD_LOOP_HOLD_BACKOFF=2 sup --once tick
+  assert_eq "$(calls)" "bead-worker" "first hold: one worker call"
+  sleep 2.2
+  : >"$TEST_CTRL/calls"; BEAD_LOOP_HOLD_BACKOFF=2 sup --once tick
+  assert_eq "$(calls)" "bead-worker" "aged: retried once, held again with the same reason"
+  : >"$TEST_CTRL/calls"; BEAD_LOOP_HOLD_BACKOFF=2 sup --once tick
+  assert_eq "$(calls)" "" "inside the fresh backoff: no retry"
+}
 case_harness_error_is_held() {
   # The harness comes back with a transcript of nothing but its own error event: the
   # server answered an error before the model ran (21 Sep 2026: the reviewer model added
