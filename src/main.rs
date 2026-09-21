@@ -6,10 +6,10 @@
 //!   bead-supervisor tick [REPO...]        one pass to idle: reconcile, both lanes side by side until both queues
 //!                                         drain and both lanes idle, reconcile again, exit
 //!   bead-supervisor work REPO [BEAD_ID]   one bead through dev and review now (top of the dev queue, or the id given)
-//!   bead-supervisor lane dev|review|claude   one lane by itself, until its queue is empty (claude: the lane a
-//!                                         claude/* stage gets, so a bead on it never waits behind the GPU)
-//!   bead-supervisor pause dev|review|claude  the lane starts no new round until `resume` (the others go on)
-//!   bead-supervisor resume dev|review|claude
+//!   bead-supervisor lane NAME   one lane by itself, until its queue is empty (NAME is dev, review, claude, or a
+//!                                         [[lanes]] name from the global config)
+//!   bead-supervisor pause NAME  the lane starts no new round until `resume` (the others go on)
+//!   bead-supervisor resume NAME
 //!   bead-supervisor priority REPO|none    the repo the lanes look at first on every pass (else round-robin)
 //!   bead-supervisor wake                  ring the bell: every lane looks at its queue now
 //!   bead-supervisor escalate REPO ID      put the bead on the last stage (Claude, usually) and back in the dev

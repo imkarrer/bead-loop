@@ -1,5 +1,5 @@
 //! The one description of a repo's state, as JSON: config, the three queues in their
-//! order, the two lanes and what each is on, the parked and held beads, and every
+//! order, each lane and what it is on, the parked and held beads, and every
 //! worktree with what the attached opencode server has under it. `status` renders it as
 //! text; `--json status` prints it for the web UI. The JSON is the bash's, key for key.
 use crate::config::Repo;

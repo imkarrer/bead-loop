@@ -1,16 +1,20 @@
 //! The state on disk, `~/.local/state/bead-loop/<repo>/`, and what it means:
 //!
 //! - `failures/ID` the count of send-backs (→ the stage), `failures/ID.notes` the history
+//! - `failures/ID.rounds.jsonl` the history, one record per send-back
 //! - `review/ID`   the review queue: the worker's last line, for the reviewer's prompt
 //! - `inflight/ID` the merge queue: the PR url; `.ID.red|nocheck|adopted|fixing|conflict`
 //!   beside it
 //! - `held/ID`     the bead is in its queue and waits on something outside the loop; the
 //!   file says what. Shown in the human queue, polled, cleared when the reason goes.
-//! - `lane.dev`, `lane.review` the bead each lane is on
+//! - `parked/ID`   the record of a parking: reason, stage, question, brief
+//! - `rejoin/ID`   `SID worker|reviewer`, a session to wait on after a restart
+//! - `.ID.conflict` in the inflight marker list
+//! - `lane.<name>` the lane names are dev, review, claude, or the [[lanes]] names
 //! - `wt/ID` the worktree while a bead is on a lane or waiting for review
 //!
-//! and, under the state dir itself: `lock`, `lock.dev`, `lock.review`, `pause.dev`,
-//! `pause.review`, `priority` (the repo the lanes look at first), `wake` (the bell).
+//! and, under the state dir itself: `lock.<name>`, `pause.<name>` (not only dev/review),
+//! `restart` (dropped by the deploy before it restarts the service; signals.rs reads it).
 use crate::config::{Repo, Stage};
 use crate::util::{mtime, read_to_string, touch, write_file};
 use std::path::PathBuf;
