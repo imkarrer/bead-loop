@@ -137,3 +137,10 @@ with a lever for each thing you would otherwise type.
 - [docs/operating.md](docs/operating.md) — the page, the terminal, stop/restart/recover, the state on disk
 - [docs/pipeline.md](docs/pipeline.md) — dogfood: the checks, Buildkite, the automerge label, the deploy
 - [docs/design.md](docs/design.md) — why this shape; the harnesses (opencode, Claude Code, aider)
+
+## License
+
+[Functional Source License, Version 1.1, MIT Future License](LICENSE.md) (FSL-1.1-MIT).
+Use it, read it, change it, run it inside your own team — everything except offering it as a
+competing product or service. Each version becomes plain MIT two years after its release.
+Contributions are accepted under the same license.
