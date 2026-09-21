@@ -429,12 +429,13 @@ Two send-backs are not failures. A PR that **conflicts with the base** is nobody
 mistake: it goes back to the dev queue on its branch with a rebase order, and that
 round's worker is `conflict_worker` — the last stage's (Sonnet) by default, because
 resolving a conflict is judgement about two intents, not typing. And **infrastructure is
-never the bead's failure**: setup failing, a model harness exiting with nothing said (its
-server down), `gh` or the push refusing — the round did not happen. The bead stays in its
-queue **held** with the reason, the lane moves on to the next bead, and the held one is
-tried again five minutes later (`BEAD_LOOP_HOLD_BACKOFF`). With the 30B down, the old
-loop would have sent every ready bead back one stage in minutes; this one holds them all
-and says why.
+never the bead's failure**: setup failing, a model harness coming back with nothing from
+the model (its server down, or the server answering an error before the model ran — a
+5xx, the model not found on it), `gh` or the push refusing — the round did not happen.
+The bead stays in its queue **held** with the reason, the lane moves on to the next bead,
+and the held one is tried again five minutes later (`BEAD_LOOP_HOLD_BACKOFF`). With the
+30B down, the old loop would have sent every ready bead back one stage in minutes; this
+one holds them all and says why.
 
 The failure count is what chooses the **stage**, the `[[stages]]` tables in the config:
 
@@ -505,7 +506,7 @@ turns it off.
 | No commit, or the session timed out | note, +1 failure; dev queue | removed |
 | Setup fails | **held**, no failure: the reason on the bead once; retried after the backoff | removed |
 | Git refuses the worktree (the branch checked out elsewhere, a stale registration) | **held**, no failure, with git's words; the lane takes the next bead | not made |
-| Harness exits with nothing said (server down) | **held**, no failure; the lane takes the next bead | removed (dev) / kept (review) |
+| Harness exits with nothing from the model — no output, or only its own error (the server down, the model not found on it, a 5xx) | **held**, no failure, with the harness's words; the lane takes the next bead | removed (dev; kept once a round had committed) / kept (review) |
 | Gate fails twice (one fix round with its output) | note with the errors, +1 failure; dev queue | removed |
 | Gate passes | in_progress; review queue | kept, in its worktree |
 | Reviewer `REJECT:` | note with the rejection, +1 failure; dev queue — the worker fixes in place | kept |

@@ -962,7 +962,7 @@ case_harness_down_is_held() {
   setup; echo crash >"$TEST_CTRL/worker"; sup --once tick
   assert_eq "$(bead .status)" open "back in the dev queue"
   assert_eq "$(cat "$BEAD_LOOP_STATE/repo/failures/t-1" 2>/dev/null || echo 0)" 0 "no failure"
-  assert_match "$(cat "$BEAD_LOOP_STATE/repo/held/t-1")" "worker stub/worker exited 7 with no output" "held with the reason"
+  assert_match "$(cat "$BEAD_LOOP_STATE/repo/held/t-1")" "worker stub/worker exited 7 before the model answered" "held with the reason"
   assert_match "$(cat "$BEAD_LOOP_STATE/repo/held/t-1")" "connection refused" "and the harness's last words"
   assert_nobranch bead/t-1 "nothing pushed"
   echo "done" >"$TEST_CTRL/worker"; : >"$TEST_CTRL/calls"; BEAD_LOOP_HOLD_BACKOFF=0 sup --once tick
@@ -974,11 +974,50 @@ case_harness_down_is_held() {
   setup; printf 'crash\napprove\n' >"$TEST_CTRL/review"; sup work "$REPO"
   assert_file "$BEAD_LOOP_STATE/repo/review/t-1" "stays in the review queue"
   assert_eq "$(cat "$BEAD_LOOP_STATE/repo/failures/t-1" 2>/dev/null || echo 0)" 0 "no failure"
-  assert_match "$(cat "$BEAD_LOOP_STATE/repo/held/t-1")" "reviewer stub/reviewer exited 7 with no output" "held"
+  assert_match "$(cat "$BEAD_LOOP_STATE/repo/held/t-1")" "reviewer stub/reviewer exited 7 before the model answered" "held"
   assert_eq "$(sup --json status "$REPO" | jq -r '.held[0].where')" review "status: held in review"
   BEAD_LOOP_HOLD_BACKOFF=0 sup --once lane review
   assert_eq "$(calls)" "bead-worker bead-reviewer bead-reviewer" "reviewed once the hold aged"
   assert_file "$BEAD_LOOP_STATE/repo/inflight/t-1" "and pushed to a PR"
+}
+case_harness_error_is_held() {
+  # The harness comes back with a transcript of nothing but its own error event: the
+  # server answered an error before the model ran (21 Sep 2026: the reviewer model added
+  # to opencode.json without a server restart — ProviderModelNotFoundError behind a 5xx).
+  # The model never saw the bead, so this is the server's failure, not the bead's: no
+  # failure, held with the harness's words, and the same stage tries again once the hold
+  # has aged — not the next one. (It cost a Sonnet review, once.)
+  setup; echo server-error >"$TEST_CTRL/worker"; sup --once tick
+  assert_eq "$(bead .status)" open "back in the dev queue"
+  assert_eq "$(cat "$BEAD_LOOP_STATE/repo/failures/t-1" 2>/dev/null || echo 0)" 0 "no failure"
+  assert_match "$(cat "$BEAD_LOOP_STATE/repo/held/t-1")" "worker stub/worker exited 1 before the model answered" "held with the reason"
+  assert_match "$(cat "$BEAD_LOOP_STATE/repo/held/t-1")" "UnknownError: Unexpected server error.*err_502a8619" "and the harness's error"
+  assert_match "$(bead .notes)" "held, no failure charged" "the hold on the bead"
+  ! grep -q 'round 1' <<<"$(bead .notes)" && ok || bad "no round note: the round did not happen"
+  assert_nobranch bead/t-1 "nothing pushed"
+  echo "done" >"$TEST_CTRL/worker"; : >"$TEST_CTRL/calls"; BEAD_LOOP_HOLD_BACKOFF=0 sup --once tick
+  assert_eq "$(calls)" "bead-worker bead-reviewer" "server back: worked"
+  # The reviewer: the bead stays in the review queue, and the same stage's reviewer
+  # reads it once the hold has aged — one failure would have put it on the next stage.
+  setup true auto stub/reviewer "$(stages stub/worker:stub/reviewer:1 stub/strong:stub/strong:1)"; printf 'server-error\napprove\n' >"$TEST_CTRL/review"; sup work "$REPO"
+  assert_file "$BEAD_LOOP_STATE/repo/review/t-1" "stays in the review queue"
+  assert_eq "$(cat "$BEAD_LOOP_STATE/repo/failures/t-1" 2>/dev/null || echo 0)" 0 "no failure"
+  assert_match "$(cat "$BEAD_LOOP_STATE/repo/held/t-1")" "reviewer stub/reviewer exited 1 before the model answered (harness or server down?): UnknownError: Unexpected server error" "held with the error"
+  assert_match "$(cat "$T/sup.log")" "t-1: held: reviewer stub/reviewer exited 1 before the model answered" "logged as a hold"
+  ! grep -q 'round 1 stopped' "$T/sup.log" && ok || bad "no round stopped"
+  BEAD_LOOP_HOLD_BACKOFF=0 sup --once lane review
+  assert_eq "$(calls)" "bead-worker bead-reviewer bead-reviewer" "reviewed once the hold aged"
+  assert_match "$(sed -n 3p "$TEST_CTRL/calls")" " stub/reviewer " "by the same stage's reviewer, not the next stage's"
+  assert_file "$BEAD_LOOP_STATE/repo/inflight/t-1" "and pushed to a PR"
+  # The gate-fix round too: the first round's commit stays on its branch, in its
+  # worktree, and the next round resumes it instead of starting over.
+  setup 'false'; printf 'done\nserver-error\n' >"$TEST_CTRL/worker"; sup --once tick
+  assert_eq "$(calls)" "bead-worker bead-worker" "the fix round was the one that failed"
+  assert_eq "$(cat "$BEAD_LOOP_STATE/repo/failures/t-1" 2>/dev/null || echo 0)" 0 "no failure"
+  assert_match "$(cat "$BEAD_LOOP_STATE/repo/held/t-1")" "worker stub/worker exited 1 before the model answered" "held"
+  assert_file "$BEAD_LOOP_STATE/repo/wt/t-1/work.txt" "the worktree with the first round's commit is kept"
+  : >"$TEST_CTRL/calls"; BEAD_LOOP_HOLD_BACKOFF=0 sup --once tick
+  assert_match "$(cat "$T/sup.log")" "dev: bead t-1 .*resuming the branch" "the next round resumes it"
 }
 case_recover_reopens_an_interrupted_round() {
   # A dev round the last stop cut short: the bead is in_progress with a worktree and in no
@@ -1112,7 +1151,7 @@ case_claude_sign_in_expiring_is_held() {
   sup --once tick
   assert_eq "$(bead .status)" open "back in the dev queue"
   assert_eq "$(cat "$BEAD_LOOP_STATE/repo/failures/t-1" 2>/dev/null || echo 0)" 0 "no failure charged"
-  assert_match "$(cat "$BEAD_LOOP_STATE/repo/held/t-1")" "worker claude/opus exited 1 with no output" "held"
+  assert_match "$(cat "$BEAD_LOOP_STATE/repo/held/t-1")" "worker claude/opus exited 1 before the model answered" "held"
   assert_match "$(cat "$BEAD_LOOP_STATE/repo/held/t-1")" "OAuth session expired" "with Claude's own words"
   assert_match "$(cat "$T/sup.log")" "claude did nothing: Failed to authenticate" "logged"
   rm "$TEST_CTRL/claude-api-error"; : >"$TEST_CTRL/calls"; BEAD_LOOP_HOLD_BACKOFF=0 sup --once tick

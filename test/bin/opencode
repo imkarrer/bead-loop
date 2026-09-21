@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Stub opencode for bead-loop tests. `run` only. Behaviour from $TEST_CTRL:
-#   worker      done | blocked | nocommit | uncommitted | hang   (what the implementor leaves behind)
+#   worker      one line per round, the last line for the rest: done | blocked | nocommit | uncommitted |
+#               hang | crash | server-error   (what the implementor leaves behind)
 #   abort-delay seconds the server takes for the next abort, once (curl stub): the stop's race
-#   review      one line per round: approve | reject
+#   review      one line per round: approve | reject | hang | crash | server-error
 #   brief       shape (default: WHAT HAPPENED / WHY / QUESTION) | plain (no shape) | crash
 #   calls       appended: "<agent> <dir> <model> <attach>" per run, prompt saved to prompt.<n>
 set -euo pipefail
@@ -19,14 +20,20 @@ n=$(( $(wc -l <"$TEST_CTRL/calls" 2>/dev/null || echo 0) + 1 ))
 printf '%s %s %s %s\n' "$agent" "$dir" "${model:-none}" "${attach:-none}" >>"$TEST_CTRL/calls"
 printf '%s' "$prompt" >"$TEST_CTRL/prompt.$n"
 say() { jq -cn --arg t "$1" '{type:"text", part:{text:$t}}'; }
+# What opencode prints when the server errors before the model answers (21 Sep 2026: the
+# reviewer model added to opencode.json without a server restart -- ProviderModelNotFoundError
+# behind ref err_502a8619): one error event, no text, exit 1.
+server_error() { jq -cn '{type:"error", timestamp:1789953019292, sessionID:"ses_f3e7c72bbffe8Z0a3YGAoGjCfQ", error:{name:"UnknownError", data:{message:"Unexpected server error. Check server logs for details.", ref:"err_502a8619"}}}'; exit 1; }
 case $agent in
   bead-worker)
-    mode=$(cat "$TEST_CTRL/worker")
+    round=$(grep -c '^bead-worker' "$TEST_CTRL/calls")
+    mode=$(sed -n "${round}p" "$TEST_CTRL/worker"); [ -n "$mode" ] || mode=$(tail -1 "$TEST_CTRL/worker")
     case $mode in
       blocked) say "I looked."; say "BLOCKED: lib/x.ts:3 has no such flag" ;;
       nocommit) say "DONE: nothing to do" ;;
       hang) say "working on it"; sleep 30 ;;   # said something, then the clock or a stop ends it
       crash) echo "connection refused" >&2; exit 7 ;;   # the harness died before the model said a word
+      server-error) server_error ;;   # the server answered an error before the model ran
       uncommitted) echo "work" >"$dir/work.txt"; say "DONE: wrote work.txt (forgot to commit)" ;;
       done)
         round=$(grep -c '^bead-worker' "$TEST_CTRL/calls")
@@ -41,6 +48,7 @@ case $agent in
       approve) say "APPROVE: checked every criterion" ;;
       hang) say "reading the diff"; sleep 30 ;;   # a stop or the clock ends it
       crash) echo "connection refused" >&2; exit 7 ;;   # the reviewer's server is down
+      server-error) server_error ;;   # the server answered an error before the reviewer ran
       *) say "REJECT: work.txt:1 wrong, fix it"; say "$(printf "For the worker:\n- What is wrong: work.txt:1 says round 1\n- What to do: append the word fixed\n- How to check: grep -c fixed work.txt prints 1")" ;;
     esac ;;
   bead-briefer)

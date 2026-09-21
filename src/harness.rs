@@ -20,8 +20,80 @@ pub struct AgentRun {
     /// all of it: what the brief reads, not the last twenty lines
     pub full: String,
     pub rc: i32,
-    /// the session wrote nothing at all — a harness or server failure, not the model's work
+    /// the model never answered: the session wrote nothing at all, or nothing but the
+    /// harness's own error events (the server answering an error before the model ran:
+    /// a 5xx, the model not found on it, a refused connection) — a harness or server
+    /// failure, not the model's work
     pub empty: bool,
+    /// what the harness said about it, for the hold's reason: its error events' lines,
+    /// else — with nothing written at all — the last lines of its stderr
+    pub error: String,
+}
+
+/// What an opencode `--format json` transcript holds. `text` events are the model's
+/// words; `tool_use`, `step_start`, `step_finish` are the model at work; `error` events
+/// are the harness's own — the server answering an error (a 5xx, the model not found on
+/// it, a refused or reset connection). A transcript of errors alone, or of nothing, is a
+/// round the model never answered: the server's failure, never the bead's. (21 Sep 2026:
+/// the reviewer model added to opencode.json without a server restart cost a bead a
+/// failure and a Sonnet review; its transcript was one error event.)
+pub struct Transcript {
+    pub texts: Vec<String>,
+    pub errors: Vec<String>,
+    /// events that are neither: the model at work, or lines this parser does not know
+    pub other: usize,
+}
+
+impl Transcript {
+    pub fn never_answered(&self) -> bool {
+        self.texts.is_empty() && self.other == 0
+    }
+}
+
+pub fn parse_transcript(raw: &str) -> Transcript {
+    let mut t = Transcript { texts: Vec::new(), errors: Vec::new(), other: 0 };
+    for line in raw.lines().filter(|l| !l.trim().is_empty()) {
+        let v: Value = match serde_json::from_str(line) {
+            Ok(v) => v,
+            Err(_) => {
+                t.other += 1;
+                continue;
+            }
+        };
+        match v.get("type").and_then(|t| t.as_str()) {
+            Some("text") => match v.pointer("/part/text").and_then(|s| s.as_str()) {
+                Some(s) => t.texts.push(s.to_string()),
+                None => t.other += 1,
+            },
+            Some("error") => t.errors.push(error_line(v.get("error").unwrap_or(&Value::Null))),
+            _ => t.other += 1,
+        }
+    }
+    t
+}
+
+/// One line for an error event: `Name: message (ref X)` as opencode's providers report
+/// it (`error.name`, `error.data.message`, `error.data.ref`), `CODE path` for a socket
+/// error (`error.code`, `error.path`), else the JSON as it came.
+fn error_line(e: &Value) -> String {
+    let s = |p: &str| e.pointer(p).and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let (name, message, r) = (s("/name"), s("/data/message"), s("/data/ref"));
+    if !name.is_empty() || !message.is_empty() {
+        let mut out = match (name.is_empty(), message.is_empty()) {
+            (false, false) => format!("{name}: {message}"),
+            (false, true) => name,
+            _ => message,
+        };
+        if !r.is_empty() {
+            out.push_str(&format!(" (ref {r})"));
+        }
+        return out;
+    }
+    let code = s("/code");
+    if !code.is_empty() {
+        return format!("{code} {}", s("/path")).trim_end().to_string();
+    }
+    e.to_string()
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -38,7 +110,7 @@ pub fn run_agent(
 ) -> AgentRun {
     if signals::stopping() {
         // No session starts under a stop: the caller finds the stop (round.rs cut_short).
-        return AgentRun { text: String::new(), full: String::new(), rc: 143, empty: true };
+        return AgentRun { text: String::new(), full: String::new(), rc: 143, empty: true, error: String::new() };
     }
     let err_path = logf.with_file_name(format!("{}.err", logf.file_name().unwrap().to_string_lossy()));
     let stdout = std::fs::File::create(logf).ok();
@@ -46,6 +118,8 @@ pub fn run_agent(
     let timeout_s = timeout.to_string();
     let rc;
     let full;
+    let mut never_answered = false;
+    let mut errors = String::new();
     if let Some(rest) = model.strip_prefix("aider:") {
         // Aider explores nothing: it edits the files it is handed, so the files are the
         // ones the bead's DESCRIPTION names that exist in the worktree. The server is the
@@ -143,17 +217,23 @@ pub fn run_agent(
         if rc != 0 && !signals::stopping() {
             abort_sessions(repo, dir);
         }
-        let raw = read_to_string(logf).unwrap_or_default();
-        let texts: Vec<String> = raw
-            .lines()
-            .filter_map(|l| serde_json::from_str::<Value>(l).ok())
-            .filter(|v| v.get("type").and_then(|t| t.as_str()) == Some("text"))
-            .filter_map(|v| v.pointer("/part/text").and_then(|t| t.as_str()).map(str::to_string))
-            .collect();
-        full = texts.join("\n");
+        let t = parse_transcript(&read_to_string(logf).unwrap_or_default());
+        full = t.texts.join("\n");
+        never_answered = t.never_answered();
+        errors = t.errors.join("; ");
     }
-    let empty = std::fs::metadata(logf).map(|m| m.len() == 0).unwrap_or(true);
-    AgentRun { text: tail_lines(&full, 20), full, rc, empty }
+    // Nothing from the model: the file is empty (the client died before a word), or it
+    // holds nothing but the harness's own error events. The reason is the harness's:
+    // its errors, else its stderr.
+    let empty = never_answered || std::fs::metadata(logf).map(|m| m.len() == 0).unwrap_or(true);
+    let error = if !errors.is_empty() {
+        errors
+    } else if empty {
+        tail_lines(&read_to_string(&err_path).unwrap_or_default(), 5)
+    } else {
+        String::new()
+    };
+    AgentRun { text: tail_lines(&full, 20), full, rc, empty, error }
 }
 
 /// Run with stdout/stderr to files, registering the child so a TERM to the supervisor
@@ -377,7 +457,7 @@ pub fn rejoin_session(repo: &Repo, sid: &str, dir: &Path, logf: &Path, timeout: 
         crate::util::now() - started_ms / 1000,
         if empty { ", no text" } else { "" }
     ));
-    AgentRun { text: tail_lines(&full, 20), full, rc, empty }
+    AgentRun { text: tail_lines(&full, 20), full, rc, empty, error: String::new() }
 }
 
 // ---- can this model run right now? ------------------------------------------------
@@ -460,6 +540,40 @@ mod tests {
         assert!(real.contains("delegated developer for one bead"), "the worker agent's body is the system prompt");
         let real = agent_body_of(&std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/agents/bead-reviewer.md")).unwrap());
         assert!(real.contains("senior reviewer"));
+    }
+    #[test]
+    fn a_transcript_of_errors_alone_is_a_round_the_model_never_answered() {
+        // The one event inq-85h.17's review left on 21 Sep 2026, as opencode printed it.
+        let real = r#"{"type":"error","timestamp":1789953019292,"sessionID":"ses_f3e7c72bbffe8Z0a3YGAoGjCfQ","error":{"name":"UnknownError","data":{"message":"Unexpected server error. Check server logs for details.","ref":"err_502a8619"}}}"#;
+        let t = parse_transcript(real);
+        assert!(t.never_answered(), "no text, no tool: the model never ran");
+        assert_eq!(t.errors, vec!["UnknownError: Unexpected server error. Check server logs for details. (ref err_502a8619)"]);
+        let reset = r#"{"type":"error","timestamp":1,"sessionID":"ses_x","error":{"code":"ECONNRESET","path":"http://127.0.0.1:4096/session/ses_x/message","errno":0}}"#;
+        assert_eq!(
+            parse_transcript(reset).errors,
+            vec!["ECONNRESET http://127.0.0.1:4096/session/ses_x/message"],
+            "a socket error has a code, not a name"
+        );
+        assert_eq!(
+            parse_transcript(r#"{"type":"error","error":{"name":"ProviderModelNotFoundError"}}"#).errors,
+            vec!["ProviderModelNotFoundError"]
+        );
+        assert_eq!(
+            parse_transcript(r#"{"type":"error","error":"gone"}"#).errors,
+            vec!["\"gone\""],
+            "an unknown shape: the JSON as it came"
+        );
+        let worked = format!("{{\"type\":\"step_start\"}}\n{{\"type\":\"tool_use\",\"part\":{{}}}}\n{real}");
+        let t = parse_transcript(&worked);
+        assert!(!t.never_answered(), "an error after the model worked is the round's own");
+        assert_eq!(t.errors.len(), 1, "but still on record");
+        let said = format!("{real}\n{{\"type\":\"text\",\"part\":{{\"text\":\"APPROVE: fine\"}}}}");
+        let t = parse_transcript(&said);
+        assert!(!t.never_answered());
+        assert_eq!(t.texts, vec!["APPROVE: fine"]);
+        assert!(parse_transcript("").never_answered(), "nothing at all: the same");
+        assert!(parse_transcript("\n\n").never_answered());
+        assert!(!parse_transcript("not json\n").never_answered(), "a line this parser does not know is something said");
     }
     #[test]
     fn only_claude_models_need_a_probe() {

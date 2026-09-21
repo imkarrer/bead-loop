@@ -8,7 +8,7 @@
 //! The log lines and the notes are the bash's, word for word: the page and the tests
 //! read them.
 use crate::config::{LaneSpec, Repo};
-use crate::harness::{abort_sessions, run_agent, runnable};
+use crate::harness::{abort_sessions, run_agent, runnable, AgentRun};
 use crate::park::{park, record_round, Reason};
 use crate::shell::{
     bd_claim, bd_comment, bd_note, bd_show, bd_status, branch_exists, gh, git, git_ok, git_out, git_try, local_branch_exists,
@@ -223,6 +223,15 @@ fn clear_lane_of(repo: &Repo, id: &str) {
             signals::clear_current(&name);
         }
     }
+}
+
+/// The hold's reason for a round that came back with nothing from the model
+/// (harness.rs `AgentRun::empty`): the harness's own words — the server's error, the
+/// model not found on it, a refused connection, its stderr — so the page says why, not
+/// an exit code alone.
+fn never_answered(role: &str, model: &str, r: &AgentRun) -> String {
+    let words = if r.error.is_empty() { String::new() } else { format!(": {}", r.error) };
+    format!("{role} {model} exited {} before the model answered (harness or server down?){words}", r.rc)
 }
 
 /// `hold`: the round could not happen for a reason that is not the bead's. The bead
@@ -573,14 +582,13 @@ pub fn dev_one(repo: &Repo, opts: &Opts, id: Option<&str>, last_id: &mut Option<
         None => run_agent(repo, "bead-worker", &model, &wt, &worker_log, &prompt, &title_w, timeout, Some(&json)),
     };
     cut_short(repo, &id);
+    if r.empty && r.rc != 124 {
+        // Nothing from the model and it was not the clock: the harness or its server, not
+        // the model. No failure; the bead waits, the lane backs off.
+        hold(repo, &id, Some(&wt), &never_answered("worker", &model, &r));
+        return Pass::Worked;
+    }
     if r.rc != 0 {
-        if r.empty && r.rc != 124 {
-            // Nothing came back at all and it was not the clock: the harness or its server,
-            // not the model. No failure; the bead waits, the lane backs off.
-            let err = tail_lines(&read_to_string(&worker_log.with_extension("jsonl.err")).unwrap_or_default(), 5);
-            hold(repo, &id, Some(&wt), &format!("worker {model} exited {} with no output (harness or server down?). {err}", r.rc));
-            return Pass::Worked;
-        }
         send_back(
             repo,
             &id,
@@ -622,6 +630,12 @@ pub fn dev_one(repo: &Repo, opts: &Opts, id: Option<&str>, last_id: &mut Option<
         let r2 =
             run_agent(repo, "bead-worker", &model, &wt, &fix_log, &fix_prompt, &format!("{id} · worker · gate fix"), timeout, Some(&json));
         cut_short(repo, &id);
+        if r2.empty && r2.rc != 124 {
+            // The fix round never reached the model either: held. The round's commit stays
+            // on its branch in its worktree, and the next round resumes it.
+            hold(repo, &id, Some(&wt), &never_answered("worker", &model, &r2));
+            return Pass::Worked;
+        }
         if r2.rc != 0 {
             send_back(
                 repo,
@@ -738,12 +752,11 @@ pub fn review_one(repo: &Repo, opts: &Opts, id: Option<&str>, lane: Option<&Lane
             }
         };
         cut_short(repo, &id);
+        if r.empty && r.rc != 124 {
+            hold(repo, &id, None, &never_answered("reviewer", &review_model, &r));
+            return Pass::Worked;
+        }
         if r.rc != 0 {
-            if r.empty && r.rc != 124 {
-                let err = tail_lines(&read_to_string(&review_log.with_extension("jsonl.err")).unwrap_or_default(), 5);
-                hold(repo, &id, None, &format!("reviewer {review_model} exited {} with no output (harness or server down?). {err}", r.rc));
-                return Pass::Worked;
-            }
             let _ = std::fs::remove_file(repo.review_path(&id));
             send_back(
                 repo,
@@ -952,6 +965,25 @@ mod tests {
         assert!(b.starts_with("Bead `t-1`: Do the thing\n\n> a\n> b\n\nWorker: DONE: did it\nReviewer (stub/reviewer): APPROVE: checked\n"));
         assert!(b.ends_with("Opened by bead-loop; the bead closes when this merges.\n"));
         assert!(pr_body("t-1", "T", "", "w", "").contains("\n\n> \n\nWorker: w\n\n\n"), "no criteria: an empty quote, no reviewer line");
+    }
+    #[test]
+    fn a_round_the_model_never_answered_holds_with_the_harness_words() {
+        let r = |rc, error: &str| AgentRun { text: String::new(), full: String::new(), rc, empty: true, error: error.into() };
+        assert_eq!(
+            never_answered("reviewer", "acbox/reviewer", &r(1, "UnknownError: Unexpected server error. Check server logs for details. (ref err_502a8619)")),
+            "reviewer acbox/reviewer exited 1 before the model answered (harness or server down?): UnknownError: Unexpected server error. Check server logs for details. (ref err_502a8619)",
+            "the harness's error event, so the page says why"
+        );
+        assert_eq!(
+            never_answered("worker", "stub/worker", &r(7, "connection refused")),
+            "worker stub/worker exited 7 before the model answered (harness or server down?): connection refused",
+            "an empty log: the harness's stderr"
+        );
+        assert_eq!(
+            never_answered("worker", "stub/worker", &r(7, "")),
+            "worker stub/worker exited 7 before the model answered (harness or server down?)",
+            "nothing said at all"
+        );
     }
     #[test]
     fn hold_backoff_reads_the_environment() {
