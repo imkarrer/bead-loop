@@ -499,6 +499,12 @@ Adopted PRs cost CI, not the model, so they do not count toward `max_inflight`; 
 conflicting, they are held with a note and left to whoever opened them. `adopt = false`
 turns it off.
 
+`adopt` only ever sees a PR while it is still open, so one merged before the loop looked
+— worked by hand, or by a subagent, start to finish — leaves its bead stuck open with
+nothing tracking it. Every reconcile also asks, once per idle bead in the dev queue,
+whether `bead/<id>…` already has a merged PR (`gh pr list --state merged`), and closes
+the bead with that PR's url when it does.
+
 ## What each outcome does to the bead
 
 | Outcome | Bead | Branch / PR |
@@ -523,6 +529,7 @@ turns it off.
 | No checks reported | one note, **held**: merge it yourself or set `manual` | waits |
 | PR conflicts with the base | note, **no failure**; dev queue — the next round is a rebase by `conflict_worker`, told to keep both sides | kept; the push updates the PR |
 | Adopted PR conflicts | left alone | whoever opened it rebases |
+| A dev-queue bead's `bead/<id>…` PR merged outside the loop (worked by hand or a subagent; never open when `adopt` looked) | closed with the PR url | already gone |
 | Failures exhausted (`on_exhaust = "park"`) | in_progress, for you, with the brief's question | removed (after the brief) |
 | PR closed unmerged | in_progress, note with the url and the brief's question | gone |
 | The loop stopped mid dev round | reopened at the next start, **no failure** (recover) | removed |

@@ -413,6 +413,21 @@ case_adopt_off() {
   sup reconcile "$REPO"
   assert_nofile "$BEAD_LOOP_STATE/repo/inflight/x-1" "adopt = false: ignored"
 }
+case_closes_bead_merged_outside_the_loop() {
+  # A bead worked by hand or by a subagent: its PR merged before this loop ever put it
+  # in the merge queue (no inflight file), so adopt never saw it either (it only lists
+  # PRs still open). Reconcile still has to notice and close the bead, or the dev queue
+  # hands it out again. A second bead's PR is merely open: left alone.
+  setup
+  jq '. + [{id:"t-2", title:"Second", description:"y", status:"open", priority:2, labels:["delegate:local"]}]' "$BD_STATE/issues.json" >"$BD_STATE/i.tmp" && mv "$BD_STATE/i.tmp" "$BD_STATE/issues.json"
+  jq -n '[{number:50, headRefName:"bead/t-1", url:"https://github.com/example/repo/pull/50", state:"MERGED"},
+          {number:51, headRefName:"bead/t-2", url:"https://github.com/example/repo/pull/51", state:"OPEN", checks:[{context:"ci",state:"PENDING"}]}]' >"$TEST_CTRL/extra-prs.json"
+  sup reconcile "$REPO"
+  assert_eq "$(bead .status)" closed "t-1 closed: its PR had merged outside the loop"
+  assert_match "$(bead .close_reason)" "https://github.com/example/repo/pull/50 merged outside the loop" "the url is in the reason"
+  assert_eq "$(jq -r '.[]|select(.id=="t-2")|.status' "$BD_STATE/issues.json")" open "t-2's PR is only open: left alone"
+  ! grep -q 'pr merge 51' "$TEST_CTRL/gh.log" && ok || bad "an open PR is not merged"
+}
 case_status_lists_worktree_sessions() {
   setup true auto stub/reviewer 'attach = "http://oc.test:4096"'
   wt=$BEAD_LOOP_STATE/repo/wt/t-1; mkdir -p "$wt" "$BEAD_LOOP_STATE/repo/failures"; echo 2 >"$BEAD_LOOP_STATE/repo/failures/t-1"
