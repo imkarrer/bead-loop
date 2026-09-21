@@ -3,7 +3,7 @@ name = "bead-loop"
 version = "0.2.0"
 edition = "2021"
 description = "Work beads with local models in any repo: a resident supervisor over three queues"
-license = "MIT"
+license = "FSL-1.1-MIT"
 
 [[bin]]
 name = "bead-supervisor"
