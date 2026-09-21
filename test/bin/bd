@@ -2,6 +2,8 @@
 # Stub bd for bead-loop tests. Issues live in $BD_STATE/issues.json (array).
 set -euo pipefail
 F=$BD_STATE/issues.json
+# A second repo (test/run.sh second_repo) has a backlog of its own: $BD_STATE/<its dir name>.json.
+[ -e "$BD_STATE/${PWD##*/}.json" ] && F=$BD_STATE/${PWD##*/}.json
 # A temp file of its own per write: two lanes update beads at the same time, and one
 # shared .tmp name let one writer truncate the other's file mid-mv (a flaky abort).
 save() { local tmp; tmp=$(mktemp "$F.XXXXXX"); jq "$1" --arg id "${2:-}" --arg t "${3:-}" "$F" >"$tmp" && mv "$tmp" "$F"; }
