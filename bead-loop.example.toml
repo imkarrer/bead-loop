@@ -23,7 +23,7 @@ on_exhaust = "repeat"                  # repeat: cycle the stages until it lands
 # REJECT from review, CI red — is one failure; a stage takes the bead for the next
 # `failures` of them, then the next stage does. So the bead reaches Claude below after
 # 3 + 1 = 4 failures. Usually set once, globally, with [[lanes]] beside it (one lane per
-# model server, so a round on the CPU box never holds the GPU's queue; README: Config).
+# model server, so a round on the CPU box never holds the GPU's queue; docs/config.md).
 # (`attempts` is the older name for `failures` and still reads.)
 [[stages]]
 worker = "devbox/coder"                # an opencode agent on the devbox provider; "aider:devbox/coder" is aider on
