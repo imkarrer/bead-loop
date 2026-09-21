@@ -1,15 +1,15 @@
 # The bead state machine: every state, every exit
 
-Status: specification, for the resident loop ([design-resident-loop.md](design-resident-loop.md)).
-Written 2026-09-20 from `bin/bead-supervisor` as it is, not from the README. Each
-transition says whether it exists today. The rule the whole thing serves:
+What the supervisor in `src/` does with a bead, state by state. `test/run.sh` drives the
+binary through every transition below with stub tools; the README's outcome table is the
+same thing by outcome. The rule the whole thing serves:
 
 > **A bead is always in exactly one place, and every place has an exit that is either
 > automatic or a human's, and every wait has a timeout that re-reads the world.**
 
 A state with no exit is a deadlock. A wait with no timeout is a deadlock waiting for a
-lost signal. An infrastructure failure counted as a bead failure is a livelock: the
-queue burns through its stages while nothing is wrong with the beads.
+lost signal. An infrastructure failure counted as a bead failure is a livelock: the queue
+burns through its stages while nothing is wrong with the beads.
 
 ## What the state is made of
 
@@ -18,14 +18,18 @@ The loop keeps no state of its own beyond files; a bead's state is a function of
 | where | what |
 | --- | --- |
 | bd | `status` (`open` / `in_progress` / `closed`; `blocked`, `deferred` by hand), the label, blockers (`bd ready` lists only beads with none open), notes |
-| `$RS/failures/ID` | the failure count → the stage (`stage_for`); `.notes` the history |
+| `$RS/failures/ID` | the failure count → the stage (`stage_for`); `.rounds.jsonl` the history, one record per send-back |
 | `$RS/review/ID` | in the review queue (holds the worker's last line) |
-| `$RS/inflight/ID` | in the merge queue (holds the PR url); beside it `.ID.adopted`, `.ID.red`, `.ID.nocheck`, `.ID.fixing` |
-| `$RS/lane.NAME` | the bead the lane NAME is on (`dev`, `review`; or the `[[lanes]]` names: `gpu`, `cpu`, `claude`) |
+| `$RS/inflight/ID` | in the merge queue (holds the PR url); beside it `.ID.adopted`, `.ID.red`, `.ID.nocheck`, `.ID.fixing`, `.ID.conflict` |
+| `$RS/held/ID` | the bead waits on something outside the loop; the file says what |
+| `$RS/parked/ID` | the loop's record of a parking: the reason, the stage, the question, the brief |
+| `$RS/lane.NAME` | the bead the lane NAME is on (`dev`, `review`, `claude`; or the `[[lanes]]` names) |
 | `$RS/rejoin/ID` | `SID worker` or `SID reviewer`: a session still running on the server after a restart, for the lane to wait on instead of starting one |
 | `$RS/wt/ID`, branch `bead/ID` (local, origin) | the work |
-| GitHub | the PR: none / OPEN (checks pending, green, red, none; mergeState CLEAN, BEHIND, DIRTY, BLOCKED) / MERGED / CLOSED |
-| the servers | opencode session running or orphaned; devbox, acbox, claude, gh reachable or not |
+| GitHub | the PR: none / OPEN (checks pending, green, red, none; mergeable CONFLICTING; mergeState CLEAN, BEHIND, BLOCKED) / MERGED / CLOSED |
+| the servers | an opencode session running or orphaned; devbox, acbox, claude, gh reachable or not |
+
+`$RS` is `~/.local/state/bead-loop/<repo>/`.
 
 ## The states
 
@@ -34,15 +38,16 @@ stateDiagram-v2
   [*] --> waiting: labelled, a blocker open
   [*] --> ready: labelled, no blocker open
   waiting --> ready: last blocker closed
-  ready --> dev: dev lane picks (fewest failures first)
+  ready --> dev: a lane picks (fewest failures first)
   dev --> review: DONE, commit, gate passed
   dev --> ready: BLOCKED · no commit · gate ×2 · timeout   (+1, branch removed)
-  review --> reviewing: review lane picks
+  review --> reviewing: a lane picks
   reviewing --> merge: APPROVE → push → PR
-  reviewing --> ready: REJECT · reviewer exit   (+1, branch kept)
+  reviewing --> ready: REJECT   (+1, branch kept)
   merge --> closed: MERGED
-  merge --> ready: CI red · conflicts   (+1, branch kept)
-  merge --> human: closed unmerged · held too long
+  merge --> ready: CI red   (+1, branch kept)
+  merge --> ready: conflicts with the base   (no failure, a rebase round)
+  merge --> human: closed unmerged
   ready --> human: stages exhausted (park) · BLOCKED at the last stage
   human --> ready: answer · reopen · escalate
   dev --> ready: interrupted (loop stopped)   (no failure)
@@ -52,203 +57,171 @@ stateDiagram-v2
 | state | on disk | who exits it |
 | --- | --- | --- |
 | **waiting** | bd `open` + label, a blocker not `closed` | bd, when the blocker closes (a merge, or a human) |
-| **ready** | bd `open` + label, no blocker open; none of the markers below | the dev lane |
-| **dev** | `lane.NAME = ID` (the lane on it), bd `in_progress`, `wt/ID` | the dev lane: to review, or back to ready |
-| **review** | `review/ID`, `wt/ID`, bd `in_progress` | the review lane |
-| **reviewing** | `review/ID` + `lane.NAME = ID` | the review lane: to merge, or back to ready |
-| **merge** | `inflight/ID` + PR OPEN, bd `in_progress` | the merge watcher: closed, or back to ready, or human |
-| **human** | bd `in_progress`, no marker, no worktree (*parked*), `parked/ID` when the loop parked it — or any queue state with a `held` flag (below) | you: answer, reopen, escalate, or the merge queue's own recovery |
+| **ready** | bd `open` + label, no blocker open; none of the markers below | a lane with the worker role whose models match the stage's worker |
+| **dev** | `lane.NAME = ID`, bd `in_progress`, `wt/ID` | that lane: to review, or back to ready |
+| **review** | `review/ID`, `wt/ID`, bd `in_progress` | a lane with the reviewer role whose models match the stage's reviewer |
+| **reviewing** | `review/ID` + `lane.NAME = ID` | that lane: to merge, or back to ready |
+| **merge** | `inflight/ID` + PR OPEN, bd `in_progress` | the merge watcher: closed, back to ready, or human |
+| **human** | bd `in_progress`, no marker, no worktree (*parked*; `parked/ID` when the loop did it) — or any queue state with `held/ID` | you: answer, reopen, escalate; or, held, the world changing |
 | **closed** | bd `closed` | terminal |
 
 Two flags are orthogonal to the state and do not move a bead:
 
 - `.ID.adopted` — a PR the loop did not open; it never sends back, it only closes.
-- **`held/ID`** (new) — the bead is in its queue but something outside the loop must
-  change before it moves: the note says what. Shown in the human queue *beside* parked
-  beads, and still polled, so it clears itself when the world changes. Held is how the
+- `held/ID` — the bead is in its queue but something outside the loop must change before
+  it moves. Shown in the human queue beside parked beads, still polled, retried after
+  `BEAD_LOOP_HOLD_BACKOFF` (300 s), and cleared when the world changes. Held is how the
   loop says "I am waiting on you" without abandoning the bead.
-- **`parked/ID`** — the loop's record of a parking: the reason (BLOCKED at the last
-  stage, stages exhausted, the PR closed), the stage it stopped on, and **the question**
-  for the owner — the brief's (`brief_model` reads the rounds and their logs and answers
-  what happened, why, what to decide) or the loop's own from the reason. Written on every
-  exit into *human (parked)*, removed by `answer`, `escalate` and the next claim. A bead
-  `in_progress` with no record was parked by hand or by a stop. Beside it,
-  `failures/ID.rounds.jsonl` is the history the page and the brief read: one record per
-  send-back with the whole note and the round's log files.
 
 ## Invariants
 
-1. **One place.** `ready ∩ review ∩ merge ∩ lane = ∅`. Today this holds only through
-   bd status: a bead in review or merge is `in_progress`, so `bd ready` omits it. It
-   breaks the moment a human — or `answer`, or `escalate` — sets it `open` while
-   `review/ID` or `inflight/ID` exists: the dev lane and the review lane take the same
-   bead, and `dev_one` aborts the reviewer's session and rebuilds the worktree under it.
-   **Fix:** `dev_queue` filters out any id in `review/`, `inflight/` or on a lane;
-   `answer`/`escalate`/reopen refuse (with the reason) on a bead in the merge queue.
+1. **One place.** `ready ∩ review ∩ merge ∩ lane = ∅`. `dev_queue` filters out any id in
+   `review/`, `inflight/` or on a lane, whatever bd's status says; `answer`, `escalate`
+   and the page's Reopen refuse (with the url) a bead in the merge queue.
 2. **Every wait times out and re-reads the world.** Lanes block on the bell with a 60 s
-   heartbeat; the merge watcher polls; no `sleep` without a bound. A lost wake costs at
-   most one heartbeat.
+   heartbeat; the merge watcher polls every 30 s while a PR is open (120 s otherwise, for
+   adoption); no sleep without a bound. A lost wake costs at most one heartbeat.
 3. **Infrastructure is never a bead failure.** Only the model's own outcome counts:
    `BLOCKED:`, no commit, the gate failing twice, the session timing out, `REJECT:`, CI
-   red, conflicts. Setup failing, a model server unreachable, `bd`/`git`/`gh` erroring,
-   Claude or gh signed out: the round did not happen. The bead stays where it is, held,
-   and the lane backs off. **Today every one of these is `send_back +1`** (setup,
-   worker/reviewer non-zero exit) **or kills the lane** (`set -e` on a `bd`/`git` error).
-   With the 30B down, today's loop would send every ready bead back, one stage each,
-   in minutes.
-4. **A crash in a round is contained.** Each round runs in a subshell with its own error
-   trap: the lane records "round crashed: <last command>" on the bead, holds it, and
-   goes on to the next. Three crashes on one bead → parked. Today a crash kills the lane
-   (a tick: the other lane finishes; a resident loop: that lane is dead until restart).
-5. **Start is a recovery.** The loop's first act: clear `lane.*`, abort any session under
-   any `wt/`, reopen interrupted dev rounds (bd `in_progress` + `wt/ID` + no `review/`
-   + no `inflight/` = a round the stop cut short — no failure, "round interrupted"),
-   re-probe claude/gh/servers, drop `held/` flags whose reason no longer holds.
-   Today an interrupted dev round looks parked (Needs you, Reopen) — the human recovers
-   what the loop could.
-6. **A dead lane is restarted.** The parent watches its lane subshells; one that exits
-   is logged and started again after a backoff. A lane cannot be quietly gone.
+   red. Setup failing, git refusing the worktree, a harness that comes back with nothing
+   from the model, the push or `gh` refusing, Claude signed out: the round did not happen.
+   The bead stays where it is, held, and the lane takes the next one.
+4. **A round's failure is contained.** No `set -e`: a tool exiting non-zero is a value the
+   round handles, and a lane thread that dies is logged and started again after 10 s.
+5. **Start is a recovery.** The loop's first act (`recover`, also a command): clear
+   `lane.*`, prune worktrees, rejoin any session still running under a worktree (a
+   restart) or abort it (a stop), reopen interrupted dev rounds — bd `in_progress` +
+   `wt/ID` + no `review/` + no `inflight/` — with no failure, forget the probes.
+6. **A stop cuts short, it does not judge.** TERM raises a flag before it aborts the
+   sessions; a worker, gate or reviewer that comes back under it leaves the bead as it
+   was — no failure, no note. A restart (the deploy's `restart` marker) aborts nothing.
 
 ## Transitions, one per line
 
-**exists** = built today; **fix** = built but wrong; **new** = to build.
-
 ### ready → dev → …
 
-| from | event | to | count | branch | status |
-| --- | --- | --- | --- | --- | --- |
-| ready | dev lane picks, stage found | dev | — | fresh from `origin/BASE`, or the kept branch resumed | exists |
-| ready | dev lane picks, stages exhausted (`park`) | human | — | — | exists |
-| ready | stage's worker is `claude/*`, signed out | ready (held: "Claude signed out") | — | — | exists as a skip; **fix**: probed once per process, must be once per wake; mark held |
-| ready | stage's worker's server unreachable (devbox/acbox) | ready (held: "server X unreachable") | — | — | **new** — today: the session exits non-zero → +1 |
-| dev | setup fails | ready (held: "setup failed", lane backs off 10 min) | — | removed | **fix** — today +1, `fresh` |
-| dev | worker exits with nothing from the model — no output, or only the harness's error events (server down, a 5xx, the model not found on it) | ready (held: the harness's words) | — | removed; kept once a round had committed (the gate-fix round) | exists (`harness::parse_transcript`; an error-only transcript was +1 until 21 Sep 2026) |
-| dev | worker exits non-zero after real work (timeout, crash mid-session) | ready | +1 | removed | exists |
-| dev | `BLOCKED:` | ready · human if last stage | +1 | removed | exists |
-| dev | no commit | ready | +1 | removed | exists |
-| dev | gate fails, fix round, gate fails | ready | +1 | removed | exists |
-| dev | gate passes | review | — | kept | exists |
-| dev | loop stopped / crashed | ready ("round interrupted") | — | kept for the resume | exists (recover at start; a worker, gate or reviewer that comes back under the stop is cut short, never judged — `signals::stopping`) |
-| dev | loop restarted (a deploy) with the worker session still running on the server | ready, first, with `rejoin/ID` | — | kept, untouched | exists (recover; the lane waits on the session — `harness::rejoin_session`) |
-| dev | round crashes (`bd`/`git` error) | ready (held: "round crashed") · human after 3 | — | removed | **new** — today: the lane dies |
+| from | event | to | count | branch |
+| --- | --- | --- | --- | --- |
+| ready | a lane picks, stage found | dev | — | fresh from `origin/BASE`, or the kept branch resumed |
+| ready | a lane picks, stages exhausted (`park`) | human (parked, the brief) | — | — |
+| ready | the stage's worker is `claude/*`, signed out | ready (held: signed out; re-probed on every wake, Sign in rings the bell) | — | — |
+| ready | a session to rejoin (`rejoin/ID`) | dev, first in the queue; the lane waits on the session | — | as it was |
+| dev | `git fetch` fails, or git refuses the worktree | ready (held, with git's words) | — | not made |
+| dev | setup fails | ready (held: "setup failed", the output's tail) | — | removed |
+| dev | the worker comes back with nothing from the model — no output, or only the harness's error events (server down, a 5xx, the model not found) | ready (held: the harness's words) | — | removed; kept once a round had committed (the gate-fix round) |
+| dev | the worker exits non-zero after real work, or times out | ready | +1 | removed |
+| dev | `BLOCKED:` | ready · human if the last stage | +1 | removed (after the brief) |
+| dev | no commit | ready | +1 | removed |
+| dev | gate fails, fix round, gate fails | ready | +1 | removed |
+| dev | gate passes | review | — | kept |
+| dev | the loop stopped | ready ("round interrupted", at the next start) | — | kept for the resume |
+| dev | the loop restarted with the session still running | ready, first, `rejoin/ID` | — | kept, untouched |
 
 ### review → reviewing → …
 
-| from | event | to | count | branch | status |
-| --- | --- | --- | --- | --- | --- |
-| review | review lane picks | reviewing | — | kept | exists |
-| review | reviewer is `claude/*`, signed out | review (held) | — | kept | **fix** (as above) |
-| review | `wt/ID` missing (crash, a hand `worktree remove`) | reviewing, worktree rebuilt from the branch | — | rebuilt | **new** — today: the reviewer runs in a missing dir, exits non-zero, +1 |
-| reviewing | reviewer exits with nothing from the model — no output, or only the harness's error events | review (held: the harness's words, lane backs off) | — | kept | exists (as above; the model not found on the server cost a bead a failure and a Sonnet review, 21 Sep 2026) |
-| reviewing | reviewer exits non-zero after work | ready | +1 | kept | exists |
-| reviewing | `REJECT:` | ready | +1 | kept | exists |
-| reviewing | `APPROVE:`, push, PR opened or updated | merge | — | pushed | exists |
-| reviewing | push refused (non-fast-forward: someone pushed to `bead/ID`) | ready (held: "branch diverged on origin") | — | kept | **new** — today: `set -e`, the lane dies |
-| reviewing | `gh pr create` fails (gh signed out, network) | review (held: "gh: <error>") | — | pushed | **new** — today: the lane dies |
-| reviewing | loop stopped | review | — | kept | exists (`review/ID` survives; the lane retakes it; a reviewer that comes back under the stop is cut short, not a send-back) |
-| reviewing | loop restarted with the reviewer session still running | review, with `rejoin/ID` | — | kept | exists (the review lane waits on the session) |
+| from | event | to | count | branch |
+| --- | --- | --- | --- | --- |
+| review | a lane picks | reviewing | — | kept |
+| review | the reviewer is `claude/*`, signed out | review (held) | — | kept |
+| review | `wt/ID` missing (a hand `worktree remove`) | reviewing, the worktree rebuilt from the branch; held if git refuses | — | rebuilt |
+| reviewing | the reviewer comes back with nothing from the model | review (held: the harness's words) | — | kept |
+| reviewing | the reviewer exits non-zero after work | ready | +1 | kept |
+| reviewing | `REJECT:` | ready | +1 | kept |
+| reviewing | `APPROVE:`, push, PR opened or updated | merge | — | pushed |
+| reviewing | push refused (someone pushed to `bead/ID`) | review (held: the push's words) | — | kept |
+| reviewing | `gh pr create` fails (gh signed out, network) | review (held: gh's words) | — | pushed |
+| reviewing | the loop stopped | review (the lane retakes it) | — | kept |
+| reviewing | the loop restarted with the session still running | review, `rejoin/ID` | — | kept |
 
 ### merge → …
 
-The watcher looks at every `inflight/ID` on each pass (30 s while any is open).
+The watcher looks at every `inflight/ID` on each pass.
 
-| from | event | to | count | branch | status |
-| --- | --- | --- | --- | --- | --- |
-| merge | `MERGED` | closed | — | deleted | exists; **fix**: if `bd close` fails, keep `inflight/ID` and hold, do not drop the bead silently |
-| merge | `CLOSED` unmerged | human (parked, note with the url) | — | gone | exists |
-| merge | checks red, ours | ready (`.fixing`) | +1 | kept; the next push updates the PR | exists |
-| merge | checks red, adopted | merge (held: "CI red, not ours") | — | — | exists (one note); **fix**: mark held so it is in the human list |
-| merge | green, `auto`, `CLEAN` → `gh pr merge` | closed | — | deleted | exists |
-| merge | green, `auto`, `BEHIND` → `update-branch` | merge (CI reruns) | — | updated | exists |
-| merge | green, `DIRTY` (conflicts with base) | ready (`.fixing`, note: "rebase onto BASE, conflicts in <files>") | +1 | kept | **new** — today: logged every pass, for ever (`auto`: "merge refused"; `pipeline`: "waiting for the pipeline") |
-| merge | green, `auto`, `BLOCKED` (branch protection: a review, a required check the loop cannot satisfy) | merge (held: mergeState + what GitHub says) | — | — | **new** — today: "merge refused" for ever |
-| merge | green, `pipeline`, labelled, not merged within `pipeline_timeout` (30 min) | merge (held: "the pipeline has not merged a green PR") | — | — | **new** — today: for ever |
-| merge | green, `manual` | merge (held: "green; yours to merge") | — | — | exists as a log line; **fix**: held, so it is in the human list |
-| merge | no checks reported | merge (held: "no CI reports on this PR") | — | — | exists (`.nocheck`, one note); **fix**: it is invisible on the page's human list |
-| merge | `pipeline` label cannot be added | merge (held) | — | — | exists (one note); **fix**: same |
-| merge | checks pending longer than `ci_timeout` (2 h) | merge (held: "CI pending N h"), still polled | — | — | **new** — today: for ever, silently |
-| merge | `gh pr view` fails | merge (held: "gh: <error>"), still polled | — | — | **fix** — today: one log line per pass, and the watcher cannot tell a network blip from gh signed out |
-| merge | sent back red, then the stages run out | human (parked); the PR stays open, `.fixing` stays | — | kept | **fix**: the parking note must give the PR url, and `.fixing` must go so `adopt` can see the PR again if you push to it |
+| from | event | to | count | branch |
+| --- | --- | --- | --- | --- |
+| merge | `MERGED` | closed | — | deleted |
+| merge | `MERGED`, `bd close` fails | merge (held: merged but bd would not close) | — | — |
+| merge | `CLOSED` unmerged | human (parked, the url in the question) | — | gone |
+| merge | `mergeable = CONFLICTING`, ours | ready (`.fixing`, `.conflict`; a rebase round by `conflict_worker`) | — | kept; the push updates the PR |
+| merge | conflicting, adopted | left alone | — | — |
+| merge | checks red, ours | ready (`.fixing`) | +1 | kept; the next push updates the PR |
+| merge | checks red, adopted | merge (held: not the loop's branch to fix; one note) | — | — |
+| merge | green, `auto`, `CLEAN` → `gh pr merge` | closed | — | deleted |
+| merge | green, `auto`, `BEHIND` → `update-branch` | merge (CI reruns) | — | updated |
+| merge | green, `auto`, GitHub refuses (branch protection) | merge (held: mergeState and why) | — | — |
+| merge | green, `pipeline`, not merged within 30 min (`PIPELINE_TIMEOUT`) | merge (held) | — | — |
+| merge | green, `manual` | merge (held: yours to merge) | — | — |
+| merge | no checks reported | merge (held; one note) | — | — |
+| merge | the `pipeline` label cannot be added | merge (held; one note) | — | — |
+| merge | pending longer than 2 h (`CI_TIMEOUT`) | merge (held: is the agent up?), still polled | — | — |
+| merge | `gh pr view` fails | merge (held: gh's words), still polled | — | — |
+| merge | sent back red, then the stages run out | human (parked); the PR stays open, `.fixing` stays, so `adopt` leaves it to the next round | — | kept |
+
+### Beside the merge queue
+
+| event | to |
+| --- | --- |
+| an open PR on `bead/<id>…` the loop did not open (`adopt = true`, no `.fixing`) | merge (`.adopted`; labelled under `pipeline`) |
+| a dev-queue bead whose `bead/<id>…` PR merged before adopt ever saw it | closed with the url (`close_merged_outside_loop`, once per idle bead per reconcile) |
 
 ### human → …
 
-| from | event | to | count | status |
-| --- | --- | --- | --- | --- |
-| human (parked) | `answer TEXT` | ready, one failure forgiven, the note in the next prompt | −1 | exists |
-| human (parked) | reopen (`bd update --status open`, the page) | ready, count as is | — | exists |
-| human (parked) | `escalate` | ready at the last stage | set | exists |
-| human (held, any queue) | the reason clears (server back, signed in, CI reports, pipeline merges) | that queue, flag dropped | — | **new** — the point of held |
-| human (held, merge) | `answer`/reopen | refused: "in the merge queue at <url>; close the PR or wait" | — | **new** — today it reopens under the PR (invariant 1) |
-| human | a bead depends on this one | its dependents stay **waiting** | — | exists (bd); **fix**: the page should say "N beads wait on it" under a parked bead, or a parked blocker is invisible from the queue that is empty because of it |
+| from | event | to | count |
+| --- | --- | --- | --- |
+| human (parked) | `answer TEXT` | ready, the note in the next prompt | −1 |
+| human (parked) | reopen (`bd update --status open`, the page) | ready, count as is | — |
+| human (parked) | `escalate` | ready at the last stage (refused while Claude is signed out) | set |
+| human (held, any queue) | the reason clears (server back, signed in, CI reports, the pipeline merges) | that queue, flag dropped | — |
+| human (held, merge) | `answer` / reopen / `escalate` | refused: in the merge queue at the url; close the PR or wait | — |
+| human | a bead depends on this one | its dependents stay **waiting** (bd) | — |
 
 ### The loop's own states
 
 | state | how it is known | exit |
 | --- | --- | --- |
-| stopped | the service inactive (`gpu-mode game`, a hand stop) | `systemctl start`; recovery runs first |
-| starting / recovering | the first seconds | automatic |
+| stopped | the service inactive (`gpu-mode game`, a hand stop, Off on the page) | `systemctl start` (the keeper timer, a minute later, unless it is stopped too); recovery runs first |
 | running | lanes on the bell or on rounds | — |
-| a lane dead | the parent's `wait` returns for it | restarted after a backoff; logged; the page shows "dev lane restarted N times" |
-| a lane paused | `pause.NAME`, read before every round — between repos and before a bead's reviewer round, not once per pass (until 21 Sep 2026 a lane busy when the flag appeared took the next repo's bead on its way back to the top of its loop) | `resume`, touches the bell |
-| crash loop | `systemd` `StartLimitBurst` hit | the service stays failed; the page's service panel says so; you fix the script (this is the update-and-re-exec case going wrong) |
-| a server down | probe fails (opencode provider `/models`, `claude auth status`, `gh auth status`) | held beads on that server; the lane re-probes every heartbeat; a page banner per server |
-| the global lock held by another supervisor | `flock` fails | the second exits; `work` by hand while the loop runs becomes "put this bead at the head of the dev queue and ring the bell" (`want/ID`), not a second loop |
+| a lane dead | its thread's join returns | started again after 10 s; logged |
+| a lane paused | `pause.NAME`, read before every round — between repos and before a bead's reviewer round | `resume` rings the bell |
+| the binary replaced on disk | the main thread's minute check | re-exec at the next moment no lane is on a round (the deploy restarts the service anyway) |
+| Claude signed out | `claude auth status`, cached a minute, forgotten on every wake | Sign in on the page, `claude auth login` |
+| another supervisor holds the lock | `flock` on `$STATE_DIR/lock` fails | the second exits; a lane lock (`lock.NAME`) the same per lane |
 
 ## The hazard list, checked
 
-Every way I could make a bead or a lane wait for ever, from the code, and what stops it:
+Every way a bead or a lane could wait for ever, and what stops it:
 
-| # | how it gets stuck | today | with the above |
-| --- | --- | --- | --- |
-| 1 | green PR conflicts with base after another merges | for ever, logged each pass | send back +1, rebase round |
-| 2 | branch protection blocks the merge | for ever | held, human |
-| 3 | pipeline never merges a green PR | for ever | held after 30 min, human; clears if it merges |
-| 4 | CI never reports (agent down) | for ever, silent | held after 2 h, still polled |
-| 5 | gh signed out / network | one log line per pass | held with the reason, still polled; page banner |
-| 6 | `bd close` fails at merge | bead dropped: in_progress with no marker, no note | inflight kept, held |
-| 7 | a reopened bead is also in review or merge | two lanes on one bead | invariant 1 |
-| 8 | model server down | every ready bead sent back, one stage each | held, lane backs off, banner |
-| 9 | setup fails (registry down) | +1 per bead, all of them | held, lane backs off |
-| 10 | `bd`/`git`/`gh` error in a round | the lane dies | round contained, bead held, lane goes on |
-| 11 | a dead lane | (tick: the other finishes) resident: gone until restart | parent restarts it |
-| 12 | loop stopped mid dev round | bead looks parked | recovery reopens it, no failure |
-| 13 | orphan sessions after a `kill -9` | shown on the page with the abort command | aborted at start |
-| 14 | `review/ID` without a worktree | +1 | worktree rebuilt |
-| 15 | Claude signed out, probed once | resident loop: never re-probed | re-probed per wake; Sign in rings the bell |
-| 16 | a lost bell wake | — | the heartbeat |
-| 17 | a bead's blocker parked | invisible: the queue is just empty | listed under the parked bead |
-| 18 | a dependency cycle | bd refuses to add one | — |
-| 19 | disk: one worktree with `node_modules` per bead in review | unbounded with no cap | a worktree is ~1 GB here; the review queue rarely passes a few; watched on the page (`df` beside the queue) — a cap is one config key if it is ever needed |
+| # | how it would get stuck | what stops it |
+| --- | --- | --- |
+| 1 | a green PR conflicts with the base after another merges | a rebase round by `conflict_worker`, no failure |
+| 2 | branch protection blocks the merge | held, in the human list |
+| 3 | the pipeline never merges a green PR | held after 30 min; clears if it merges |
+| 4 | CI never reports | held after 2 h, still polled |
+| 5 | gh signed out, or the network | held with gh's words, still polled |
+| 6 | `bd close` fails at merge | inflight kept, held |
+| 7 | a reopened bead is also in review or merge | invariant 1 |
+| 8 | a model server down | each bead held as its round comes back empty; the lane goes on; nothing charged |
+| 9 | setup fails (a registry down) | held, no failure |
+| 10 | `bd`/`git`/`gh` error in a round | a value, handled; the bead held where it applies |
+| 11 | a dead lane | started again after 10 s |
+| 12 | the loop stopped mid round | recovery reopens it, no failure; a restart rejoins the session |
+| 13 | orphan sessions after a `kill -9` | aborted at the next start; shown on the page with Abort until then |
+| 14 | `review/ID` without a worktree | the worktree rebuilt |
+| 15 | Claude signed out | held, re-probed on every wake; Sign in rings the bell |
+| 16 | a lost bell wake | the heartbeat |
+| 17 | a dependency cycle | bd refuses to add one |
+| 18 | disk: one worktree per bead in review | the review queue rarely passes a few; a cap is one config key if it is ever needed |
 
 Nothing in the list needs a human to notice it before the loop does; the human list is
-where the loop puts what it cannot do. The human list is **parked ∪ held**, each with
-its question — the brief's, written before the bead is raised — its rounds and their
-logs, and its ways out.
+where the loop puts what it cannot do. The human list is **parked ∪ held ∪ decisions**,
+each parked bead with its question — the brief's, written before the bead is raised —
+its rounds and their logs, and its ways out.
 
-## Tests the suite lacks for this
+## Not built
 
-Dependencies (none today): a bead with an open blocker is not picked; it is picked on
-the first pass after the blocker closes; it forks from a base that has the blocker's
-merge. Held: server down → no failure, bead stays, lane backs off, a later pass with
-the server up runs it. Recovery: a `lane.dev` and `wt/ID` left by a kill → reopened, no
-failure. Conflicts: green + DIRTY → send back with the note. Timeouts: pending past
-`ci_timeout` → held; pipeline past `pipeline_timeout` → held. Containment: a `bd` error
-in a round → that bead held, the next bead worked. Invariant 1: `answer` on a bead in
-merge refuses.
-
-## Build order
-
-Each step is one PR and leaves the loop working:
-
-1. **Invariant 1 and the merge-queue exits** (hazards 1–7): `dev_queue` exclusion,
-   `held/`, DIRTY → send back, BLOCKED/pipeline/pending timeouts, `bd close` guarded,
-   `answer`/`escalate` refusing on merge. `status --json` gains `held` and the page shows
-   it in Needs you. Today's tick, no resident loop yet.
-2. **Infrastructure is not failure** (8, 9, 15): server probes (`server_ok PROVIDER`
-   beside `claude_ok`, re-asked per pass), setup and empty-session exits as held + lane
-   backoff, the page's per-server banner.
-3. **Containment and recovery** (10–14): the round in an error-trapped subshell, 3
-   crashes → parked; `recover` at start; worktree rebuild for review.
-4. **The resident loop** ([design-resident-loop.md](design-resident-loop.md)): the bell,
-   the watcher, lane restart (16, 11), `tick` = `run --until-idle`.
-5. **Dependencies on the page** (17) and the dependency test cases.
+- A bead whose blocker is parked is invisible from the queue that is empty because of
+  it: the page does not yet say "N beads wait on it" under a parked bead.
+- A server down is found one bead at a time (each round comes back empty and is held)
+  rather than once per lane with a probe; the lane keeps trying beads until the backoff
+  covers them all.
+- Disk is not watched.

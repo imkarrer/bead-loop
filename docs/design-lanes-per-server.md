@@ -1,7 +1,13 @@
 # Design: the bead state machine, and lanes per model server
 
-Status: proposal, for grilling. Nothing here is built. Written 2026-09-19, after the
-three-queue / two-lane change (#17) and the human queue (#23).
+Status: **built**, as `[[lanes]]` in the global config (PR #35, on the Rust supervisor;
+README: "A lane per model server"). Kept as the record of why. Written 2026-09-19, after
+the three-queue / two-lane change (#17) and the human queue (#23), against the bash
+supervisor of the time. What differs from the proposal: lanes are keyed by model globs
+(`models = ["acbox/*"]`) rather than discovered from the stages; `state/ID` was not
+built — a bead's state is still the marker files, listed in
+[state-machine.md](state-machine.md); the reviewer on ac-box is now `acbox/reviewer`
+(gpt-oss-120b), not the 80B; the last stage is `claude/sonnet`.
 
 ## What is wrong now
 

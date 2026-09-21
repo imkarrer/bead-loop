@@ -8,9 +8,9 @@
 # downloaded and checked, install.sh installs it and refreshes the links and units from
 # the clone, and what changed is restarted: the loop always (it is the binary); the
 # opencode server only when the agents, the skills or its unit changed, since the model
-# sessions live in it; the UI only when bin/, ui/ or its unit changed. Restarting the
-# loop cuts short the rounds it is on; it reopens them with no failure when it comes
-# back (recover).
+# sessions live in it; the UI only when bin/, ui/ or its unit changed. The loop's restart
+# drops $STATE_DIR/restart first, so it leaves its sessions running on the server and the
+# next process rejoins them (recover): a change to src/ costs no round.
 #
 # What this box needs: git, gh (signed in), flox — no compiler. The binary links the
 # flox env's glibc by store path, and `flox activate` on the clone realizes that env at
