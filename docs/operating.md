@@ -108,13 +108,27 @@ lanes take them (position, id, failures, the stage's worker, title), the merge q
 PRs, the parked and held beads — and any session the attached opencode server is still
 running that is on no lane, with its state, agent, model, when it last produced anything,
 and the url that opens it. `busy` with a stale "ago" is the CPU box thinking: a cold
-20k-token prompt is minutes of prefill before its first token. **`ORPHAN`** is a session
-the server calls busy with no client left on this box: with `attach`, killing the client
-does not stop the server-side session, and on a one-model box it starves the next round.
-The loop aborts its own sessions on the server whenever their client dies — on
-`worker_timeout`, on `systemctl stop`, at start (recover), before it recreates a worktree
-— so an orphan means something else killed the client (`kill -9`, a crash); the line
-under it is the command that stops it.
+20k-token prompt is minutes of prefill before its first token.
+
+A session the server calls busy with no `opencode run` client left on this box shows as
+one of two states, and they call for opposite responses:
+
+- **`REJOIN`** is a session a restart found still running under a bead's worktree
+  (`recover`, `lanes.rs`): the bead went back in its queue with a `rejoin/ID` marker, and
+  the lane that takes it waits on the session instead of starting one (no client is ever
+  spawned for a rejoin — the loop polls it directly, `harness.rs` `rejoin_session`) — so
+  seeing it with no client is expected, not a fault. Leave it; the line under it says so.
+  Aborting it does the wrong thing twice: it throws away a round that may already be
+  finished, and the lane still rejoins by the marker, reads no text from the now-dead
+  session, and charges the bead a failure. To actually stop it, abort the session *and*
+  remove its `rejoin/ID` marker together, so the lane starts a fresh round instead.
+- **`ORPHAN`** is the real thing: no `rejoin/ID` marker names this session, so nothing is
+  coming back for it. With `attach`, killing the client does not stop the server-side
+  session, and on a one-model box it starves the next round. The loop aborts its own
+  sessions on the server whenever their client dies — on `worker_timeout`, on
+  `systemctl stop`, at start (recover), before it recreates a worktree — so an orphan
+  means something else killed the client (`kill -9`, a crash); the line under it is the
+  command that stops it.
 
 **<http://127.0.0.1:4096>** is the opencode server itself (`opencode-web.service`): with
 `attach = "http://127.0.0.1:4096"` in the global config every worker and reviewer session

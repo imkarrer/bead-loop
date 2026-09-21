@@ -454,6 +454,29 @@ case_status_lists_worktree_sessions() {
   sed -i '/^attach/d' "$REPO/.bead-loop.toml"
   ! sup status "$REPO" | grep -q 'ses_' && ok || bad "no attach: no server to ask"
 }
+case_rejoined_session_is_not_an_orphan() {
+  # A restart's recover() found this session still running and wrote rejoin/t-1 (lanes.rs)
+  # — the loop is already polling it (harness.rs rejoin_session), so it must not show as
+  # an ORPHAN with an abort hint: the lane taking it would rejoin a session someone just
+  # aborted, read no text, and charge a failure for nothing.
+  setup true auto stub/reviewer 'attach = "http://oc.test:4096"'
+  wt=$BEAD_LOOP_STATE/repo/wt/t-1; mkdir -p "$wt" "$BEAD_LOOP_STATE/repo/failures" "$BEAD_LOOP_STATE/repo/rejoin"
+  echo 2 >"$BEAD_LOOP_STATE/repo/failures/t-1"
+  echo "ses_wrk worker" >"$BEAD_LOOP_STATE/repo/rejoin/t-1"
+  jq -n '[{id:"ses_wrk", parentID:null, agent:"bead-worker", model:{providerID:"fast",id:"m"}, title:"Working", time:{created:0, updated:(now*1000)}}]' >"$TEST_CTRL/sessions.json"
+  echo '{"ses_wrk":{"type":"busy"}}' >"$TEST_CTRL/session-status.json"
+  out=$(sup status "$REPO")
+  assert_match "$out" "REJOIN  bead-worker    fast/m .* Working" "a marked rejoin, not an orphan"
+  ! printf '%s' "$out" | grep -q ORPHAN && ok || bad "no ORPHAN line"
+  ! printf '%s' "$out" | grep -q 'stop it:  curl' && ok || bad "no abort hint: aborting it would cost a failure"
+  assert_match "$out" "the loop already restarted and is waiting on this session; leave it" "says to leave it alone"
+  # A session busy on the server with no client and no rejoin marker for it is the real
+  # thing: something else killed the client, and the abort hint is correct there.
+  rm "$BEAD_LOOP_STATE/repo/rejoin/t-1"
+  out=$(sup status "$REPO")
+  assert_match "$out" "ORPHAN  bead-worker" "no marker: a genuine orphan"
+  assert_match "$out" "stop it:  curl -X POST http://oc.test:4096/session/ses_wrk/abort" "the abort hint returns"
+}
 case_timeout_aborts_server_session() {
   setup true auto '' "$(echo 'attach = "http://oc.test:4096"'; stages stub/fast::1:1)"; echo hang >"$TEST_CTRL/worker"
   wt=$BEAD_LOOP_STATE/repo/wt/t-1
