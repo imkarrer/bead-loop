@@ -15,6 +15,11 @@
 //! note gives and by the model that was working. Model time is the sum of the
 //! sessions' durations by role; an *empty* round is a session the harness or server
 //! never answered — a signed-out Claude, a model server down — retried by the loop.
+//! Model cost is the sum of what each session's own transcript says it spent: Claude
+//! Code's `total_cost_usd` on its result line, opencode's (and so aider's, which runs
+//! on an opencode provider) per-step `cost` in its `step_finish` events — nothing
+//! estimated from token counts, only what the harness already priced. A local, unmetered
+//! model naturally sums to $0.
 use crate::config::Repo;
 use crate::util::{mtime, now, read_to_string};
 use serde_json::{json, Map, Value};
@@ -32,6 +37,32 @@ pub struct LogRound {
     pub fix: bool,
     /// fewer than two lines: the server never answered
     pub empty: bool,
+    /// what the session's own transcript says it spent, in USD; 0 for a local model
+    pub cost_usd: f64,
+}
+
+/// A session's own transcript, summed: Claude Code writes one result line carrying
+/// `total_cost_usd`; opencode (aider's provider too) writes one `step_finish` event per
+/// step, each with its own `cost` — summed across the session, since each is that step's
+/// share, not a running total. Anything else (a harness error, an empty file) costs $0.
+fn round_cost(raw: &str) -> f64 {
+    let mut sum = 0.0;
+    for line in raw.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let v: Value = match serde_json::from_str(line) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        if let Some(c) = v.get("total_cost_usd").and_then(|c| c.as_f64()) {
+            sum += c;
+        } else if v.get("type").and_then(|t| t.as_str()) == Some("step_finish") {
+            sum += v.pointer("/part/cost").and_then(|c| c.as_f64()).unwrap_or(0.0);
+        }
+    }
+    sum
 }
 
 /// What one note line says happened, and when.
@@ -317,8 +348,17 @@ pub fn log_rounds(repo: &Repo) -> Vec<LogRound> {
         };
         let path = e.path();
         let end = mtime(&path).max(start);
-        let lines = read_to_string(&path).map(|s| s.lines().filter(|l| !l.trim().is_empty()).count()).unwrap_or(0);
-        out.push(LogRound { id: id.to_string(), start, end, role, fix: kind == "worker-gate", empty: lines < 2 });
+        let raw = read_to_string(&path).unwrap_or_default();
+        let lines = raw.lines().filter(|l| !l.trim().is_empty()).count();
+        out.push(LogRound {
+            id: id.to_string(),
+            start,
+            end,
+            role,
+            fix: kind == "worker-gate",
+            empty: lines < 2,
+            cost_usd: round_cost(&raw),
+        });
     }
     out.sort_by(|a, b| a.start.cmp(&b.start).then(a.id.cmp(&b.id)).then(a.fix.cmp(&b.fix)));
     out
@@ -430,12 +470,15 @@ fn window_json(beads: &[Bead], rounds: &[(String, LogRound)], from: i64, now: i6
         }
     }
     let (mut worker_s, mut review_s, mut worker_rounds, mut review_rounds, mut empty) = (0i64, 0i64, 0u64, 0u64, 0u64);
+    let (mut worker_usd, mut review_usd) = (0.0f64, 0.0f64);
     for (_, r) in rounds.iter().filter(|(_, r)| inside(r.start)) {
         let d = (r.end.min(now) - r.start).max(0);
         if r.role == "worker" {
             worker_s += d;
+            worker_usd += r.cost_usd;
         } else {
             review_s += d;
+            review_usd += r.cost_usd;
         }
         if r.fix {
             continue;
@@ -462,7 +505,7 @@ fn window_json(beads: &[Bead], rounds: &[(String, LogRound)], from: i64, now: i6
             "by_model": Value::Object(by_model.iter().map(|(m, (n, r))| (m.clone(), json!({"total": n, "by_reason": counts(r)}))).collect()),
         },
         "holds": holds, "rebases": rebases, "escalations": escalations, "answers": answers, "interrupted": interrupted,
-        "model_time": {"worker_s": worker_s, "review_s": review_s, "worker_rounds": worker_rounds, "review_rounds": review_rounds, "empty_rounds": empty},
+        "model_time": {"worker_s": worker_s, "review_s": review_s, "worker_usd": worker_usd, "review_usd": review_usd, "worker_rounds": worker_rounds, "review_rounds": review_rounds, "empty_rounds": empty},
         "by_repo": Value::Object(by_repo.iter().map(|(s, (l, sb, w))| (s.clone(), json!({"landed": l, "send_backs": sb, "worked": w.len()}))).collect()),
     })
 }
@@ -689,11 +732,19 @@ mod tests {
         repo.set_failures("t-2", 2);
         let h = |n: i64| now - n * 3600;
         let rounds = vec![
-            LogRound { id: "t-1".into(), start: h(26), end: h(25), role: "worker", fix: false, empty: false },
-            LogRound { id: "t-1".into(), start: h(25), end: h(25) + 1800, role: "worker", fix: true, empty: false },
-            LogRound { id: "t-1".into(), start: h(24), end: h(24) + 600, role: "review", fix: false, empty: false },
-            LogRound { id: "t-5".into(), start: h(3), end: h(3), role: "worker", fix: false, empty: true },
-            LogRound { id: "t-3".into(), start: now - 8 * 86400, end: now - 8 * 86400 + 3600, role: "worker", fix: false, empty: false },
+            LogRound { id: "t-1".into(), start: h(26), end: h(25), role: "worker", fix: false, empty: false, cost_usd: 0.25 },
+            LogRound { id: "t-1".into(), start: h(25), end: h(25) + 1800, role: "worker", fix: true, empty: false, cost_usd: 0.125 },
+            LogRound { id: "t-1".into(), start: h(24), end: h(24) + 600, role: "review", fix: false, empty: false, cost_usd: 0.5 },
+            LogRound { id: "t-5".into(), start: h(3), end: h(3), role: "worker", fix: false, empty: true, cost_usd: 0.0 },
+            LogRound {
+                id: "t-3".into(),
+                start: now - 8 * 86400,
+                end: now - 8 * 86400 + 3600,
+                role: "worker",
+                fix: false,
+                empty: false,
+                cost_usd: 1.0,
+            },
         ];
         let j = stats_from(&[Input { repo: &repo, beads, rounds }], now);
         let w7 = &j["windows"]["7d"];
@@ -713,8 +764,8 @@ mod tests {
         assert_eq!(w7["answers"], 1);
         assert_eq!(
             w7["model_time"],
-            json!({"worker_s": 5400, "review_s": 600, "worker_rounds": 1, "review_rounds": 1, "empty_rounds": 1}),
-            "the fix session's time counts, not as a round; the empty one is counted apart; t-3's is outside"
+            json!({"worker_s": 5400, "review_s": 600, "worker_usd": 0.375, "review_usd": 0.5, "worker_rounds": 1, "review_rounds": 1, "empty_rounds": 1}),
+            "the fix session's time and cost count, not as a round; the empty one is counted apart; t-3's is outside"
         );
         assert_eq!(w7["by_repo"]["repo"]["landed"], 2);
         let w24 = &j["windows"]["24h"];
@@ -725,6 +776,7 @@ mod tests {
         let w30 = &j["windows"]["30d"];
         assert_eq!(w30["landed"], 3);
         assert_eq!(w30["model_time"]["worker_rounds"], 2);
+        assert_eq!(w30["model_time"]["worker_usd"], 1.375, "t-3's round, outside 7d, is inside 30d");
         assert_eq!(j["windows"]["all"]["landed"], 3);
         assert_eq!(j["since"], json!(parse_iso("2026-09-12T00:00:00Z").unwrap()), "the first claim");
         assert_eq!(j["windows"]["all"]["span_s"], now - parse_iso("2026-09-12T00:00:00Z").unwrap());
@@ -760,7 +812,7 @@ mod tests {
         w("t-1.2.20260919T100000.worker-gate.jsonl", "{\"a\":1}\n{\"b\":2}\n");
         w("t-1.2.20260919T110000.review.jsonl", "{\"a\":1}\n{\"b\":2}\n{\"c\":3}\n");
         w("t-7.20260919T120000.worker.jsonl", "");
-        w("t-8.20260918T120000.review1.jsonl", "{\"a\":1}\n{\"b\":2}\n");
+        w("t-8.20260918T120000.review1.jsonl", "{\"type\":\"system\"}\n{\"is_error\":false,\"total_cost_usd\":0.42}\n");
         w("junk.txt", "");
         let r = log_rounds(&repo);
         let ids: Vec<(&str, &str, bool, bool)> = r.iter().map(|x| (x.id.as_str(), x.role, x.fix, x.empty)).collect();
@@ -775,8 +827,27 @@ mod tests {
             ],
             "by start; a dotted id survives; setup/gate/err are not sessions"
         );
+        assert_eq!(r[0].cost_usd, 0.42, "Claude Code's result line");
+        assert_eq!(r[1].cost_usd, 0.0, "no cost field: nothing priced this");
         assert_eq!(r[1].start, parse_stamp("20260919T100000").unwrap());
         assert!(r[1].end >= r[1].start);
         let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn round_cost_reads_either_transcript_shape() {
+        assert_eq!(round_cost(""), 0.0, "no session ran");
+        assert_eq!(round_cost("{\"a\":1}\n{\"b\":2}\n"), 0.0, "neither shape: an opencode transcript of tool events, no cost");
+        assert_eq!(round_cost("{\"is_error\":false,\"total_cost_usd\":1.5,\"usage\":{}}\n"), 1.5, "Claude Code's one result line");
+        assert_eq!(
+            round_cost(
+                "{\"type\":\"step_start\"}\n\
+                 {\"type\":\"step_finish\",\"part\":{\"tokens\":{\"total\":10},\"cost\":0.125}}\n\
+                 {\"type\":\"tool_use\"}\n\
+                 {\"type\":\"step_finish\",\"part\":{\"tokens\":{\"total\":20},\"cost\":0.375}}\n"
+            ),
+            0.5,
+            "opencode: each step_finish's own cost, summed across the session"
+        );
     }
 }
