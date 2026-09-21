@@ -1,281 +1,193 @@
-//! Probes for the doctor command
+//! One probe per dependency the loop needs, each its own red or green line.
+use crate::config::{Repo, Stage};
+use crate::harness::opencode_provider;
+use crate::shell::curl_get;
+use crate::util::{cmd, first_line, have, output, stderr_str, stdout_str};
+use serde_json::Value;
 
-use std::process::Command;
-use std::env;
-use std::path::PathBuf;
-
-/// A probe that checks one dependency
-pub trait Probe {
-    #[allow(dead_code)]
-    fn name(&self) -> &str;
-    fn check(&self) -> ProbeResult;
-}
-
-/// The result of a probe
-#[derive(Debug, Clone)]
 pub struct ProbeResult {
-    pub name: &'static str,
+    pub name: String,
     pub ok: bool,
     pub detail: String,
 }
 
 impl ProbeResult {
-    pub fn ok(name: &'static str, detail: impl Into<String>) -> Self {
-        Self {
-            name,
-            ok: true,
-            detail: detail.into(),
-        }
+    fn ok(name: impl Into<String>, detail: impl Into<String>) -> Self {
+        Self { name: name.into(), ok: true, detail: detail.into() }
     }
-
-    pub fn fail(name: &'static str, detail: impl Into<String>) -> Self {
-        Self {
-            name,
-            ok: false,
-            detail: detail.into(),
-        }
+    fn fail(name: impl Into<String>, detail: impl Into<String>) -> Self {
+        Self { name: name.into(), ok: false, detail: detail.into() }
     }
-
     pub fn to_line(&self) -> String {
-        if self.ok {
-            format!("[green]{}: {}", self.name, self.detail)
-        } else {
-            format!("[red]{}: {}", self.name, self.detail)
-        }
+        format!("[{}] {}: {}", if self.ok { "green" } else { "red" }, self.name, self.detail)
     }
 }
 
-/// Check version of bead-supervisor
-pub struct Version;
-
-impl Probe for Version {
-    fn name(&self) -> &str {
-        "version"
-    }
-
-    fn check(&self) -> ProbeResult {
-        let version = env!("CARGO_PKG_VERSION");
-        ProbeResult::ok("version", format!("bead-supervisor v{}", version))
+pub fn bd_probe() -> ProbeResult {
+    match output(cmd("bd").arg("--version")) {
+        Ok(o) if o.status.success() => ProbeResult::ok("bd", first_line(&stdout_str(&o))),
+        Ok(o) => ProbeResult::fail("bd", first_line(&stderr_str(&o))),
+        Err(e) => ProbeResult::fail("bd", format!("bd not runnable: {e}")),
     }
 }
 
-/// Check git is available and configured
-pub struct Git;
-
-impl Probe for Git {
-    fn name(&self) -> &str {
-        "git"
+pub fn git_probe() -> ProbeResult {
+    match output(cmd("git").arg("--version")) {
+        Ok(o) if o.status.success() => ProbeResult::ok("git", first_line(&stdout_str(&o))),
+        Ok(o) => ProbeResult::fail("git", first_line(&stderr_str(&o))),
+        Err(e) => ProbeResult::fail("git", format!("git not runnable: {e}")),
     }
+}
 
-    fn check(&self) -> ProbeResult {
-        match Command::new("git").arg("--version").output() {
-            Ok(output) if output.status.success() => {
-                let version = String::from_utf8_lossy(&output.stdout);
-                ProbeResult::ok("git", version.trim().to_string())
+pub fn gh_probe() -> ProbeResult {
+    match output(cmd("gh").args(["auth", "status"])) {
+        Ok(o) if o.status.success() => ProbeResult::ok("gh auth", first_line(&stdout_str(&o))),
+        Ok(o) => ProbeResult::fail("gh auth", first_line(&stderr_str(&o))),
+        Err(e) => ProbeResult::fail("gh auth", format!("gh not runnable: {e}")),
+    }
+}
+
+/// `claude auth status`: JSON on stdout either way (`loggedIn`), exit 1 when signed out —
+/// the JSON is read regardless of the exit code, the same as `harness::claude_ok`.
+pub fn claude_probe() -> ProbeResult {
+    match output(cmd("claude").args(["auth", "status"])) {
+        Ok(o) => {
+            let v: Value = serde_json::from_str(&stdout_str(&o)).unwrap_or(Value::Null);
+            if v.get("loggedIn").and_then(|b| b.as_bool()).unwrap_or(false) {
+                let method = v.get("authMethod").and_then(|m| m.as_str()).unwrap_or("signed in");
+                ProbeResult::ok("claude auth", method)
+            } else {
+                ProbeResult::fail("claude auth", "signed out")
             }
-            _ => ProbeResult::fail("git", "git command not found or failed"),
         }
+        Err(e) => ProbeResult::fail("claude auth", format!("claude not runnable: {e}")),
     }
 }
 
-/// Check gh auth status
-pub struct GhAuth;
-
-impl Probe for GhAuth {
-    fn name(&self) -> &str {
-        "gh auth"
-    }
-
-    fn check(&self) -> ProbeResult {
-        match Command::new("gh").arg("auth").arg("status").output() {
-            Ok(output) if output.status.success() => {
-                let output_str = String::from_utf8_lossy(&output.stdout);
-                if output_str.contains("logged in") {
-                    ProbeResult::ok("gh auth", "logged in")
-                } else {
-                    ProbeResult::fail("gh auth", "not logged in")
+/// The opencode providers a repo's stages name: the part of `worker`/`reviewer` before the
+/// first `/` (after stripping the `aider:` prefix, the same as `harness::run_agent`
+/// resolves it); `claude/*` names no opencode provider. Sorted, unique.
+fn providers_in(stages: &[Stage]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for s in stages {
+        for model in [s.worker.as_str(), s.reviewer.as_str()] {
+            if model.is_empty() || model.starts_with("claude/") {
+                continue;
+            }
+            let rest = model.strip_prefix("aider:").unwrap_or(model);
+            if let Some(p) = rest.split('/').next().filter(|p| !p.is_empty()) {
+                if !out.iter().any(|x| x == p) {
+                    out.push(p.to_string());
                 }
             }
-            _ => ProbeResult::fail("gh auth", "gh command failed"),
         }
+    }
+    out.sort();
+    out
+}
+
+/// `GET baseURL/models`, 5 s: whether the provider's opencode server is reachable, for
+/// every provider name any repo's stages use.
+pub fn opencode_provider_probes(repos: &[Repo]) -> Vec<ProbeResult> {
+    let mut providers: Vec<String> = Vec::new();
+    for r in repos {
+        for p in providers_in(&r.stages) {
+            if !providers.contains(&p) {
+                providers.push(p);
+            }
+        }
+    }
+    providers.sort();
+    providers
+        .iter()
+        .map(|provider| {
+            let name = format!("opencode provider {provider}");
+            let (base, _key) = opencode_provider(provider);
+            if base.is_empty() {
+                return ProbeResult::fail(name, format!("no baseURL for {provider} in opencode.json"));
+            }
+            match curl_get(&format!("{base}/models"), None, 5) {
+                Some(_) => ProbeResult::ok(name, format!("reachable at {base}")),
+                None => ProbeResult::fail(name, format!("cannot reach {base}/models")),
+            }
+        })
+        .collect()
+}
+
+/// `GET attach/session`, 5 s: the attached opencode server the loop runs rounds on.
+pub fn attach_probe(repos: &[Repo]) -> ProbeResult {
+    match repos.iter().map(|r| r.attach.as_str()).find(|a| !a.is_empty()) {
+        None => ProbeResult::fail("attach server", "no attach server configured"),
+        Some(attach) => match curl_get(&format!("{attach}/session"), None, 5) {
+            Some(_) => ProbeResult::ok("attach server", format!("reachable at {attach}")),
+            None => ProbeResult::fail("attach server", format!("cannot reach {attach}/session")),
+        },
     }
 }
 
-/// Check claude auth status
-pub struct ClaudeAuth;
-
-impl Probe for ClaudeAuth {
-    fn name(&self) -> &str {
-        "claude auth"
-    }
-
-    fn check(&self) -> ProbeResult {
-        match Command::new("claude").arg("auth").arg("status").output() {
-            Ok(output) if output.status.success() => {
-                let output_str = String::from_utf8_lossy(&output.stdout);
-                if output_str.contains("\"loggedIn\":true") {
-                    ProbeResult::ok("claude auth", "logged in")
-                } else {
-                    ProbeResult::fail("claude auth", "not logged in")
-                }
-            }
-            _ => ProbeResult::fail("claude auth", "claude command failed or not logged in"),
+/// `df -h` on the state dir: where every worktree, log and lane marker lives.
+pub fn disk_free_probe() -> ProbeResult {
+    let dir = crate::config::state_dir();
+    match output(cmd("df").arg("-h").arg(&dir)) {
+        Ok(o) if o.status.success() => {
+            let line = stdout_str(&o).lines().nth(1).unwrap_or("").trim().to_string();
+            ProbeResult::ok("disk free", if line.is_empty() { format!("unknown for {}", dir.display()) } else { line })
         }
+        _ => ProbeResult::fail("disk free", format!("df failed for {}", dir.display())),
     }
 }
 
-/// Check opencode provider is reachable
-pub struct OpencodeProvider;
+/// The three units `systemctl --user enable --now` starts (README's Run), when systemctl
+/// exists at all; skipped (green) on a box without one.
+const UNITS: [&str; 3] = ["opencode-web.service", "bead-loop-ui.service", "bead-supervisor.timer"];
 
-impl Probe for OpencodeProvider {
-    fn name(&self) -> &str {
-        "opencode provider"
+pub fn systemctl_probe() -> ProbeResult {
+    if !have("systemctl") {
+        return ProbeResult::ok("systemd units", "not available (no systemctl)");
     }
-
-    fn check(&self) -> ProbeResult {
-        // Try to read config and check provider
-        let config_dir = match env::var("BEAD_LOOP_CONFIG_DIR") {
-            Ok(d) => PathBuf::from(d),
-            Err(_) => {
-                let home = env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
-                PathBuf::from(&home).join(".config").join("bead-loop")
-            }
+    let mut states = Vec::new();
+    let mut all_active = true;
+    for unit in UNITS {
+        let state = match output(cmd("systemctl").args(["--user", "is-active", unit])) {
+            Ok(o) => first_line(&stdout_str(&o)).to_string(),
+            Err(_) => "unknown".to_string(),
         };
-
-        let config_path = config_dir.join("config.toml");
-        
-        if !config_path.exists() {
-            return ProbeResult::fail("opencode provider", "config.toml not found");
+        if state != "active" {
+            all_active = false;
         }
-
-        // Read config and extract providers
-        let config_content = match std::fs::read_to_string(&config_path) {
-            Ok(c) => c,
-            Err(_) => return ProbeResult::fail("opencode provider", "cannot read config.toml"),
-        };
-
-        // Simple check: look for [providers] section
-        if !config_content.contains("[providers]") {
-            return ProbeResult::fail("opencode provider", "no providers configured");
-        }
-
-        // Try to hit the first provider's models endpoint
-        for line in config_content.lines() {
-            if line.starts_with("baseURL = ") {
-                let url = line.trim_start_matches("baseURL = ").trim_matches('"');
-                match Command::new("curl")
-                    .arg("-s")
-                    .arg("-m")
-                    .arg("5")
-                    .arg(format!("{}/models", url))
-                    .output()
-                {
-                    Ok(output) if output.status.success() => {
-                        return ProbeResult::ok("opencode provider", format!("reachable at {}", url));
-                    }
-                    _ => return ProbeResult::fail("opencode provider", format!("cannot reach {}", url)),
-                }
-            }
-        }
-
-        ProbeResult::fail("opencode provider", "no baseURL configured")
+        states.push(format!("{unit}: {state}"));
+    }
+    let detail = states.join(", ");
+    if all_active {
+        ProbeResult::ok("systemd units", detail)
+    } else {
+        ProbeResult::fail("systemd units", detail)
     }
 }
 
-/// Check attach server connectivity
-pub struct AttachServer;
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-impl Probe for AttachServer {
-    fn name(&self) -> &str {
-        "attach server"
+    fn stage(worker: &str, reviewer: &str) -> Stage {
+        Stage { worker: worker.into(), reviewer: reviewer.into(), failures: 1, timeout: None }
     }
 
-    fn check(&self) -> ProbeResult {
-        // Check for ATTACH_SERVER_URL or default
-        let url = env::var("ATTACH_SERVER_URL").unwrap_or_else(|_| "http://localhost:8300".to_string());
-
-        match Command::new("curl")
-            .arg("-s")
-            .arg("-m")
-            .arg("5")
-            .arg(format!("{}/health", url))
-            .output()
-        {
-            Ok(output) if output.status.success() => {
-                ProbeResult::ok("attach server", format!("reachable at {}", url))
-            }
-            _ => ProbeResult::fail("attach server", format!("cannot reach {}", url)),
-        }
-    }
-}
-
-/// Check disk free space
-pub struct DiskFree;
-
-impl Probe for DiskFree {
-    fn name(&self) -> &str {
-        "disk free"
+    #[test]
+    fn providers_named_in_the_stages() {
+        assert_eq!(providers_in(&[stage("devbox/coder", "acbox/reviewer")]), vec!["acbox", "devbox"]);
+        assert_eq!(providers_in(&[stage("claude/opus", "")]), Vec::<String>::new(), "claude names no opencode provider");
+        assert_eq!(providers_in(&[stage("aider:acbox/coder", "")]), vec!["acbox"], "aider: strips to its opencode provider");
+        assert_eq!(
+            providers_in(&[stage("devbox/coder", "devbox/coder"), stage("devbox/fast", "acbox/reviewer")]),
+            vec!["acbox", "devbox"],
+            "sorted, unique"
+        );
     }
 
-    fn check(&self) -> ProbeResult {
-        // Use df -h . to get current directory's disk info
-        match Command::new("df").arg("-h").arg(".").output() {
-            Ok(output) if output.status.success() => {
-                let output_str = String::from_utf8_lossy(&output.stdout);
-                let lines: Vec<&str> = output_str.lines().collect();
-                if lines.len() >= 2 {
-                    let disk_info = lines[1];
-                    ProbeResult::ok("disk free", disk_info.trim().to_string())
-                } else {
-                    ProbeResult::ok("disk free", "unable to parse disk info")
-                }
-            }
-            _ => ProbeResult::fail("disk free", "df command failed"),
-        }
-    }
-}
-
-/// Check systemctl units (if systemctl exists)
-pub struct SystemctlUnits;
-
-impl Probe for SystemctlUnits {
-    fn name(&self) -> &str {
-        "systemctl units"
-    }
-
-    fn check(&self) -> ProbeResult {
-        // Check if systemctl exists
-        match Command::new("systemctl").arg("--version").output() {
-            Ok(output) => {
-                if output.status.success() {
-                    // systemctl exists, check bead-loop service
-                    let output_str = String::from_utf8_lossy(&output.stdout);
-                    let version = output_str.lines().next().unwrap_or("unknown");
-                    
-                    // Try to check bead-loop status
-                    match Command::new("systemctl")
-                        .arg("is-active")
-                        .arg("bead-loop.service")
-                        .output()
-                    {
-                        Ok(out) => {
-                            let status = String::from_utf8_lossy(&out.stdout).trim().to_string();
-                            if status == "active" {
-                                ProbeResult::ok("systemctl units", format!("{}: active", version))
-                            } else {
-                                ProbeResult::ok("systemctl units", format!("{}: bead-loop not active", version))
-                            }
-                        }
-                        Err(_) => ProbeResult::ok("systemctl units", format!("{}: cannot check service", version)),
-                    }
-                } else {
-                    ProbeResult::fail("systemctl units", "systemctl --version failed")
-                }
-            }
-            Err(_) => {
-                // systemctl doesn't exist, skip this probe
-                ProbeResult::ok("systemctl units", "not available (no systemctl)")
-            }
-        }
+    #[test]
+    fn probe_result_lines() {
+        assert_eq!(ProbeResult::ok("git", "git version 2").to_line(), "[green] git: git version 2");
+        assert_eq!(ProbeResult::fail("claude auth", "signed out").to_line(), "[red] claude auth: signed out");
     }
 }

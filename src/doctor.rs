@@ -1,41 +1,27 @@
-//! Doctor command: probe all dependencies
-
-use crate::util::log;
-use crate::doctor::probe::{Probe, ProbeResult, Version, Git, GhAuth, ClaudeAuth, OpencodeProvider, AttachServer, DiskFree, SystemctlUnits};
+//! Doctor command: every dependency probed, red or green, in one command.
+use crate::config::Repo;
 
 mod probe;
 
-/// Run the doctor command
-pub fn run(json: bool) {
-    let probes: Vec<Box<dyn Probe>> = vec![
-        Box::new(Version),
-        Box::new(Git),
-        Box::new(GhAuth),
-        Box::new(ClaudeAuth),
-        Box::new(OpencodeProvider),
-        Box::new(AttachServer),
-        Box::new(DiskFree),
-        Box::new(SystemctlUnits),
-    ];
+/// Run the doctor command: the repos are only needed for the opencode-provider and
+/// attach-server probes (the stages and the attach URL come from them); the rest run the
+/// same with none.
+pub fn run(repos: &[Repo], json: bool) {
+    let mut results = vec![probe::bd_probe(), probe::git_probe(), probe::gh_probe(), probe::claude_probe()];
+    results.extend(probe::opencode_provider_probes(repos));
+    results.push(probe::attach_probe(repos));
+    results.push(probe::disk_free_probe());
+    results.push(probe::systemctl_probe());
 
-    let results: Vec<ProbeResult> = probes.iter().map(|p| p.check()).collect();
-    
     let has_failures = results.iter().any(|r| !r.ok);
 
     if json {
-        // Output as JSON array
-        let json_array: Vec<serde_json::Value> = results.iter().map(|r| {
-            serde_json::json!({
-                "name": r.name,
-                "ok": r.ok,
-                "detail": r.detail
-            })
-        }).collect();
-        log(&serde_json::to_string_pretty(&json_array).unwrap());
+        let json_array: Vec<serde_json::Value> =
+            results.iter().map(|r| serde_json::json!({"name": r.name, "ok": r.ok, "detail": r.detail})).collect();
+        println!("{}", serde_json::to_string(&json_array).unwrap());
     } else {
-        // Output one line per probe
-        for result in results {
-            log(&result.to_line());
+        for result in &results {
+            println!("{}", result.to_line());
         }
     }
 

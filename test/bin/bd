@@ -9,6 +9,7 @@ F=$BD_STATE/issues.json
 save() { local tmp; tmp=$(mktemp "$F.XXXXXX"); jq "$1" --arg id "${2:-}" --arg t "${3:-}" "$F" >"$tmp" && mv "$tmp" "$F"; }
 cmd=$1; shift
 case $cmd in
+  --version) echo "bd version 1.2.2 (stub)" ;;
   ready)
     # slow-ready: seconds to take, for the tests of what the lanes do while dev has not claimed yet.
     [ -e "$TEST_CTRL/slow-ready" ] && sleep "$(cat "$TEST_CTRL/slow-ready")"

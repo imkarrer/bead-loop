@@ -112,7 +112,7 @@ fn main() {
     // One supervisor at a time for anything that runs rounds or the merge queue; the
     // read-only and the one-bead commands are free.
     let _lock = match cmd.as_str() {
-        "status" | "stats" | "log" | "watch" | "lane" | "pause" | "resume" | "escalate" | "answer" | "open" | "priority" | "wake" => None,
+        "status" | "stats" | "log" | "watch" | "lane" | "pause" | "resume" | "escalate" | "answer" | "open" | "priority" | "wake" | "doctor" => None,
         _ => match lanes::try_lock(&state_dir.join("lock")) {
             Some(l) => Some(l),
             None => {
@@ -224,7 +224,10 @@ fn main() {
             let repo = repo_at(0);
             status::log_follow(&repo, rest.get(1).map(String::as_str));
         }
-        "doctor" => doctor_run(json),
+        "doctor" => {
+            let loaded: Vec<Repo> = repos.iter().map(|r| Repo::load(r, opts.model_flag.as_deref())).collect();
+            doctor_run(&loaded, json);
+        }
         other => die(&format!("unknown command {other}")),
     }
 }

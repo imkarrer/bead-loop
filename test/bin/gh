@@ -2,6 +2,11 @@
 # Stub gh for bead-loop tests. PR state in $TEST_CTRL/pr.json; actions logged to $TEST_CTRL/gh.log.
 set -euo pipefail
 echo "$*" >>"$TEST_CTRL/gh.log"
+# auth status: like the claude stub, signed in unless the test says otherwise.
+if [ "$1" = auth ] && [ "$2" = status ]; then
+  if [ -e "$TEST_CTRL/gh-signed-out" ]; then echo "not logged in" >&2; exit 1; fi
+  echo "✓ Logged in to github.com"; exit 0
+fi
 [ "$1" = pr ] || { echo "stub gh: only pr" >&2; exit 2; }
 case $2 in
   create)

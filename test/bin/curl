@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
-# Stub curl for bead-loop tests: the attached opencode server's two session endpoints.
-# $TEST_CTRL/sessions.json is what GET /session returns, $TEST_CTRL/session-status.json
-# what GET /session/status returns; the directory asked for is logged to curl.log.
+# Stub curl for bead-loop tests: the attached opencode server's session endpoints, and an
+# opencode provider's /models (the doctor's probe). $TEST_CTRL/sessions.json is what GET
+# /session returns, $TEST_CTRL/session-status.json what GET /session/status returns,
+# $TEST_CTRL/models.json what GET .../models returns; the directory asked for is logged
+# to curl.log.
 set -euo pipefail
 url=; dir=
 while [ $# -gt 0 ]; do
@@ -20,5 +22,6 @@ case $url in
   */session/status) if [ -n "$dir" ]; then cat "$TEST_CTRL/session-status.json" 2>/dev/null || echo '{}'; else echo '{}'; fi ;;   # like the real server: nothing without a directory
   */session/ses_*)  printf '{"id":"%s","time":{"created":%s}}\n' "${url##*/}" "$(( $(date +%s) * 1000 - 1000 ))" ;;   # one session: started a second ago
   */session)        cat "$TEST_CTRL/sessions.json" 2>/dev/null || echo '[]' ;;
+  */models)          cat "$TEST_CTRL/models.json" 2>/dev/null || echo '{"data":[]}' ;;   # the doctor's opencode-provider probe
   *) echo "stub curl: $url" >&2; exit 22 ;;
 esac

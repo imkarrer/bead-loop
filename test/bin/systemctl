@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# Stub systemctl for bead-loop tests: the doctor's three units, and bead-loop-ui's own
+# unitState() (show -p ...). $TEST_CTRL/systemctl-inactive names units (one per line)
+# is-active should answer inactive for; every other unit is active.
+set -euo pipefail
+if [ "${1:-}" = --version ]; then echo "systemd 255 (stub)"; exit 0; fi
+[ "${1:-}" = --user ] || { echo "stub systemctl: only --user" >&2; exit 2; }
+shift
+case "${1:-}" in
+  is-active)
+    unit=$2
+    if [ -e "$TEST_CTRL/systemctl-inactive" ] && grep -qx "$unit" "$TEST_CTRL/systemctl-inactive"; then
+      echo inactive; exit 3
+    fi
+    echo active ;;
+  show) printf 'ActiveState=active\nSubState=running\n' ;;
+  *) echo "stub systemctl: unknown $*" >&2; exit 2 ;;
+esac

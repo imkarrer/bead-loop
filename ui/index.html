@@ -183,7 +183,7 @@
   <div class="unit" id="claude"></div>
   <div class="unit" id="live" style="margin-left:auto"></div>
 </header>
-<div id="signedout" class="banner signin" hidden></div>
+<div id="doctor" class="banner" hidden></div>
 <div id="signin" class="banner signin" hidden></div>
 <main id="main"><div class="empty">loading…</div></main>
 <footer id="foot"></footer>
@@ -222,15 +222,10 @@ function gpu(s) {
   $('gpu').innerHTML = `<span class="dot ${g.mode === 'game' ? 'warn' : 'on'}"></span>GPU ${esc(g.mode)}<span class="muted"> (${esc(g.by)})</span>
     <span class="seg"><button class="${g.mode === 'work' ? 'cur' : ''}" ${dis} onclick="act('gpu',{mode:'work'})">Work</button><button class="${g.mode === 'game' ? 'cur game' : ''}" ${dis} onclick="act('gpu',{mode:'game'},'Game mode: stop the loop (aborting its session) and the local model server?')">Game</button></span>`;
 }
-// The last stage is Claude on this box; say when it cannot run, because a round there
-// would otherwise fail on the spot and the bead loop back to stage 1 unexplained.
+// The last stage is Claude on this box; the header's Claude unit is where its sign-in
+// lever always lives — the doctor banner below says when it, or anything else, is red.
 function claude(s) {
   const c = s.claude, dis = busyAction ? 'disabled' : '';
-  const out = $('signedout');
-  if (c && !c.loggedIn && !s.login) {
-    out.hidden = false;
-    out.innerHTML = `<b>Claude is signed out on this box.</b> The ${esc(s.repos.map((r) => r.stages.filter((st) => /^claude\//.test(st.worker)).map((st) => st.worker)).flat()[0] || 'claude/*')} stage cannot run: beads on it wait in their queue, and Work with Claude is off, until you <button ${dis} onclick="act('claude_login')">Sign in</button> — a link to open and a code to paste, right here.`;
-  } else out.hidden = true;
   $('claude').innerHTML = !c ? '' : c.loggedIn ? `<span class="dot on"></span>Claude <span class="muted">signed in${c.method ? ' · ' + esc(c.method) : ''}</span>`
     : `<span class="dot bad"></span>Claude <span class="chip bad">signed out</span> <button ${dis} onclick="act('claude_login')">Sign in</button>`;
   // The sign-in in progress, as a banner: the link to open, the box for the code.
@@ -244,12 +239,22 @@ function claude(s) {
       <li>Paste the code it shows: <input id="code" class="mono" size="44" placeholder="code" autocomplete="off"> <button onclick="act('claude_code',{code:document.getElementById('code').value})">Finish sign-in</button> <button class="danger" onclick="act('claude_cancel')">Cancel</button></li></ol>`;
   }
 }
+// `bead-supervisor doctor --json`, once a minute (bead-loop-ui's own cache): every
+// dependency the loop needs, red or green. Anything red is a banner at the top — bd, git,
+// gh, Claude, an opencode provider's server down, the attach server, disk, a unit — in
+// place of the old banner that only ever said so for Claude.
+function doctorBanner(s) {
+  const out = $('doctor'), bad = (s.doctor || []).filter((p) => !p.ok);
+  if (!bad.length) { out.hidden = true; return; }
+  out.hidden = false;
+  out.innerHTML = `<b>${bad.length} check${bad.length > 1 ? 's' : ''} red.</b> ` + bad.map((p) => `${esc(p.name)}: ${esc(p.detail)}`).join(' · ');
+}
 // The loop is resident: bead-supervisor.service stays up, its lanes on the bell when
 // idle; bead-supervisor.timer is its keeper (starts it now, and again a minute after it
 // stops). So the header says whether the loop is up and what it is on, and offers Stop
 // (the keeper brings it back in a minute — a breather) or Off (keeper too), and Wake.
 function header(s) {
-  gpu(s); claude(s);
+  gpu(s); claude(s); doctorBanner(s);
   const t = s.timer, v = s.service, dis = busyAction ? 'disabled' : '';
   const running = v.available && (v.active === 'active' || v.active === 'activating');
   const since = systemdTime(v.since);

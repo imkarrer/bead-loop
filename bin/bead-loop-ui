@@ -131,6 +131,21 @@ async function claudeStatus(repos) {
   claudeAuth = { at: Date.now(), v };
   return v;
 }
+// `bead-supervisor --json doctor`, once a minute (DOCTOR_TTL_MS): every dependency probed,
+// red or green — bd, git, gh, Claude, each opencode provider's server, the attach server,
+// disk under the state dir, the three units. Exits 1 when anything is red, same as
+// `claude auth status`; the JSON on stdout is read either way. The page's one banner for
+// anything red reads this, in place of the old banner that only ever knew about Claude.
+const DOCTOR_TTL_MS = Number(process.env.BEAD_LOOP_UI_DOCTOR_TTL_MS || 60000);
+let doctor = { at: 0, v: null };
+async function doctorStatus() {
+  if (Date.now() - doctor.at < DOCTOR_TTL_MS) return doctor.v;
+  const r = await run(SUPERVISOR, ['--json', 'doctor'], { timeout: 30000 });
+  let v;
+  try { v = JSON.parse(r.stdout); } catch { v = null; }
+  doctor = { at: Date.now(), v };
+  return v;
+}
 async function state() {
   const t = {}, t0 = Date.now();
   const [status, timer, service, log, gpu] = await Promise.all([
@@ -141,7 +156,7 @@ async function state() {
   const repos = withPrs(jsonLines(status.stdout));
   return {
     now: Math.floor(Date.now() / 1000),
-    repos, claude: await claudeStatus(repos), stats: statsNow(),
+    repos, claude: await claudeStatus(repos), doctor: await doctorStatus(), stats: statsNow(),
     login: login && !login.done ? { url: login.url, started: Math.floor(login.at / 1000) } : null,
     error: status.ok ? null : status.stderr.trim().split('\n').pop(),
     timer, service, log, gpu,
