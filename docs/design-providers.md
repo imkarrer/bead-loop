@@ -49,7 +49,7 @@ Six words, used the same way in the config, the docs, the page and the code:
 | **lane** | one consumer of the queues: the models it takes, its roles, how many rounds at once | `[[lanes]]`, or derived from the providers |
 | **stage** | a worker and its reviewers, for the next `failures` send-backs | `[[stages]]`, unchanged |
 | **seat** | one reviewer on a stage: a model, and optionally its own agent | the `reviewer` list |
-| **role** | what a session is for: `worker`, `reviewer`, `conflict`, `brief`, `precheck`, `postmortem` | fixed; the agent files |
+| **role** | what a session is for: `research`, `worker`, `reviewer`, `conflict`, `brief`, `precheck`, `postmortem` | fixed; the agent files |
 
 Two words that are on purpose not here: *server* (a provider is a server, or a slice of
 one; the word adds nothing) and *vendor* (the code never learns one).
@@ -188,13 +188,61 @@ failures = 1
   `rejoin/ID` becomes `rejoin/ID.K` so a restart rejoins each seat's session.
 - **The PR body** gets one `Reviewer (model): APPROVE …` line per seat.
 
+### Research: an optional round before the first worker round
+
+The loop's own numbers (21 Sep: where rounds die) say the small model loses its rounds
+in *exploration* — a path outside the worktree, the 32k context spent before the first
+edit — not in editing. A bead whose DESCRIPTION names its files lands; one that says
+"find where X happens" does not. Research is the round that turns the second into the
+first, on a model that can afford to read.
+
+```toml
+research_model = "acbox/coder"        # empty (the default): no research round
+research = "first"                    # first: once, before round 1 · every: again after each send-back
+```
+
+- **A research round is a lane round**, not an inline call: it is long and it belongs
+  on the big model, and it must never hold the worker's lane. The lane whose models
+  match `research_model` takes it, so on this box the 80B on the cpu lane reads while
+  the gpu lane implements other beads. `research_model` names a provider like every
+  other model key, so derived lanes include it.
+- **When.** A ready bead with `research_model` set and no `$RS/research/ID` is a
+  research round before it is a worker round: the dev queue's pick sees the file
+  missing and hands the bead to the research model's lane; the file written, the next
+  pick is the worker's. With `research = "every"`, a send-back removes the file, and the
+  next research round gets the old brief and the round's note: refine, not restart.
+- **What it writes.** The agent `bead-researcher`, read-only like the reviewer, is given
+  the bead and the worktree (a fresh one on the base, or the branch sent back) and
+  answers in at most sixty lines under four headings: **Files** (every path to change
+  or read, from the repo root, as on disk), **Shape** (the change in the order to make
+  it, naming functions and values), **Check** (the command whose output proves it, and
+  what it must print), **Pitfalls** (what the code does that the bead's text does not
+  say). The text is the file, and every later worker prompt carries it under
+  `<research>` above the bead's own history. It is also what makes `harness:aider`
+  usable on a bead the planner could not scope: the files are now named.
+- **`BLOCKED:` from the researcher** — a claim in the bead is false, a file it names
+  does not exist — parks the bead with that as the question, before a single edit has
+  been tried. The researcher is the cheapest place to find out.
+- **Failures.** A research round that never answers holds the bead as any round does.
+  One that answers without the headings is kept as it is: a worse brief is still a
+  brief, and the worker round is where the bead is judged. Research never counts a
+  failure.
+- **On the page.** The bead sits in the dev queue with a chip, "research" or
+  "researched"; the lane panel says `research` as the role.
+
+This adds one state to [state-machine.md](state-machine.md) — **research**, a lane
+round with the bead `in_progress`, whose only exits are back to `ready` (the file
+written) or to `human` (`BLOCKED:`) or held — and no new exit anywhere else.
+
 ### Roles
 
-The list is closed: `worker`, `reviewer`, `conflict`, `brief`, `precheck`, `postmortem`.
+The list is closed: `research`, `worker`, `reviewer`, `conflict`, `brief`, `precheck`,
+`postmortem`.
 User-defined roles would dissolve the state machine; what people actually want — a
 second opinion, a cheaper first look, a different prompt — is seats, the pre-check, and
 a seat's `agent`. Each role has a default agent file and the keys that name its model
-(`worker`/`reviewer` on the stage, `conflict_worker`, `brief_model`, `precheck_model`),
+(`worker`/`reviewer` on the stage, `conflict_worker`, `brief_model`, `precheck_model`,
+`research_model`),
 all provider/model references, all subject to the same lanes and semaphores.
 
 ### The bead's say: `stage:NAME`
@@ -234,9 +282,9 @@ paid-only user with one stage and a local-only user with three read the same doc
 
 ## What does not change
 
-- The state machine: every state, every exit, the invariants, the send-back counter,
-  the stage table by failures, `on_exhaust`, holds and parks, the merge modes, the
-  watcher, adoption, targets.
+- The state machine, but for the optional research state above: every other state,
+  every exit, the invariants, the send-back counter, the stage table by failures,
+  `on_exhaust`, holds and parks, the merge modes, the watcher, adoption, targets.
 - `dev_one` and `review_one` as rounds. `review_one` runs one seat instead of one
   reviewer; the decision moves out of it into a small `quorum` function with unit tests.
 - Today's config files. Every key reads as before; `claude/*` and `aider:` keep working
@@ -269,6 +317,9 @@ paid-only user with one stage and a local-only user with three read the same doc
    markers and locks; status JSON and the page's panels. One PR.
 3. **Seats.** The reviewer list, `approvals`, `quorum`, the seats directory, per-seat
    rejoin, the PR body. One PR, with the three quorum cases.
+3b. **Research.** The key, the agent, the prompt and the file; then the round in the
+   lanes, the worker prompt carrying it, `BLOCKED:` parking, `every`. Two PRs, beside
+   the seats: they share nothing but the lanes.
 4. **Vocabulary on the page and the board.** `cost` in stats; the metered column; probe
    failures in the lane panel; `stage:NAME` and stage names. One PR.
 5. **Docs.** The README rewrite, the examples, config.md, the seeded catalogue, the
