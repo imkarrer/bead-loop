@@ -550,11 +550,17 @@ the live PR, a moved head is refused, a removed label is a withdrawn request); a
 main, `release`: the release binary as the GitHub release `main-<sha7>` at that commit
 (the last ten are kept). `main`'s protection requires the three step statuses
 (`buildkite/bead-loop/rust`, `/scripts`, `/suite`) — never the build-level one, which
-would still be pending while the automerge step runs. Buildkite posts statuses only once
-its GitHub App has been given the repo. The cargo registry and target directory live
-beside the agent's checkouts (`scripts/ci.sh`), so a build recompiles only what changed
-and a docs-only push costs a no-op build. Two Buildkite settings make the rest add up:
-"Build pull requests" and "cancel intermediate builds".
+would still be pending while the automerge step runs. **The label is a trigger, not
+only a flag**: the pipeline object also builds on the `pull_request` `labeled` event,
+filtered to the `automerge` label (homelab's `hub/pipelines/bead-loop.json`,
+`build_pull_request_labels_changed` and a `filter_condition`). So a label added after
+the build finished starts a build of its own that tests the same head and merges it; one
+added mid-build cancels that build for one that will merge; nothing depends on GitHub's
+own auto-merge, which private repos on the free plan do not have. Buildkite posts
+statuses only once its GitHub App has been given the repo. The cargo registry and target
+directory live beside the agent's checkouts (`scripts/ci.sh`), so a build recompiles only
+what changed and a docs-only push costs a no-op build. Two more pipeline settings make
+the rest add up: "Build pull requests" and "cancel intermediate builds".
 
 **The deploy is a pull, and a download, not a build.** The box the loop runs on is behind
 WSL's NAT, where the agent on ac-box cannot reach it, so `bead-loop-deploy.timer` on that

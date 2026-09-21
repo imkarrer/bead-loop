@@ -3,7 +3,9 @@
 # wait, so it runs only when every step before it passed. The opt-in is the `automerge`
 # label on the live PR, read here and not from the build: the build's copy is taken when
 # its event arrived, and the loop labels a PR a moment after opening it, so that copy is
-# usually empty. Squash, as the merges done by hand are.
+# usually empty. Squash, as the merges done by hand are. A label added after the build
+# ended is not lost: the pipeline object also builds on the `labeled` event for this
+# label (homelab hub/pipelines/bead-loop.json), and that build runs this step again.
 #
 # Two things keep this honest. The merge names the commit the build tested, and GitHub
 # refuses (409) if the PR head has moved since — or, when main requires this build's own
