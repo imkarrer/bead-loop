@@ -10,8 +10,17 @@ case $2 in
     echo https://github.com/example/repo/pull/7 ;;
   list)
     # The stub's one PR (if any) plus any extra PRs the test planted in extra-prs.json.
-    filter=.; head=; while [ $# -gt 0 ]; do case $1 in --jq) filter=$2; shift;; --head) head=$2; shift;; esac; shift; done
-    { [ -e "$TEST_CTRL/pr.json" ] && jq 'select(.state=="OPEN") | {number:7, headRefName:.head, url}' "$TEST_CTRL/pr.json"; jq ".[]" "$TEST_CTRL/extra-prs.json" 2>/dev/null; } | jq -s . | jq --arg h "$head" 'if $h == "" then . else map(select(.headRefName == $h)) end' | jq -r "$filter"
+    # --head matches a headRefName exactly, as gh's does; --search 'head:X' is a substring
+    # match, as GitHub's search qualifier is (a caller checks a hit against the real id).
+    filter=.; head=; state=; search=
+    while [ $# -gt 0 ]; do case $1 in --jq) filter=$2; shift;; --head) head=$2; shift;; --state) state=$2; shift;; --search) search=$2; shift;; esac; shift; done
+    needle=${search#head:}
+    { [ -e "$TEST_CTRL/pr.json" ] && jq '{number:7, headRefName:.head, url, state}' "$TEST_CTRL/pr.json"; jq ".[]" "$TEST_CTRL/extra-prs.json" 2>/dev/null; } \
+      | jq -s . \
+      | jq --arg h "$head" 'if $h == "" then . else map(select(.headRefName == $h)) end' \
+      | jq --arg s "$state" 'if $s == "" then . else map(select((.state // "OPEN" | ascii_downcase) == ($s | ascii_downcase))) end' \
+      | jq --arg n "$needle" 'if $n == "" then . else map(select(.headRefName | contains($n))) end' \
+      | jq -r "$filter"
     ;;
   view)
     if [ "$3" = 7 ]; then jq '{state, mergedAt: null, mergeable: (.mergeable // "MERGEABLE"), mergeStateStatus, statusCheckRollup, url}' "$TEST_CTRL/pr.json"

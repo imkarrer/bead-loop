@@ -6,7 +6,7 @@
 //! state: the PR is still asked about on every pass, and the flag clears when it moves.
 use crate::config::Repo;
 use crate::round::send_back;
-use crate::shell::{bd_close, bd_note, bd_status, gh, gh_ok, gh_out, git};
+use crate::shell::{bd_close, bd_note, bd_ready, bd_status, gh, gh_ok, gh_out, git};
 use crate::util::{date_iminutes, log, mtime, now, read_to_string, stderr_str, stdout_str, touch};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -210,6 +210,51 @@ pub fn adopt(repo: &Repo) {
     }
 }
 
+/// A bead worked by hand, or by a subagent, entirely outside the loop: its PR on
+/// `bead/<id>[-slug]` merged before `adopt` ever saw it open, so nothing closed the
+/// bead and the dev queue would hand it out again. `adopt` only catches a PR while it
+/// is still open; this catches the ones that were never caught at all. One `gh pr
+/// list` per idle bead in the dev queue — that queue is short, so nothing is cached.
+/// `--head` matches a branch name exactly, which would miss an adopted-style
+/// `bead/<id>-slug`; `--search head:...` is a substring match on GitHub's side, so a
+/// hit is still checked against `bead_id_of_branch` before it counts.
+fn close_merged_outside_loop(repo: &Repo) {
+    for id in bd_ready(repo) {
+        if repo.inflight_path(&id).exists() || repo.review_path(&id).exists() || repo.wt(&id).is_dir() {
+            continue;
+        }
+        let out = gh_out(
+            repo,
+            &[
+                "pr",
+                "list",
+                "--state",
+                "merged",
+                "--search",
+                &format!("head:bead/{id}"),
+                "--json",
+                "url,headRefName",
+                "--jq",
+                ".[] | [.headRefName, .url] | @tsv",
+            ],
+        )
+        .unwrap_or_default();
+        let url = out.lines().find_map(|line| {
+            let mut parts = line.split('\t');
+            let head = parts.next()?;
+            let url = parts.next()?;
+            (bead_id_of_branch(head).as_deref() == Some(id.as_str())).then(|| url.to_string())
+        });
+        if let Some(url) = url {
+            let reason = format!("bead-loop: {url} merged outside the loop");
+            if bd_close(repo, &id, &reason) {
+                log(&format!("{}: {id}: closed ({url} merged outside the loop)", repo.slug));
+                repo.wake();
+            }
+        }
+    }
+}
+
 /// `bead/<prefix>-<id>[.n][-slug]` → the bead id.
 pub fn bead_id_of_branch(head: &str) -> Option<String> {
     let rest = head.strip_prefix("bead/")?;
@@ -247,6 +292,7 @@ pub fn bead_id_of_branch(head: &str) -> Option<String> {
 /// `reconcile`: one pass over the merge queue.
 pub fn reconcile(repo: &Repo) {
     adopt(repo);
+    close_merged_outside_loop(repo);
     for id in repo.inflight_ids() {
         let f = repo.inflight_path(&id);
         let url = read_to_string(&f).unwrap_or_default().trim().to_string();
