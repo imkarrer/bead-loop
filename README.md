@@ -99,9 +99,18 @@ written brief: what happened, why, and the question to answer.
 
 `./install.sh` builds the binary (`cargo build --release`, through `flox activate` when
 cargo is not on PATH), puts it in `~/.local/bin`, links `skills/` and `agents/` into
-opencode, installs the user units, and seeds `~/.config/bead-loop/config.toml`. At run
-time it needs `bd`, `git`, `gh`, `opencode` and `curl`; the UI needs `node`. `flox
-activate` in this checkout provides all of them plus the Rust toolchain.
+opencode, installs the user units, seeds `~/.config/bead-loop/config.toml`, and enables
++ starts the loop (`opencode-web.service`, `bead-loop-ui.service`, `bead-supervisor.timer`
+— the timer is the keeper, see systemd/bead-supervisor.timer) so it is running when the
+script returns and comes back on its own after a crash or a reboot. Re-running it (every
+deploy) never interrupts a session in flight: `enable --now` only starts a unit that
+isn't already up. At run time it needs `bd`, `git`, `gh`, `opencode` and `curl`; the UI
+needs `node`. `flox activate` in this checkout provides all of them plus the Rust
+toolchain.
+
+The loop surviving a reboot with nobody logged in also needs **linger** for this user —
+`install.sh` tries `loginctl enable-linger` itself and tells you if it couldn't (it needs
+root): `sudo loginctl enable-linger $USER`, once.
 
 Per repo: label the beads the model may work (`bd label add <id> delegate:local`; each
 needs a DESCRIPTION naming the files and an ACCEPTANCE CRITERIA the worker can run — `bd
@@ -122,8 +131,13 @@ bead-supervisor watch                                   # the lanes, queues, par
 bead-supervisor answer ~/src/repo inq-abc.1 "use --dry-run"   # reply to a parked bead; back to the dev queue
 bead-supervisor escalate ~/src/repo inq-abc.1           # to the last stage (Claude) now
 bead-supervisor open ~/src/repo inq-abc.1               # you + Claude Code in the bead's worktree, question in hand
-systemctl --user enable --now opencode-web.service bead-loop-ui.service bead-supervisor.timer
 ```
+
+`install.sh` already started the units (see Install); by hand, the same command it runs
+is `systemctl --user enable --now opencode-web.service bead-loop-ui.service
+bead-supervisor.timer`. `systemctl --user stop bead-supervisor.timer` (or the page's
+**Off**) takes the loop back down; `gpu-mode game`/`work` toggles it and the local model
+server together where that command exists.
 
 `--help` lists the rest (`tick`, `wake`, `pause`, `priority`, `recover`, `stats`, `log`).
 The page, **<http://127.0.0.1:4097>**, shows the lanes, the scoreboard, the queues and
