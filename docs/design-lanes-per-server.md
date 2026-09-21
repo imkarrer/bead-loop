@@ -1,7 +1,7 @@
 # Design: the bead state machine, and lanes per model server
 
 Status: **built**, as `[[lanes]]` in the global config (PR #35, on the Rust supervisor;
-README: "A lane per model server"). Kept as the record of why. Written 2026-09-19, after
+docs/config.md). Kept as the record of why. Written 2026-09-19, after
 the three-queue / two-lane change (#17) and the human queue (#23), against the bash
 supervisor of the time. What differs from the proposal: lanes are keyed by model globs
 (`models = ["acbox/*"]`) rather than discovered from the stages; `state/ID` was not

@@ -1,8 +1,7 @@
 # The bead state machine: every state, every exit
 
-What the supervisor in `src/` does with a bead, state by state. `test/run.sh` drives the
-binary through every transition below with stub tools; the README's outcome table is the
-same thing by outcome. The rule the whole thing serves:
+What the supervisor in `src/` does with a bead, state by state: by outcome first, then
+every transition. `test/run.sh` drives the binary through each with stub tools.
 
 > **A bead is always in exactly one place, and every place has an exit that is either
 > automatic or a human's, and every wait has a timeout that re-reads the world.**
@@ -10,6 +9,49 @@ same thing by outcome. The rule the whole thing serves:
 A state with no exit is a deadlock. A wait with no timeout is a deadlock waiting for a
 lost signal. An infrastructure failure counted as a bead failure is a livelock: the queue
 burns through its stages while nothing is wrong with the beads.
+
+## One bead, start to finish
+
+A **round** is worker → gate (one fix round on failure) → reviewer → PR. Three things end
+a round early and send the bead **back to the dev queue**, each with a note on the bead
+saying exactly what happened and **one more failure** on its count:
+
+- the dev lane itself: the worker says `BLOCKED:`, makes no commit, times out, or the
+  gate fails twice — the branch is removed and the next round starts fresh;
+- the review lane: `REJECT:` — the branch and its worktree are *kept*; the next round's
+  worker is told to fix its commit in place, and the reviewer sees the fix on top;
+- the merge queue: CI red — same branch, kept; the next round's push updates the same PR.
+
+Two send-backs are not failures. A PR that **conflicts with the base** is nobody's
+mistake: it goes back to the dev queue on its branch with a rebase order, and that round's
+worker is `conflict_worker` — the last stage's by default, because resolving a conflict
+is judgement about two intents, not typing. And **infrastructure is never the bead's
+failure**: setup failing, git refusing the worktree, a model harness coming back with
+nothing from the model (its server down, or the server answering an error before the
+model ran), `gh` or the push refusing — the round did not happen. The bead stays in its
+queue **held** with the reason, the lane moves on to the next bead, and the held one is
+tried again five minutes later (`BEAD_LOOP_HOLD_BACKOFF`).
+
+The failure count chooses the **stage** ([config.md](config.md#stages)). Both queues are
+ordered **fewest failures first**, then bd's own order: everything is tried once before
+anything is tried twice, and a bead that keeps failing gets out of the way of the ones
+that do not. The next round's worker reads the notes of the earlier ones.
+
+Three things put a bead in the **human queue** as *parked* (`in_progress`, no more rounds
+until you act): the stages are exhausted with `on_exhaust = "park"`, the *last* stage says
+`BLOCKED:` — a claim in the bead is false, or a decision is yours — or its PR is closed
+unmerged. Before it raises the bead with you, the loop writes the **brief**
+([operating.md](operating.md#the-brief)), so what reaches you is a question, not a stack
+of notes. A bead *held* is in the human queue too, beside them, with nothing to press.
+
+**One place.** A bead is in exactly one of: the dev queue, a lane, the review queue, the
+merge queue, parked. The dev lane never takes a bead that is in review or under a PR,
+whatever bd's status says, and `answer`, `escalate` and Reopen refuse a bead in the merge
+queue — its PR is what moves it.
+
+The worker never runs `bd`; the bead's text is in its prompt and the supervisor records
+every state change in the operator's checkout. `.beads/issues.jsonl` changes there,
+uncommitted, for you to commit with your own work.
 
 ## What the state is made of
 
@@ -95,6 +137,44 @@ Two flags are orthogonal to the state and do not move a bead:
 6. **A stop cuts short, it does not judge.** TERM raises a flag before it aborts the
    sessions; a worker, gate or reviewer that comes back under it leaves the bead as it
    was — no failure, no note. A restart (the deploy's `restart` marker) aborts nothing.
+
+## What each outcome does to the bead
+
+Every row is a case in `test/run.sh`.
+
+| Outcome | Bead | Branch / PR |
+| --- | --- | --- |
+| Worker `BLOCKED:` | note with the worker's line, +1 failure; dev queue — parked if this was the last stage, with the brief's question | removed (after the brief) |
+| No commit, or the session timed out | note, +1 failure; dev queue | removed |
+| Setup fails | **held**, no failure: the reason on the bead once; retried after the backoff | removed |
+| Git refuses the worktree (the branch checked out elsewhere, a stale registration) | **held**, no failure, with git's words; the lane takes the next bead | not made |
+| Harness exits with nothing from the model — no output, or only its own error (the server down, the model not found on it, a 5xx) | **held**, no failure, with the harness's words; the lane takes the next bead | removed (dev; kept once a round had committed) / kept (review) |
+| Gate fails twice (one fix round with its output) | note with the errors, +1 failure; dev queue | removed |
+| Gate passes | in_progress; review queue | kept, in its worktree |
+| Reviewer `REJECT:` (any verdict that is not `APPROVE:`) | note with the rejection, +1 failure; dev queue — the worker fixes in place | kept |
+| Reviewer `APPROVE:` | in_progress, comment with the url; merge queue | pushed; PR opened, or the existing one updated |
+| Push or `gh pr create` refused | **held** in the review queue with gh's words | pushed / not |
+| CI green, `merge = "auto"` | closed with the PR url | squash-merged by the watcher, branch deleted |
+| CI green, `merge = "pipeline"` | closed once the pipeline has merged; **held** if it has not after 30 min | labelled `automerge` at open; the pipeline merges |
+| CI green, `merge = "manual"` | **held**: yours to merge | PR left open for you |
+| CI green, GitHub refuses the merge (branch protection) | **held** with GitHub's state | PR left open |
+| CI red | note with the failing checks, +1 failure; dev queue | kept; the next round's push updates the PR |
+| CI red on an adopted PR | one note, **held** | left open for whoever opened it |
+| CI pending for over two hours | **held**, still polled: is the agent up? | waits |
+| No checks reported | one note, **held**: merge it yourself or set `manual` | waits |
+| `gh` cannot read the PR | **held** with gh's words, still polled | waits |
+| PR conflicts with the base | note, **no failure**; dev queue — the next round is a rebase by `conflict_worker`, told to keep both sides | kept; the push updates the PR |
+| Adopted PR conflicts | left alone | whoever opened it rebases |
+| A dev-queue bead's `bead/<id>…` PR merged outside the loop (never open when `adopt` looked) | closed with the PR url | already gone |
+| Merged, but `bd close` fails | **held** with the url; the PR stays in the queue | merged |
+| Failures exhausted (`on_exhaust = "park"`) | in_progress, for you, with the brief's question | removed (after the brief) |
+| PR closed unmerged | in_progress, note with the url and the brief's question | gone |
+| The loop stopped mid dev round | reopened at the next start, **no failure** (recover) | removed |
+
+`in_progress` covers every state past the dev queue — on a lane, waiting for review, in
+CI, parked — and `bd ready` never hands it out again; `bd show` says why. Reopen a parked
+bead with `bd update <id> --status open` (or the page's Reopen) once the bead or the
+code is fixed.
 
 ## Transitions, one per line
 

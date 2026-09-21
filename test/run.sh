@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # bead-loop integration tests: the supervisor's state machine against stub
-# bd/opencode/gh (test/bin) and a real git origin. Every row of the README's
-# outcome table is a case here. Run: test/run.sh [case-name...]
+# bd/opencode/gh (test/bin) and a real git origin. Every row of the outcome table in
+# docs/state-machine.md is a case here. Run: test/run.sh [case-name...]
 #
 # What belongs here is a transition the state machine makes through its tools — a
 # round, a queue, a PR, a session — and what it leaves on the bead and on disk. The
