@@ -122,7 +122,7 @@ Two flags are orthogonal to the state and do not move a bead:
 | ready | stage's worker is `claude/*`, signed out | ready (held: "Claude signed out") | — | — | exists as a skip; **fix**: probed once per process, must be once per wake; mark held |
 | ready | stage's worker's server unreachable (devbox/acbox) | ready (held: "server X unreachable") | — | — | **new** — today: the session exits non-zero → +1 |
 | dev | setup fails | ready (held: "setup failed", lane backs off 10 min) | — | removed | **fix** — today +1, `fresh` |
-| dev | worker exits non-zero, session produced nothing (harness/infra) | ready (held) | — | removed | **new** — today +1 |
+| dev | worker exits with nothing from the model — no output, or only the harness's error events (server down, a 5xx, the model not found on it) | ready (held: the harness's words) | — | removed; kept once a round had committed (the gate-fix round) | exists (`harness::parse_transcript`; an error-only transcript was +1 until 21 Sep 2026) |
 | dev | worker exits non-zero after real work (timeout, crash mid-session) | ready | +1 | removed | exists |
 | dev | `BLOCKED:` | ready · human if last stage | +1 | removed | exists |
 | dev | no commit | ready | +1 | removed | exists |
@@ -139,7 +139,7 @@ Two flags are orthogonal to the state and do not move a bead:
 | review | review lane picks | reviewing | — | kept | exists |
 | review | reviewer is `claude/*`, signed out | review (held) | — | kept | **fix** (as above) |
 | review | `wt/ID` missing (crash, a hand `worktree remove`) | reviewing, worktree rebuilt from the branch | — | rebuilt | **new** — today: the reviewer runs in a missing dir, exits non-zero, +1 |
-| reviewing | reviewer server unreachable / exits with nothing | review (held, lane backs off) | — | kept | **new** — today +1 |
+| reviewing | reviewer exits with nothing from the model — no output, or only the harness's error events | review (held: the harness's words, lane backs off) | — | kept | exists (as above; the model not found on the server cost a bead a failure and a Sonnet review, 21 Sep 2026) |
 | reviewing | reviewer exits non-zero after work | ready | +1 | kept | exists |
 | reviewing | `REJECT:` | ready | +1 | kept | exists |
 | reviewing | `APPROVE:`, push, PR opened or updated | merge | — | pushed | exists |
