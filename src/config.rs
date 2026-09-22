@@ -251,6 +251,8 @@ pub struct Repo {
     pub conflict_worker: String,
     /// who writes the brief when a bead is parked: the last stage's worker unless set; `none` for no brief
     pub brief_model: String,
+    /// who pre-checks a round's diff before the senior reviewer sees it; `""` is off
+    pub precheck_model: String,
     pub adopt: bool,
     pub max_inflight: u64,
     pub worker_timeout: u64,
@@ -320,6 +322,7 @@ impl Repo {
             on_exhaust: cfg.str("on_exhaust", "park"),
             conflict_worker: cfg.str("conflict_worker", ""),
             brief_model: cfg.str("brief_model", ""),
+            precheck_model: cfg.str("precheck_model", ""),
             adopt: cfg.bool("adopt", true),
             max_inflight: cfg.u64("max_inflight", u64::MAX),
             worker_timeout: cfg.u64("worker_timeout", 3600),
@@ -455,6 +458,7 @@ pub fn test_repo(root: &Path, stages: &[&str]) -> Repo {
         on_exhaust: "park".into(),
         conflict_worker: String::new(),
         brief_model: String::new(),
+        precheck_model: String::new(),
         adopt: true,
         max_inflight: u64::MAX,
         worker_timeout: 60,
