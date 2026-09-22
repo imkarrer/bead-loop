@@ -64,7 +64,12 @@ on_exhaust = "park"              # after the last stage: park (for you) | repeat
 CFG
   echo "config ~/.config/bead-loop/config.toml (set repos)"
 fi
-cp "$HERE"/systemd/*.service "$HERE"/systemd/*.timer "$HOME/.config/systemd/user/"
+# Substitute the HERE path into the service files before copying them
+for service_file in "$HERE"/systemd/*.service; do
+  service_name=$(basename "$service_file")
+  sed "s|@HERE@|$HERE|g" "$service_file" > "$HOME/.config/systemd/user/$service_name"
+done
+cp "$HERE"/systemd/*.timer "$HOME/.config/systemd/user/"
 systemctl --user daemon-reload
 
 # bead-supervisor.service is the resident loop; bead-supervisor.timer is its keeper (it
