@@ -418,6 +418,50 @@ pub fn reject_block(text: &str) -> String {
     out.join("\n")
 }
 
+/// The pre-checker's prompt: the bead, the worker's report, the diff against the base —
+/// uncut, unlike the reviewer's (the caller cuts it, per bead .2).
+// No caller yet: the round does not send anything to the pre-checker until a later bead
+// wires it in.
+#[allow(dead_code)]
+pub fn precheck_prompt(json: &Value, report: &str, stat: &str, diff: &str) -> String {
+    format!(
+        "<bead>\n{}\n</bead>\n\n<worker-report>\n{report}\n</worker-report>\n\n<diff>\n{stat}{diff}\n</diff>\n\nEnd with PASS: <what you checked> on one line, or SEND BACK: <one line> followed by the 'For the worker:' block your instructions describe.",
+        render_bead(json)
+    )
+}
+
+/// The pre-checker's verdict: a `PASS:` line passes, a `SEND BACK:` line (and everything
+/// under it, as `reject_block` takes it) sends back; if both appear, SEND BACK wins — the
+/// model changed its mind downward. Neither line is `Unparsed`.
+#[allow(dead_code)]
+#[derive(Clone, Debug, PartialEq)]
+pub enum Precheck {
+    Pass,
+    SendBack(String),
+    Unparsed,
+}
+
+#[allow(dead_code)]
+pub fn precheck_verdict(text: &str) -> Precheck {
+    if text.lines().any(|l| l.starts_with("SEND BACK:")) {
+        let mut out = Vec::new();
+        let mut on = false;
+        for l in text.lines() {
+            if l.starts_with("SEND BACK:") {
+                on = true;
+            }
+            if on {
+                out.push(l);
+            }
+        }
+        return Precheck::SendBack(out.join("\n"));
+    }
+    if text.lines().any(|l| l.starts_with("PASS:")) {
+        return Precheck::Pass;
+    }
+    Precheck::Unparsed
+}
+
 /// The PR's body: the bead, its acceptance criteria quoted, the two last words.
 pub fn pr_body(id: &str, title: &str, ac: &str, worker_line: &str, reviewer_line: &str) -> String {
     let ac_quoted: String = ac.lines().map(|l| format!("> {l}")).collect::<Vec<_>>().join("\n");
@@ -973,6 +1017,27 @@ mod tests {
         assert!(block.ends_with("- How to check: grep -c fixed work.txt prints 1"), "to the end");
         assert!(!block.contains("I looked at it."), "what came before it does not");
         assert_eq!(reject_block("APPROVE: fine"), "", "nothing without a REJECT line");
+    }
+    #[test]
+    fn precheck_prompt_carries_bead_report_and_diff() {
+        let j: Value = serde_json::json!([{"id":"t-1","title":"T","description":"D"}]);
+        let p = precheck_prompt(&j, "DONE: did it", " work.txt | 1 +\n", "diff --git a/work.txt");
+        assert!(p.contains("<bead>\nid: t-1"));
+        assert!(p.contains("<worker-report>\nDONE: did it\n</worker-report>"));
+        assert!(p.contains("<diff>\n work.txt | 1 +\ndiff --git a/work.txt\n</diff>"), "stat, then the diff");
+        assert!(p.ends_with("the 'For the worker:' block your instructions describe."));
+    }
+    #[test]
+    fn precheck_verdict_reads_pass_sendback_or_neither() {
+        assert_eq!(precheck_verdict("PASS: checked the three things"), Precheck::Pass);
+        let text = "I looked.\nSEND BACK: work.txt:1 no such command in DONE\nFor the worker:\n- What is wrong: x";
+        assert_eq!(
+            precheck_verdict(text),
+            Precheck::SendBack("SEND BACK: work.txt:1 no such command in DONE\nFor the worker:\n- What is wrong: x".into())
+        );
+        assert_eq!(precheck_verdict("nothing usable here"), Precheck::Unparsed);
+        let both = "PASS: looked fine\nSEND BACK: actually no, work.txt:2";
+        assert_eq!(precheck_verdict(both), Precheck::SendBack("SEND BACK: actually no, work.txt:2".into()), "SEND BACK wins");
     }
     #[test]
     fn pr_body_quotes_the_criteria() {
