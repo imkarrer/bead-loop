@@ -18,11 +18,50 @@ pub struct Stage {
     pub timeout: Option<u64>,
 }
 
+/// A provider configuration that can be resolved from a model name.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Provider {
+    pub name: String,
+    pub model: String,
+    pub default_model: String,
+    pub default_review_model: String,
+}
+
 /// The two files as JSON objects.
 #[derive(Clone, Debug)]
 pub struct Layers {
     pub global: Value,
     pub repo: Value,
+}
+
+impl Layers {
+    /// Parse providers from the global config, returning a list of Provider structs.
+    pub fn providers(&self) -> Vec<Provider> {
+        let mut providers = Vec::new();
+        
+        // Look for providers in the global config
+        if let Some(Value::Array(provider_array)) = self.global.get("providers") {
+            for provider_value in provider_array {
+                if let Value::Object(provider_map) = provider_value {
+                    let name = provider_map.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    let model = provider_map.get("model").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    let default_model = provider_map.get("default_model").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    let default_review_model = provider_map.get("default_review_model").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    
+                    if !name.is_empty() {
+                        providers.push(Provider {
+                            name,
+                            model,
+                            default_model,
+                            default_review_model,
+                        });
+                    }
+                }
+            }
+        }
+        
+        providers
+    }
 }
 
 /// One `[targets.NAME]` table: a checkout the round works in and the GitHub repo its PR
@@ -238,6 +277,8 @@ pub struct Repo {
     pub targets: BTreeMap<String, Target>,
     /// the label prefix that names a target (config key `target_label`, default `"work"`)
     pub target_label: String,
+    /// provider configurations resolved from the global config
+    pub providers: Vec<Provider>,
     pub slug: String,
     pub label: String,
     pub merge: String,
@@ -335,6 +376,7 @@ impl Repo {
             target: String::new(),
             targets: cfg.targets(),
             target_label: cfg.str("target_label", "work"),
+            providers: cfg.providers(),
             model,
             review_model,
             stages,
@@ -344,6 +386,17 @@ impl Repo {
             beads,
             rs,
             state_dir,
+        }
+    }
+
+    /// Resolve a model name to a provider configuration if it's a provider/model format.
+    /// Returns the provider configuration or None if it's not a provider model.
+    pub fn resolve(&self, model: &str) -> Option<&Provider> {
+        if model.contains('/') {
+            let provider_name = provider_name(model);
+            self.providers.iter().find(|p| p.name == provider_name)
+        } else {
+            None
         }
     }
 
@@ -472,6 +525,7 @@ pub fn test_repo(root: &Path, stages: &[&str]) -> Repo {
         target: String::new(),
         targets: BTreeMap::new(),
         target_label: "work".into(),
+        providers: Vec::new(),
         model,
         review_model,
         stages,
@@ -496,6 +550,11 @@ pub fn need(name: &str) {
     if !crate::util::have(name) {
         die(&format!("{name} is not installed"));
     }
+}
+
+/// Extract provider name from a model string like "provider/model" or just "model".
+pub fn provider_name(model: &str) -> String {
+    model.split('/').next().unwrap_or(model).to_string()
 }
 
 /// REMOTE's HEAD branch, from the clone's `refs/remotes/REMOTE/HEAD`, else `git remote
@@ -874,5 +933,13 @@ mod tests {
         assert_eq!(out.target, "", "work: names nothing under this prefix");
         assert_eq!(out.repo, r.repo, "so it is the default target");
         let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn provider_name_extraction() {
+        assert_eq!(provider_name("claude/opus"), "claude");
+        assert_eq!(provider_name("openai/gpt-4"), "openai");
+        assert_eq!(provider_name("simple-model"), "simple-model");
+        assert_eq!(provider_name(""), "");
     }
 }
