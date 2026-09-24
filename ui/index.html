@@ -19,12 +19,16 @@
     --accent: var(--blue); --ok: var(--green); --warn: var(--yellow); --bad: var(--red); --busy: var(--cyan);
     --worker: var(--cyan); --reviewer: var(--violet);
     --mono: ui-monospace, "JetBrains Mono", SFMono-Regular, Menlo, Consolas, monospace;
+    --sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+    --quick: .15s ease-out;
   }
   * { box-sizing: border-box; }
-  html { color-scheme: dark; }
-  body { margin: 0; background: var(--bg); color: var(--ink); font: 14.5px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  html { color-scheme: dark; scrollbar-color: var(--base01) transparent; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 14.5px/1.5 var(--sans); }
   a { color: var(--accent); text-decoration: none; } a:hover { text-decoration: underline; }
   b, strong { color: var(--bright); font-weight: 600; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
 
   /* header: one bar, the units separated by rules */
   header { position: sticky; top: 0; z-index: 2; background: var(--panel); border-bottom: 1px solid var(--line-strong);
@@ -33,22 +37,53 @@
   .unit { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 0 18px; border-left: 1px solid var(--line-strong); color: var(--bright); }
   .unit:empty { display: none; }
   .unit .muted { color: var(--muted); }
-  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--base01); display: inline-block; flex: none; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--base01); display: inline-block; flex: none; transition: background-color var(--quick); }
   .dot.on { background: var(--ok); } .dot.warn { background: var(--orange); } .dot.bad { background: var(--bad); }
   .dot.busy { background: var(--busy); animation: pulse 1.6s infinite; }
   @keyframes pulse { 50% { opacity: .3; } }
 
   button { font: inherit; font-size: 13px; padding: 4px 11px; border-radius: 5px; border: 1px solid var(--line-strong);
-           background: transparent; color: var(--bright); cursor: pointer; line-height: 1.3; }
+           background: transparent; color: var(--bright); cursor: pointer; line-height: 1.3; position: relative;
+           transition: border-color var(--quick), color var(--quick), background-color var(--quick), opacity var(--quick); }
   button:hover { border-color: var(--accent); color: var(--accent); }
   button.danger:hover { border-color: var(--bad); color: var(--bad); }
   button:disabled { opacity: .45; cursor: default; }
+  button:disabled:hover { border-color: var(--line-strong); color: var(--bright); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: var(--base03); font-weight: 600; }
+  button.primary:hover { background: #3a9be0; border-color: #3a9be0; color: var(--base03); }
+  /* the lever that is pulling now: its label gives way to a spinner, in place */
+  button.busy, button.busy:disabled { color: transparent; opacity: 1; }
+  button.busy::after { content: ''; position: absolute; inset: 0; margin: auto; width: 12px; height: 12px; border-radius: 50%;
+                       border: 2px solid var(--line-strong); border-top-color: var(--accent); animation: spin .7s linear infinite; }
+  button.primary.busy::after { border-color: rgba(0, 43, 54, .35); border-top-color: var(--base03); }
+  @keyframes spin { to { transform: rotate(360deg); } }
   .seg { display: inline-flex; border: 1px solid var(--line-strong); border-radius: 5px; overflow: hidden; }
   .seg button { border: 0; border-radius: 0; } .seg button + button { border-left: 1px solid var(--line-strong); }
   .seg button.cur, .seg button.cur:hover { background: var(--accent); color: var(--base03); }
   .seg button.cur.game { background: var(--orange); }
+  /* a lever that asks first: the button gives way to its question and a yes, in place;
+     Escape or Cancel puts the button back */
+  .confirm { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; padding: 3px 4px 3px 10px; border-radius: 6px;
+             border: 1px solid var(--yellow); background: rgba(181, 137, 0, .1); color: var(--base2); font-size: 13px;
+             white-space: normal; text-align: left; vertical-align: middle; animation: rise var(--quick); }
+  .confirm .q { max-width: 52ch; line-height: 1.35; }
+  .confirm .yes { background: var(--yellow); border-color: var(--yellow); color: var(--base03); font-weight: 600; }
+  .confirm .yes:hover { background: #c99a0a; border-color: #c99a0a; color: var(--base03); }
+  .confirm .yes.danger { background: var(--bad); border-color: var(--bad); color: var(--base3); }
+  .confirm .yes.danger:hover { background: #e8433f; border-color: #e8433f; color: var(--base3); }
+  .confirm .no { border-color: transparent; color: var(--muted); }
+  @keyframes rise { from { opacity: 0; transform: translateY(3px); } }
+  /* what a lever said, at the bottom right for a moment: an error stays longer */
+  #toasts { position: fixed; right: 16px; bottom: 16px; z-index: 5; display: grid; gap: 8px; max-width: min(440px, calc(100vw - 32px)); }
+  .toast { display: flex; gap: 10px; align-items: flex-start; padding: 9px 10px 9px 12px; border-radius: 8px; background: var(--panel);
+           border: 1px solid var(--line-strong); border-left: 3px solid var(--accent); color: var(--base2); font-size: 13px; line-height: 1.4;
+           box-shadow: 0 8px 24px rgba(0, 0, 0, .35); animation: rise .18s ease-out; }
+  .toast.ok { border-left-color: var(--ok); } .toast.bad { border-left-color: var(--bad); } .toast.warn { border-left-color: var(--yellow); }
+  .toast .x { margin-left: auto; border: 0; padding: 0 4px; color: var(--muted); font-size: 16px; line-height: 1; flex: none; }
+  .toast .x:hover { color: var(--bright); }
 
-  main { padding: 20px; max-width: 1400px; margin: 0 auto; display: grid; gap: 18px; }
+  main { padding: 20px; max-width: 1400px; margin: 0 auto; display: grid; gap: 18px; transition: opacity .4s; }
+  body.stale main { opacity: .55; }  /* the stream is down: what is shown is as of the footer's time */
   .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px 20px; }
   .card h2 { margin: 0; font-size: 17px; color: var(--base2); font-weight: 600; display: flex; gap: 12px; align-items: baseline; flex-wrap: wrap; }
   .card h3 { margin: 18px 0 8px; font-size: 11.5px; text-transform: uppercase; letter-spacing: .1em; color: var(--muted); font-weight: 600; }
@@ -71,7 +106,7 @@
   pre.hist { margin: 2px 0 8px; font: 12px/1.55 var(--mono); color: var(--muted); white-space: pre-wrap; }
   tr.sub td { border-top: 0; padding-top: 0; } tr.sub td pre.hist { margin-top: 0; }
   /* the rounds: one block each — who, when, what stopped it in full, and its logs to open in place */
-  .rounds { margin: 2px 0 8px; display: grid; gap: 8px; max-width: 900px; }
+  .rounds { margin: 2px 0 8px; display: grid; gap: 8px; max-width: 900px; animation: rise var(--quick); }
   .round { border-left: 2px solid var(--line-strong); padding: 2px 0 2px 10px; }
   .round .head { font: 500 12px var(--mono); color: var(--bright); display: flex; gap: 10px; flex-wrap: wrap; align-items: baseline; }
   .round .head .muted { font-weight: 400; }
@@ -79,14 +114,15 @@
   .round .logs { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; font-size: 12px; color: var(--muted); }
   button.link { font: 500 12px var(--mono); padding: 0 6px; border-color: var(--line); color: var(--muted); line-height: 18px; }
   button.link:hover, button.link.on { color: var(--accent); border-color: var(--accent); }
-  pre.logview { margin: 4px 0 2px; font: 11.5px/1.5 var(--mono); color: var(--ink); white-space: pre-wrap; max-height: 40vh; overflow: auto; background: var(--base03); padding: 8px 10px; border-radius: 6px; }
+  pre.logview { margin: 4px 0 2px; font: 11.5px/1.5 var(--mono); color: var(--ink); white-space: pre-wrap; max-height: 40vh; overflow: auto;
+                background: var(--base03); padding: 8px 10px; border-radius: 6px; scrollbar-width: thin; animation: rise var(--quick); }
   pre.logview .t { color: var(--muted); } pre.logview .tool { color: var(--blue); } pre.logview .said { color: var(--base1); }
   /* the question a parked bead stops on: the one thing on the page that is yours to answer */
   .ask { border-left: 3px solid var(--yellow); padding: 6px 12px; margin: 4px 0 8px; background: rgba(181, 137, 0, .07); border-radius: 0 6px 6px 0; max-width: 900px; }
   .ask .head { font-size: 11.5px; text-transform: uppercase; letter-spacing: .1em; color: var(--yellow); font-weight: 600; }
   .ask .head .muted { text-transform: none; letter-spacing: 0; font-weight: 400; margin-left: 8px; }
   .ask pre.text { margin: 4px 0 2px; color: var(--base2); font-size: 13px; }
-  .fold { margin: 2px 0; }
+  .fold { margin: 2px 0; } .fold > pre { animation: rise var(--quick); }
 
   table { border-collapse: collapse; width: 100%; }
   td, th { text-align: left; padding: 7px 12px 7px 0; vertical-align: top; border-top: 1px solid var(--line); }
@@ -97,6 +133,7 @@
   td.id { color: var(--accent); white-space: nowrap; }
   .muted { color: var(--muted); }
   td.act { text-align: right; white-space: nowrap; }
+  td.act .confirm { white-space: normal; }
   td.title { color: var(--ink); max-width: 0; width: 100%; }
   td.title .t { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   td.fit { white-space: nowrap; }
@@ -104,7 +141,7 @@
   /* the two lanes: what each is on right now, readable from across the room */
   .lanes { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 14px; }
   @media (max-width: 800px) { .lanes { grid-template-columns: 1fr; } }
-  .lane { padding: 14px 18px; border-radius: 8px; background: var(--base03); border-left: 4px solid var(--worker); min-height: 96px; }
+  .lane { padding: 14px 18px; border-radius: 8px; background: var(--base03); border-left: 4px solid var(--worker); min-height: 96px; transition: border-color .3s; }
   .lane.review { border-left-color: var(--reviewer); }
   .lane.idle { border-left-color: var(--base01); }
   .lane .label { font-size: 11.5px; text-transform: uppercase; letter-spacing: .12em; color: var(--muted); font-weight: 600; }
@@ -126,8 +163,17 @@
   tr.sub td.why { border-top: 0; padding-top: 0; padding-bottom: 10px; font-size: 13px; color: var(--ink); white-space: normal; line-height: 1.5; max-width: 900px; }
   tr.sub td.why code { font-size: 12px; }
   h3.human { color: var(--yellow); }
-  .reply { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 8px; }
-  .reply textarea { flex: 1 1 360px; font: 13px/1.45 var(--sans); padding: 6px 8px; border: 1px solid var(--line-strong); border-radius: 5px; background: var(--base03); color: var(--bright); resize: vertical; }
+  /* the box you write in: full width, grows with the text, keeps what you typed across
+     every push (the page is patched, not rebuilt) and across a reload (a draft per box) */
+  .reply { display: grid; gap: 8px; margin-top: 8px; max-width: 900px; animation: rise var(--quick); }
+  .reply textarea { width: 100%; font: 13px/1.45 var(--sans); padding: 7px 9px; border: 1px solid var(--line-strong); border-radius: 6px;
+                    background: var(--base03); color: var(--bright); resize: vertical; field-sizing: content; min-height: calc(2 * 1.45em + 16px); max-height: 40vh;
+                    transition: border-color var(--quick); }
+  .reply textarea:focus { border-color: var(--accent); outline: none; }
+  .reply textarea::placeholder { color: var(--base01); }
+  .reply .actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .reply .actions .alt { margin-left: auto; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; color: var(--muted); font-size: 12.5px; }
+  .reply .hint { color: var(--muted); font-size: 12px; }
   .reply code.cmd { font: 12px var(--mono); color: var(--bright); background: var(--base03); padding: 3px 7px; border-radius: 4px; user-select: all; }
 
 
@@ -148,7 +194,7 @@
   .bars { display: grid; grid-template-columns: max-content 1fr max-content; gap: 5px 10px; align-items: center; font-size: 13px; }
   .bars .k { color: var(--ink); white-space: nowrap; } .bars .n { color: var(--bright); font: 500 12.5px var(--mono); text-align: right; }
   .bars .bar { height: 10px; border-radius: 3px; background: rgba(38, 139, 210, .18); overflow: hidden; }
-  .bars .bar i { display: block; height: 100%; background: var(--blue); border-radius: 3px; }
+  .bars .bar i { display: block; height: 100%; background: var(--blue); border-radius: 3px; transition: width .4s; }
   .score-cols .note { font-size: 12.5px; color: var(--muted); margin-top: 8px; line-height: 1.5; }
   td.num { text-align: right; font: 500 13px var(--mono); white-space: nowrap; color: var(--bright); }
   th.num { text-align: right; white-space: nowrap; }
@@ -159,12 +205,12 @@
   .card h3.log { display: flex; align-items: center; }
   .card h3.log .opt { margin-left: auto; display: flex; align-items: center; gap: 6px; text-transform: none; letter-spacing: 0; font-weight: 400; font-size: 12.5px; cursor: pointer; }
   .card h3.log .opt input { margin: 0; accent-color: var(--accent); }
-  pre.log { margin: 0; font: 12.5px/1.6 var(--mono); white-space: pre-wrap; max-height: 44vh; overflow: auto; color: var(--ink); }
+  pre.log { margin: 0; font: 12.5px/1.6 var(--mono); white-space: pre-wrap; max-height: 44vh; overflow: auto; color: var(--ink); scrollbar-width: thin; }
   pre.log .t { color: var(--muted); }
   pre.log .good { color: var(--green); } pre.log .warn { color: var(--yellow); } pre.log .bad { color: var(--orange); }
   pre.log .pick { color: var(--blue); } pre.log .rev { color: var(--violet); } pre.log .sys { color: var(--muted); }
   .banner { background: rgba(220, 50, 47, .12); border: 1px solid var(--bad); color: var(--bright); padding: 10px 14px; border-radius: 8px; }
-  .banner.signin { margin: 16px 20px 0; background: rgba(181, 137, 0, .12); border-color: var(--warn); }
+  .banner.signin { margin: 16px 20px 0; background: rgba(181, 137, 0, .12); border-color: var(--warn); animation: rise var(--quick); }
   .banner.signin ol { margin: 6px 0 0; padding-left: 22px; } .banner.signin li { margin: 4px 0; }
   .banner.signin input { font: 13px var(--mono); padding: 4px 8px; border: 1px solid var(--line-strong); border-radius: 5px; background: var(--base03); color: var(--bright); }
   h2 .prio { font-size: 12px; font-weight: 400; margin-left: 8px; vertical-align: middle; }
@@ -172,6 +218,7 @@
   .why pre.text { margin: 4px 0 8px; white-space: pre-wrap; font: 12.5px/1.55 var(--mono); color: var(--ink); }
   footer { color: var(--muted); font-size: 12px; text-align: right; padding: 0 20px 20px; }
   .empty { color: var(--muted); font-style: italic; }
+  main > .empty { text-align: center; padding: 40px 0; }
 </style>
 </head>
 <body>
@@ -187,61 +234,180 @@
 <div id="signin" class="banner signin" hidden></div>
 <main id="main"><div class="empty">loading…</div></main>
 <footer id="foot"></footer>
+<div id="toasts"></div>
 <script>
 'use strict';
 const $ = (id) => document.getElementById(id);
 // js(v): a JavaScript literal for use inside an onclick="…" attribute: JSON, then the
 // quotes HTML-escaped, so the attribute is not cut short at the first inner ".
 const js = (v) => esc(JSON.stringify(v));
+// lit(o): an object literal for the same place, the keys bare — {repo:"…",id:"…"}.
+const lit = (o) => `{${Object.entries(o || {}).map(([k, v]) => `${k}:${js(v)}`).join(',')}}`;
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const ago = (t, now) => { const d = Math.max(0, now - t); return d < 90 ? `${d}s` : d < 5400 ? `${Math.floor(d / 60)}m` : `${Math.floor(d / 3600)}h${String(Math.floor((d % 3600) / 60)).padStart(2, '0')}`; };
 const clock = (t) => new Date(t * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
 // systemd prints "Sat 2026-09-19 03:50:00 UTC"; Date.parse wants the weekday gone.
 const systemdTime = (s) => { if (!s) return null; const d = Date.parse(s.replace(/^\w+ /, '')); return Number.isNaN(d) ? null : Math.floor(d / 1000); };
 
-let last = null, busyAction = false;
-async function act(name, body, confirmText) {
-  if (confirmText && !confirm(confirmText)) return;
-  busyAction = true; render();
+// ---- the DOM: patched, never replaced ---------------------------------------------------
+// Every render writes the page as one string — simple to write, simple to test — but the
+// browser is not told to throw the old tree away: the string is parsed off-screen and
+// the live tree patched to match it, node by node. What the string does not describe
+// stays as it was: the text in a box you are typing in and the cursor in it, a hover, a
+// button waiting on your yes, how far down a log you have read. Children match by their
+// data-key or id when they carry one (a row for a bead, a lane, a toast), else by tag and
+// position. A textarea's or input's value is yours, never the markup's. Under the test
+// stub there is no DOM, and the string is the element's innerHTML.
+function patch(el, html) {
+  if (typeof document.createElement !== 'function') { el.innerHTML = html; return; }
+  const t = document.createElement('template'); t.innerHTML = html;
+  morphChildren(el, t.content);
+}
+const keyOf = (n) => n.nodeType === 1 ? (n.getAttribute('data-key') || n.id || '') : '';
+const alike = (a, b) => a.nodeType === b.nodeType && (a.nodeType !== 1 || (a.tagName === b.tagName && !keyOf(a) && !keyOf(b)));
+function morph(a, b) {
+  if (a.nodeType !== 1) { if (a.nodeValue !== b.nodeValue) a.nodeValue = b.nodeValue; return; }
+  for (const { name } of [...a.attributes]) if (!b.hasAttribute(name)) a.removeAttribute(name);
+  for (const { name, value } of [...b.attributes]) if (a.getAttribute(name) !== value) a.setAttribute(name, value);
+  if (a.tagName === 'TEXTAREA' || a.tagName === 'INPUT') return;
+  morphChildren(a, b);
+}
+function morphChildren(a, b) {
+  const wanted = new Set([...b.childNodes].map(keyOf).filter(Boolean));
+  const drop = (n) => { const next = n.nextSibling; a.removeChild(n); return next; };
+  let cur = a.firstChild;
+  for (const want of [...b.childNodes]) {
+    const k = keyOf(want);
+    // a keyed node at the cursor that the new page no longer names is gone, now, so the
+    // node behind it can meet its match without being moved
+    while (cur && keyOf(cur) && !wanted.has(keyOf(cur))) cur = drop(cur);
+    let have = null;
+    if (k) { for (let x = cur; x; x = x.nextSibling) if (keyOf(x) === k) { have = x; break; } }
+    else if (cur && alike(cur, want)) have = cur;
+    if (!have) { a.insertBefore(want, cur); continue; }
+    if (have !== cur) {
+      // the match is further down: what lies before it is stale unless a wanted key,
+      // in which case the match moves up instead (a moved node loses its focus)
+      let stale = true;
+      for (let x = cur; x !== have; x = x.nextSibling) if (keyOf(x) && wanted.has(keyOf(x))) { stale = false; break; }
+      if (stale) { while (cur !== have) cur = drop(cur); } else a.insertBefore(have, cur);
+    }
+    if (have === cur) cur = cur.nextSibling;
+    morph(have, want);
+  }
+  while (cur) cur = drop(cur);
+}
+
+// ---- the levers -------------------------------------------------------------------------
+// One POST each. A lever that asks first (Stop, Off, Game, Abort, Work with Claude) is
+// not a dialog: the button gives way to its question and a yes, in place, until you
+// answer or press Escape. While a lever is pulling, its label gives way to a spinner and
+// the others wait. What it said comes back as a toast; an error stays until dismissed.
+// `text` is not part of a lever's identity: the note and the box it came from are one.
+let last = null, busy = null, pending = null;
+const key = (name, body) => { const { text, ...rest } = body || {}; return `${name} ${JSON.stringify(rest)}`; };
+window.act = async function act(name, body, ask) {
+  const k = key(name, body);
+  if (ask && pending !== k) { pending = k; render(); focus('.confirm .yes'); return false; }
+  pending = null; busy = k; render();
+  let ok = false;
   try {
     const r = await fetch(`/api/${name}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body || {}) });
-    const j = await r.json();
-    if (!r.ok) alert(j.error || r.statusText);
-    else if (name === 'claude_login' && j.url) { if (last) { last.login = { url: j.url }; render(); } }
-  } catch (e) { alert(e.message); }
-  busyAction = false; render();
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) toast(j.error || r.statusText, 'bad');
+    else {
+      ok = true;
+      if (name === 'claude_login' && j.url && last) last.login = { url: j.url };
+      if (SAID[name]) toast(SAID[name](body || {}), 'ok');
+    }
+  } catch (e) { toast(e.message, 'bad'); }
+  busy = null; render();
+  return ok;
+};
+window.unask = () => { pending = null; render(); };
+const focus = (sel) => { const el = document.querySelector && document.querySelector(sel); if (el) el.focus(); };
+// What a lever leaves that the next push does not show by itself.
+const SAID = {
+  note: (b) => `noted on ${b.id} — its next round reads it`,
+  answer: (b) => `${b.id} answered — back to the dev queue on the loop's next look`,
+  decide: (b) => `${b.id} closed with your answer; what waited on it is ready`,
+  wake: () => 'the lanes look at their queues now',
+  claude_code: () => 'Claude is signed in; the beads waiting on it can go',
+};
+// lever(label, name, body, {ask, cls, title, off, send}): the button for one POST, in
+// every state it has — plain, asking, pulling, or off with the reason as its title. With
+// `send`, the id of the box whose text goes along, and Ctrl+Enter in the box presses it.
+function lever(label, name, body, o = {}) {
+  const k = key(name, body);
+  if (o.ask && pending === k) return confirmStrip(label, name, body, o.ask, o.cls);
+  const cls = [o.cls, busy === k ? 'busy' : ''].filter(Boolean).join(' ');
+  const on = o.send ? `send('${name}',${lit(body)},${js(o.send)})` : `act('${name}',${lit(body)}${o.ask ? `,${js(o.ask)}` : ''})`;
+  return `<button${cls ? ` class="${cls}"` : ''}${busy || o.off ? ' disabled' : ''}${o.title ? ` title="${esc(o.title)}"` : ''} onclick="${on}">${label}</button>`;
 }
-window.act = act;
+const confirmStrip = (label, name, body, ask, cls) => `<span class="confirm" data-key="confirm"><span class="q">${esc(ask)}</span><button class="yes ${cls || ''}" onclick="act('${name}',${lit(body)})">${label}</button><button class="no" onclick="unask()">Cancel</button></span>`;
+// send(name, body, boxId): the box's text with the lever; an empty box is told so here,
+// not by the server. Sent, the box is cleared and its draft forgotten; a note's box closes.
+window.send = async (name, body, boxId) => {
+  const box = $(boxId), text = ((box && box.value) || '').trim();
+  if (!text) { toast(name === 'note' ? 'write the note first' : 'write the answer first', 'warn'); if (box && box.focus) box.focus(); return; }
+  if (await act(name, { ...body, text })) { forgetDraft(boxId); if (box) box.value = ''; if (name === 'note') openNote.delete(body.id); render(); }
+};
+// A draft per box, in the browser: what you typed survives a reload of the page, not
+// only a push. Kept as you type, dropped when sent or cleared.
+const draftKey = (id) => `draft:${id}`;
+window.draft = (el) => { try { if (el.value) localStorage.setItem(draftKey(el.id), el.value); else localStorage.removeItem(draftKey(el.id)); } catch { /* no storage: kept across pushes all the same */ } };
+const savedDraft = (id) => { try { return localStorage.getItem(draftKey(id)) || ''; } catch { return ''; } };
+const forgetDraft = (id) => { try { localStorage.removeItem(draftKey(id)); } catch { /* nothing to forget */ } };
+const box = (id, placeholder) => `<textarea id="${esc(id)}" rows="2" placeholder="${esc(placeholder)}" oninput="draft(this)">${esc(savedDraft(id))}</textarea>`;
+window.copy = async (text) => { try { await navigator.clipboard.writeText(text); toast('copied', 'ok'); } catch (e) { toast(`could not copy: ${e.message}`, 'bad'); } };
+// Toasts: what a lever said, bottom right, gone by themselves — an error waits longer.
+const toasts = []; let toastN = 0;
+function toast(text, kind) {
+  const t = { id: ++toastN, text, kind }; toasts.push(t); renderToasts();
+  setTimeout(() => { const i = toasts.indexOf(t); if (i >= 0) { toasts.splice(i, 1); renderToasts(); } }, kind === 'bad' ? 15000 : 5000);
+}
+window.dismiss = (id) => { const i = toasts.findIndex((t) => t.id === id); if (i >= 0) toasts.splice(i, 1); renderToasts(); };
+const renderToasts = () => patch($('toasts'), toasts.map((t) => `<div class="toast ${t.kind}" data-key="${t.id}"><span>${esc(t.text)}</span><button class="x" onclick="dismiss(${t.id})" title="dismiss">×</button></div>`).join(''));
+// Escape puts a waiting button back; Ctrl+Enter (⌘⏎) in a box presses its lever.
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && pending) return unask();
+  if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && e.target && e.target.tagName === 'TEXTAREA') {
+    const b = e.target.closest('.reply') && e.target.closest('.reply').querySelector('button.primary');
+    if (b) { e.preventDefault(); b.click(); }
+  }
+});
 
 function gpu(s) {
   const g = s.gpu;
-  if (!g || !g.available) { $('gpu').innerHTML = ''; return; }
-  const dis = busyAction ? 'disabled' : '';
+  if (!g || !g.available) { patch($('gpu'), ''); return; }
   // game: the loop and the model server are stopped for the GPU; work: running, and the
   // guard may flip to game by itself when it sees one (then `by` says auto).
-  $('gpu').innerHTML = `<span class="dot ${g.mode === 'game' ? 'warn' : 'on'}"></span>GPU ${esc(g.mode)}<span class="muted"> (${esc(g.by)})</span>
-    <span class="seg"><button class="${g.mode === 'work' ? 'cur' : ''}" ${dis} onclick="act('gpu',{mode:'work'})">Work</button><button class="${g.mode === 'game' ? 'cur game' : ''}" ${dis} onclick="act('gpu',{mode:'game'},'Game mode: stop the loop (aborting its session) and the local model server?')">Game</button></span>`;
+  const ask = 'Game mode stops the loop (aborting its sessions) and the local model server, to free the GPU.';
+  const game = pending === key('gpu', { mode: 'game' });
+  patch($('gpu'), `<span class="dot ${g.mode === 'game' ? 'warn' : 'on'}"></span>GPU ${esc(g.mode)}<span class="muted"> (${esc(g.by)})</span>
+    <span class="seg"><button class="${g.mode === 'work' ? 'cur' : ''}" ${busy ? 'disabled' : ''} onclick="act('gpu',{mode:'work'})">Work</button><button class="${g.mode === 'game' ? 'cur game' : ''}" ${busy ? 'disabled' : ''} onclick="act('gpu',{mode:'game'},${js(ask)})">Game</button></span>${game ? confirmStrip('Game', 'gpu', { mode: 'game' }, ask, 'danger') : ''}`);
 }
 // The last stage is Claude on this box; say when it cannot run, because a round there
 // would otherwise fail on the spot and the bead loop back to stage 1 unexplained.
 function claude(s) {
-  const c = s.claude, dis = busyAction ? 'disabled' : '';
+  const c = s.claude;
   const out = $('signedout');
   if (c && !c.loggedIn && !s.login) {
     out.hidden = false;
-    out.innerHTML = `<b>Claude is signed out on this box.</b> The ${esc(s.repos.map((r) => r.stages.filter((st) => /^claude\//.test(st.worker)).map((st) => st.worker)).flat()[0] || 'claude/*')} stage cannot run: beads on it wait in their queue, and Work with Claude is off, until you <button ${dis} onclick="act('claude_login')">Sign in</button> — a link to open and a code to paste, right here.`;
+    patch(out, `<b>Claude is signed out on this box.</b> The ${esc(s.repos.map((r) => r.stages.filter((st) => /^claude\//.test(st.worker)).map((st) => st.worker)).flat()[0] || 'claude/*')} stage cannot run: beads on it wait in their queue, and Work with Claude is off, until you ${lever('Sign in', 'claude_login', {})} — a link to open and a code to paste, right here.`);
   } else out.hidden = true;
-  $('claude').innerHTML = !c ? '' : c.loggedIn ? `<span class="dot on"></span>Claude <span class="muted">signed in${c.method ? ' · ' + esc(c.method) : ''}</span>`
-    : `<span class="dot bad"></span>Claude <span class="chip bad">signed out</span> <button ${dis} onclick="act('claude_login')">Sign in</button>`;
-  // The sign-in in progress, as a banner: the link to open, the box for the code.
+  patch($('claude'), !c ? '' : c.loggedIn ? `<span class="dot on"></span>Claude <span class="muted">signed in${c.method ? ' · ' + esc(c.method) : ''}</span>`
+    : `<span class="dot bad"></span>Claude <span class="chip bad">signed out</span> ${lever('Sign in', 'claude_login', {})}`);
+  // The sign-in in progress, as a banner: the link to open, the box for the code. Built
+  // once per url — the code you are typing is not the markup's to touch.
   const b = $('signin');
-  if (!s.login) { b.hidden = true; return; }
+  if (!s.login) { b.hidden = true; delete b.dataset.url; return; }
   b.hidden = false;
   if (b.dataset.url !== s.login.url) {
     b.dataset.url = s.login.url;
     b.innerHTML = `<b>Sign Claude in</b> — the claude/* stage fails until this is done.
       <ol><li><a href="${esc(s.login.url)}" target="_blank" rel="noopener">Open the sign-in page ↗</a> and sign in with the account that has the subscription.</li>
-      <li>Paste the code it shows: <input id="code" class="mono" size="44" placeholder="code" autocomplete="off"> <button onclick="act('claude_code',{code:document.getElementById('code').value})">Finish sign-in</button> <button class="danger" onclick="act('claude_cancel')">Cancel</button></li></ol>`;
+      <li>Paste the code it shows: <input id="code" class="mono" size="44" placeholder="code" autocomplete="off"> <button class="primary" onclick="act('claude_code',{code:document.getElementById('code').value})">Finish sign-in</button> <button class="danger" onclick="act('claude_cancel')">Cancel</button></li></ol>`;
   }
 }
 // The loop is resident: bead-supervisor.service stays up, its lanes on the bell when
@@ -250,16 +416,16 @@ function claude(s) {
 // (the keeper brings it back in a minute — a breather) or Off (keeper too), and Wake.
 function header(s) {
   gpu(s); claude(s);
-  const t = s.timer, v = s.service, dis = busyAction ? 'disabled' : '';
+  const t = s.timer, v = s.service;
   const running = v.available && (v.active === 'active' || v.active === 'activating');
   const since = systemdTime(v.since);
   const working = s.repos.flatMap((r) => Object.entries(r.lanes).map(([k, l]) => `${k} ${l.id}`)).join(' · ');
-  $('timer').innerHTML = !v.available ? `<span class="dot"></span><span class="muted">no systemd here</span>` : running
-    ? `<span class="dot on"></span>loop up${since ? ` ${ago(since, s.now)}` : ''}${working ? ` — ${esc(working)}` : ' — lanes on the bell'} <button ${dis} onclick="act('wake')" title="every lane looks at its queue now (it would within a second anyway)">Wake</button> <button class="danger" ${dis} onclick="act('stop',{},'Stop the loop? It aborts the model sessions it is on; the rounds are reopened with no failure when it starts again — in a minute, unless you turn it off.')">Stop</button>`
-    : `<span class="dot ${v.result && v.result !== 'success' ? 'bad' : ''}"></span>loop down${v.result && v.result !== 'success' ? ` (last: ${esc(v.result)})` : ''} <button ${dis} onclick="act('loop',{on:true})">Start</button>`;
-  $('tick').innerHTML = !t.available ? '' : t.active === 'active'
-    ? `<span class="dot on"></span>keeper on <button ${dis} onclick="act('loop',{on:false},'Turn the loop off? It stops now and stays down until you start it.')" title="stop the loop and its keeper">Off</button>`
-    : `<span class="dot"></span>keeper off${running ? ' — the loop will not come back if it stops' : ''} <button ${dis} onclick="act('timer',{on:true})">Keeper on</button>`;
+  patch($('timer'), !v.available ? `<span class="dot"></span><span class="muted">no systemd here</span>` : running
+    ? `<span class="dot on"></span>loop up${since ? ` ${ago(since, s.now)}` : ''}${working ? ` — ${esc(working)}` : ' — lanes on the bell'} ${lever('Wake', 'wake', {}, { title: 'every lane looks at its queue now (it would within a second anyway)' })} ${lever('Stop', 'stop', {}, { cls: 'danger', ask: 'Stop the loop? It aborts the sessions it is on; the rounds are reopened with no failure when it comes back — in a minute, unless you turn it off.' })}`
+    : `<span class="dot ${v.result && v.result !== 'success' ? 'bad' : ''}"></span>loop down${v.result && v.result !== 'success' ? ` (last: ${esc(v.result)})` : ''} ${lever('Start', 'loop', { on: true })}`);
+  patch($('tick'), !t.available ? '' : t.active === 'active'
+    ? `<span class="dot on"></span>keeper on ${lever('Off', 'loop', { on: false }, { title: 'stop the loop and its keeper', ask: 'Turn the loop off? It stops now and stays down until you start it.' })}`
+    : `<span class="dot"></span>keeper off${running ? ' — the loop will not come back if it stops' : ''} ${lever('Keeper on', 'timer', { on: true })}`);
 }
 
 // 'rejoin': a restart found this session still running and the loop is already polling
@@ -280,7 +446,7 @@ const failChip = (n) => n ? `<span class="chip n" title="sent back to dev ${n} t
 // on every push (and every 10 s) leaves them as they were.
 const openHist = new Set();
 window.toggleHist = (id) => { if (!openHist.delete(id)) openHist.add(id); render(); };
-const histToggle = (b) => !b.failures ? '' : ` <button class="hist" onclick="toggleHist('${esc(b.id)}')" title="what each round left">${openHist.has(b.id) ? '▾' : '▸'} ${b.failures} round${b.failures > 1 ? 's' : ''}</button>`;
+const histToggle = (b) => !b.failures ? '' : ` <button class="hist${openHist.has(b.id) ? ' on' : ''}" onclick="toggleHist('${esc(b.id)}')" title="what each round left">${openHist.has(b.id) ? '▾' : '▸'} ${b.failures} round${b.failures > 1 ? 's' : ''}</button>`;
 // Each round as the loop recorded it: who ran it, on which stage, when, the whole note
 // (the BLOCKED line, the rejection with its work order, the gate's output) and the
 // round's log files — each opens in place, fetched from the server once. Rounds from
@@ -312,10 +478,10 @@ function renderLog(text, file) {
   }).filter(Boolean).join('\n') || '(nothing the log renders)';
 }
 const logBtns = (r, files) => (files || []).map((f) => { const k = `${r.repo}\n${f}`; return `<button class="link ${openLog.has(k) ? 'on' : ''}" onclick="toggleLog(${js(r.repo)},${js(f)})" title="${esc(f)}">${openLog.has(k) ? '▾' : '▸'} ${esc(logLabel(f))}</button>`; }).join('');
-const logViews = (r, files) => (files || []).filter((f) => openLog.has(`${r.repo}\n${f}`)).map((f) => { const t = logText.get(`${r.repo}\n${f}`); return `<pre class="logview">${t == null ? '<span class="t">loading…</span>' : renderLog(t, f)}</pre>`; }).join('');
-const roundBlock = (r, x) => `<div class="round"><div class="head">${x.round != null ? `round ${esc(x.round)}` : ''}${x.model ? ` <span class="chip worker">${esc(x.model)}</span>` : ''}${x.stage ? `<span class="muted">stage ${esc(x.stage)}</span>` : ''}${x.when ? `<span class="muted">${esc(String(x.when).replace('T', ' ').slice(0, 16))}</span>` : ''}</div><pre class="note">${esc(x.note || '')}</pre>${(x.logs || []).length ? `<div class="logs">logs: ${logBtns(r, x.logs)}</div>${logViews(r, x.logs)}` : ''}</div>`;
-const histList = (b, r) => !openHist.has(b.id) ? '' : (b.history || []).length ? `<div class="rounds">${b.history.map((x) => roundBlock(r, x)).join('')}</div>` : '<pre class="hist">no notes kept for these rounds</pre>';
-const histRow = (b, span, r) => openHist.has(b.id) ? `<tr class="sub"><td></td><td colspan="${span}">${histList(b, r)}</td></tr>` : '';
+const logViews = (r, files) => (files || []).filter((f) => openLog.has(`${r.repo}\n${f}`)).map((f) => { const t = logText.get(`${r.repo}\n${f}`); return `<pre class="logview" data-key="${esc(f)}">${t == null ? '<span class="t">loading…</span>' : renderLog(t, f)}</pre>`; }).join('');
+const roundBlock = (r, x, i) => `<div class="round" data-key="${x.round != null ? esc(x.round) : `r${i}`}"><div class="head">${x.round != null ? `round ${esc(x.round)}` : ''}${x.model ? ` <span class="chip worker">${esc(x.model)}</span>` : ''}${x.stage ? `<span class="muted">stage ${esc(x.stage)}</span>` : ''}${x.when ? `<span class="muted">${esc(String(x.when).replace('T', ' ').slice(0, 16))}</span>` : ''}</div><pre class="note">${esc(x.note || '')}</pre>${(x.logs || []).length ? `<div class="logs">logs: ${logBtns(r, x.logs)}</div>${logViews(r, x.logs)}` : ''}</div>`;
+const histList = (b, r) => !openHist.has(b.id) ? '' : (b.history || []).length ? `<div class="rounds">${b.history.map((x, i) => roundBlock(r, x, i)).join('')}</div>` : '<pre class="hist">no notes kept for these rounds</pre>';
+const histRow = (b, span, r) => openHist.has(b.id) ? `<tr class="sub" data-key="${esc(b.id)}:hist"><td></td><td colspan="${span}">${histList(b, r)}</td></tr>` : '';
 // Folds: the brief and the bead's notes under a parked bead, closed by default, remembered per bead.
 const openFold = new Set();
 window.toggleFold = (k) => { if (!openFold.delete(k)) openFold.add(k); render(); };
@@ -323,21 +489,24 @@ window.toggleFold = (k) => { if (!openFold.delete(k)) openFold.add(k); render();
 // on the bead as an operator note, and the next round reads it — the way to hand a
 // bead what it lacked before it fails again, without waiting for it to park.
 const openNote = new Set();
-window.toggleNote = (id) => { if (!openNote.delete(id)) openNote.add(id); render(); };
-const noteToggle = (b) => ` <button class="hist ${openNote.has(b.id) ? 'on' : ''}" onclick="toggleNote(${js(b.id)})" title="a note on the bead; its next round reads it">✎ note</button>`;
-const noteRow = (b, span, r) => !openNote.has(b.id) ? '' : `<tr class="sub"><td></td><td colspan="${span}"><div class="reply"><textarea id="note-${esc(b.id)}" rows="2" placeholder="Context it lacked, a claim that changed — goes on the bead as an operator note; its next round reads it"></textarea><button ${busyAction ? 'disabled' : ''} onclick="act('note',{repo:${js(r.repo)},id:${js(b.id)},text:document.getElementById('note-${esc(b.id)}').value}); toggleNote(${js(b.id)})">Add note</button></div></td></tr>`;
-const fold = (k, label, body) => `<div class="fold"><button class="hist" onclick="toggleFold(${js(k)})">${openFold.has(k) ? '▾' : '▸'} ${esc(label)}</button>${openFold.has(k) ? body : ''}</div>`;
+window.toggleNote = (id) => { if (!openNote.delete(id)) openNote.add(id); render(); const b = openNote.has(id) && $(`note-${id}`); if (b && b.focus) b.focus(); };
+const noteToggle = (b) => ` <button class="hist${openNote.has(b.id) ? ' on' : ''}" onclick="toggleNote(${js(b.id)})" title="a note on the bead; its next round reads it">✎ note</button>`;
+const noteRow = (b, span, r) => !openNote.has(b.id) ? '' : `<tr class="sub" data-key="${esc(b.id)}:note"><td></td><td colspan="${span}"><div class="reply">${box(`note-${b.id}`, 'Context it lacked, a claim that changed — goes on the bead as an operator note; its next round reads it')}<div class="actions">${lever('Add note', 'note', { repo: r.repo, id: b.id }, { cls: 'primary', send: `note-${b.id}` })}<span class="hint">Ctrl+Enter sends</span></div></div></td></tr>`;
+const fold = (k, label, body) => `<div class="fold"><button class="hist${openFold.has(k) ? ' on' : ''}" onclick="toggleFold(${js(k)})">${openFold.has(k) ? '▾' : '▸'} ${esc(label)}</button>${openFold.has(k) ? body : ''}</div>`;
 const stageChip = (st, r) => !st ? '<span class="chip bad" title="stages exhausted">exhausted</span>'
   : `<span class="chip ${st.index > 1 ? 'warn' : ''}" title="stage ${st.index}: worker ${esc(st.worker)}${st.reviewer ? ', reviewer ' + esc(st.reviewer) : ''}">${st.index > 1 ? `S${st.index} · ` : ''}${esc(st.worker)}</span>`
     + ((r && r.claude_ok === false && /^claude\//.test(st.worker + ' ' + (st.reviewer || ''))) ? ' <span class="chip bad" title="a claude/* round cannot run while Claude is signed out; the lane takes other beads meanwhile">waits for Claude sign-in</span>' : '');
-const count = (n, label) => `<div class="count ${n ? '' : 'zero'}">${n}<small>${label}</small></div>`;
 // "Work with Claude": the bead to the last stage and back in the dev queue, now. Shown
 // wherever a bead is not already on that stage.
 const lastStage = (r) => r.stages[r.stages.length - 1];
-const claudeBtn = (r, b) => (!lastStage(r) || (b.stage && b.stage.index === r.stages.length)) ? '' :
-  (r.claude_ok === false && /^claude\//.test(lastStage(r).worker)) ? `<button disabled title="Claude is signed out on this box — Sign in at the top first">Work with ${esc(lastStage(r).worker.replace(/^claude\//, 'Claude '))}</button>` :
-  `<button ${busyAction ? 'disabled' : ''} title="to the last stage (${esc(lastStage(r).worker)}) and back into the dev queue now" onclick="act('escalate',{repo:${js(r.repo)},id:${js(b.id)}},'Work ${esc(b.id)} with ${esc(lastStage(r).worker)} now? It goes to the last stage and back into the dev queue, ahead of its failure count.')">Work with ${esc(lastStage(r).worker.replace(/^claude\//, 'Claude '))}</button>`;
-const abortBtn = (r, sess, label) => `<button class="danger" ${busyAction ? 'disabled' : ''} onclick="act('abort',{attach:${js(r.attach)},session:${js(sess.id)}},'Abort ${esc(label)}?')">Abort</button>`;
+const claudeBtn = (r, b) => {
+  const st = lastStage(r);
+  if (!st || (b.stage && b.stage.index === r.stages.length)) return '';
+  const label = `Work with ${esc(st.worker.replace(/^claude\//, 'Claude '))}`;
+  if (r.claude_ok === false && /^claude\//.test(st.worker)) return lever(label, 'escalate', { repo: r.repo, id: b.id }, { off: true, title: 'Claude is signed out on this box — Sign in at the top first' });
+  return lever(label, 'escalate', { repo: r.repo, id: b.id }, { title: `to the last stage (${st.worker}) and back into the dev queue now`, ask: `Work ${b.id} with ${st.worker} now? It goes to the last stage and back into the dev queue, ahead of its failure count.` });
+};
+const abortBtn = (r, sess, label) => lever('Abort', 'abort', { attach: r.attach, session: sess.id }, { cls: 'danger', ask: `Abort ${label}?` });
 
 // A PR in the merge queue: what GitHub says now (p.pr, a minute old at most), then the
 // loop's own markers. Merged or closed on GitHub means the next reconcile finishes it.
@@ -367,7 +536,7 @@ function lanePanel(r, name, now, ticking, showRepo) {
   // the claude lane takes both roles for its models.
   const role = name === 'dev' ? 'worker' : name === 'review' ? 'reviewer' : name === 'claude' ? 'worker or reviewer · Anthropic, waits on no local model' : 'worker or reviewer · its models’ rounds';
   const paused = r.paused && r.paused[name];
-  const pauseBtn = `<button ${busyAction ? 'disabled' : ''} onclick="act('lane',{name:'${name}',paused:${!paused}})">${paused ? 'Resume lane' : 'Pause lane'}</button>`;
+  const pauseBtn = lever(paused ? 'Resume lane' : 'Pause lane', 'lane', { name, paused: !paused });
   if (!l) {
     const capped = r.max_inflight != null && r.queues.merge.filter((p) => !p.adopted).length >= r.max_inflight;
     const heldOnly = (q) => q.length > 0 && q.every((b) => b.held);
@@ -380,20 +549,20 @@ function lanePanel(r, name, now, ticking, showRepo) {
       : name !== 'review'
       ? (ticking ? 'nothing queued for its models' : 'the loop is down')
       : (r.queues.review.length === 0 ? 'review queue empty' : heldOnly(r.queues.review) ? 'every bead in the queue is held — see Needs you' : ticking ? 'starting…' : 'the loop is down');
-    return `<div class="lane idle ${name}${paused ? ' paused' : ''}"><div class="label">${name} lane ${paused ? '<span class="chip warn">paused</span>' : ''}<span class="act">${pauseBtn}</span></div><div class="what">${paused ? 'paused — starts no new round until resumed' : `idle — ${esc(why)}`}</div></div>`;
+    return `<div class="lane idle ${name}${paused ? ' paused' : ''}" data-key="${esc(name)}"><div class="label">${name} lane ${paused ? '<span class="chip warn">paused</span>' : ''}<span class="act">${pauseBtn}</span></div><div class="what">${paused ? 'paused — starts no new round until resumed' : `idle — ${esc(why)}`}</div></div>`;
   }
   const wt = r.worktrees.find((x) => x.id === l.id);
   // 'rejoin' counts as live too: the lane is on this bead and waiting on the session a
   // restart found running (no client to show as 'busy' — the loop is polling it), so it
   // gets the same open-session link instead of the generic "setup, or the gate" line.
   const live = wt && wt.sessions.find((s) => s.state === 'busy' || s.state === 'rejoin');
-  return `<div class="lane ${name}">
+  return `<div class="lane ${name}" data-key="${esc(name)}">
     <div class="label">${name} lane <span class="muted">· ${role} · ${ago(l.since, now)}</span> ${paused ? '<span class="chip warn" title="finishes this round, then starts no new one">pausing</span>' : ''}<span class="act">${pauseBtn}</span></div>
     <div class="bead">${esc(l.id)}${showRepo ? ` <span class="muted">· ${esc(r.slug)}</span>` : ''}</div>
     <div class="what">${esc(l.title || '')}</div>
     <div class="stage">${failChip(l.failures)}${histToggle(l)}${stageChip(l.stage, r)}
       ${live ? `${roleChip(live.agent)} <span class="mono">${esc(live.model)}</span> <span>last output ${ago(live.updated, now)} ago</span> <a href="${esc(live.url)}" target="_blank" rel="noopener">open session ↗</a> ${abortBtn(r, live, `${live.agent} on ${l.id}`)}`
-        : `<span>${name === 'dev' ? 'setup, or the gate' : 'pushing the PR'}</span>`}</div>${histList(l)}
+        : `<span>${name === 'dev' ? 'setup, or the gate' : 'pushing the PR'}</span>`}</div>${histList(l, r)}
   </div>`;
 }
 // The lanes, once, at the top: a lane is one thing for the whole loop (it walks every
@@ -407,7 +576,7 @@ function lanesPane(s) {
     const on = s.repos.find((r) => r.lanes && r.lanes[name]);
     if (on) return lanePanel(on, name, s.now, ticking, true);
     const paused = s.repos.some((r) => r.paused && r.paused[name]);
-    const pauseBtn = `<button ${busyAction ? 'disabled' : ''} onclick="act('lane',{name:${js(name)},paused:${!paused}})">${paused ? 'Resume lane' : 'Pause lane'}</button>`;
+    const pauseBtn = lever(paused ? 'Resume lane' : 'Pause lane', 'lane', { name, paused: !paused });
     const onClaude = (b) => b.stage && /^claude\//.test(b.stage.worker + ' ' + (b.stage.reviewer || ''));
     const count = (pick) => s.repos.reduce((n, r) => n + r.queues.dev.filter(pick).length + r.queues.review.filter(pick).length, 0);
     const queued = name === 'dev' ? s.repos.reduce((n, r) => n + r.queues.dev.length, 0)
@@ -418,7 +587,7 @@ function lanesPane(s) {
       : queued === 0 ? 'idle — nothing queued for it in any repo'
       : signedOut ? `idle — ${queued} waiting; Claude is signed out (Sign in at the top)`
       : ticking ? `idle — ${queued} queued across repos, starting…` : `idle — ${queued} queued; the loop is down`;
-    return `<div class="lane idle ${esc(name)}${paused ? ' paused' : ''}"><div class="label">${esc(name)} lane ${paused ? '<span class="chip warn">paused</span>' : ''}<span class="act">${pauseBtn}</span></div><div class="what">${why}</div></div>`;
+    return `<div class="lane idle ${esc(name)}${paused ? ' paused' : ''}" data-key="${esc(name)}"><div class="label">${esc(name)} lane ${paused ? '<span class="chip warn">paused</span>' : ''}<span class="act">${pauseBtn}</span></div><div class="what">${why}</div></div>`;
   });
   return `<section class="card" id="lanes"><h2>Lanes <span class="cfg">one each for the whole loop · a bead names its repo</span></h2><div class="lanes">${panels.join('')}</div></section>`;
 }
@@ -431,20 +600,22 @@ function strays(r, now) {
   const rows = r.worktrees.filter((x) => !on.includes(x.id)).flatMap((x) => x.sessions.filter((s) => s.state !== 'idle').map((s) => ({ ...s, wt: x })));
   if (rows.length === 0) return '';
   return `<h3>Also running<span class="n">${rows.length}</span><span class="note">on no lane — a pending rejoin, an older round, or a hand-run work</span></h3><table>${rows.map((s) => `
-    <tr><td class="fit">${stateChip(s.state)}</td><td class="fit">${roleChip(s.agent)}</td><td class="id">${esc(s.wt.id)}</td><td class="mono muted fit">${esc(s.model)}</td>
+    <tr data-key="${esc(s.id)}"><td class="fit">${stateChip(s.state)}</td><td class="fit">${roleChip(s.agent)}</td><td class="id">${esc(s.wt.id)}</td><td class="mono muted fit">${esc(s.model)}</td>
         <td class="muted fit">${ago(s.updated, now)} ago</td>
         <td class="title"><span class="t"><a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(titleOf(s, s.wt))} ↗</a></span></td>
         <td class="act">${abortBtn(r, s, `${s.agent} on ${s.wt.id}`)}</td></tr>`).join('')}</table>`;
 }
 
 // The queues, in the order the lanes take them. Position is the information: #1 is next.
-const qRow = (i, b, extra, r) => `<tr><td class="pos">${i + 1}</td><td class="id">${esc(b.id)}</td><td class="title"><span class="t" title="${esc(b.title || '')}">${esc(b.title || '')}</span></td><td class="fit">${failChip(b.failures)}${histToggle(b)}${noteToggle(b)}${extra || ''}</td></tr>${histRow(b, 4, r)}${noteRow(b, 4, r)}`;
+// Rows carry the bead's id as their key, so a bead that moves up a place keeps its open
+// history, its note box and what is typed in it.
+const qRow = (i, b, extra, r) => `<tr data-key="${esc(b.id)}"><td class="pos">${i + 1}</td><td class="id">${esc(b.id)}</td><td class="title"><span class="t" title="${esc(b.title || '')}">${esc(b.title || '')}</span></td><td class="fit">${failChip(b.failures)}${histToggle(b)}${noteToggle(b)}${extra || ''}</td></tr>${histRow(b, 4, r)}${noteRow(b, 4, r)}`;
 function queueCol(name, rows, r, now) {
   const empty = { dev: 'nothing ready', review: 'nothing waiting for review', merge: 'no PRs in flight' }[name];
   const sub = { dev: 'no open blocker, fewest failures first, then bd’s order', review: 'gate passed; the reviewer next', merge: r.max_inflight == null ? 'PRs in CI · no cap: dependencies are the gate' : `PRs in CI · dev pauses at ${r.max_inflight}` }[name];
   let body;
   if (rows.length === 0) body = `<div class="empty">${empty}</div>`;
-  else if (name === 'merge') body = `<table>${rows.map((p) => `<tr><td class="id">${esc(p.id)}</td><td class="title"><span class="t"><a href="${esc(p.url)}" target="_blank" rel="noopener">${esc(p.url.replace(/^https?:\/\/github\.com\/[^/]+\//, ''))} ↗</a></span></td></tr><tr class="sub"><td></td><td>${prChips(p, now, r)}</td></tr>`).join('')}</table>`;
+  else if (name === 'merge') body = `<table>${rows.map((p) => `<tr data-key="${esc(p.id)}"><td class="id">${esc(p.id)}</td><td class="title"><span class="t"><a href="${esc(p.url)}" target="_blank" rel="noopener">${esc(p.url.replace(/^https?:\/\/github\.com\/[^/]+\//, ''))} ↗</a></span></td></tr><tr class="sub" data-key="${esc(p.id)}:pr"><td></td><td>${prChips(p, now, r)}</td></tr>`).join('')}</table>`;
   else body = `<table>${rows.map((b, i) => qRow(i, b, (name === 'dev' ? ` ${stageChip(b.stage, r)}` : ` <span class="muted">${ago(b.since, now)}</span>${stageChip(b.stage, r).includes('waits for') ? ' <span class="chip bad">waits for Claude sign-in</span>' : ''}`) + `</td><td class="act">${claudeBtn(r, b)}`, r)).join('')}</table>`;
   return `<div class="q ${name}"><h3>${name} queue<span class="n">${rows.length}</span></h3><div class="sub">${sub}</div>${body}</div>`;
 }
@@ -460,7 +631,7 @@ function claudeCol(r) {
     ...r.queues.review.map((b, i) => ({ b, where: `review queue #${i + 1}` })),
   ].filter((x) => onClaude(x.b));
   const body = rows.length === 0 ? '<div class="empty">no bead on the Claude stage</div>'
-    : `<table>${rows.map(({ b, where }) => `<tr><td class="id">${esc(b.id)}</td><td class="title"><span class="t" title="${esc(b.title || '')}">${esc(b.title || '')}</span></td><td class="fit">${failChip(b.failures)}${histToggle(b)} <span class="muted">${esc(where)}</span></td></tr>${histRow(b, 2, r)}`).join('')}</table>`;
+    : `<table>${rows.map(({ b, where }) => `<tr data-key="${esc(b.id)}"><td class="id">${esc(b.id)}</td><td class="title"><span class="t" title="${esc(b.title || '')}">${esc(b.title || '')}</span></td><td class="fit">${failChip(b.failures)}${histToggle(b)} <span class="muted">${esc(where)}</span></td></tr>${histRow(b, 2, r)}`).join('')}</table>`;
   return `<div class="q claude"><h3>Claude<span class="n">${rows.length}</span></h3><div class="sub">the last stage; runs on the dev and review lanes</div>${body}</div>`;
 }
 
@@ -480,7 +651,7 @@ const dur = (s) => { if (s == null) return '–'; const m = Math.round(s / 60); 
 const hours = (s) => `${(s / 3600).toFixed(1)}h`;
 const usd = (n) => `$${n.toFixed(2)}`;
 const pct = (n, of) => of ? `${Math.round(n * 100 / of)}%` : '–';
-const tile = (label, value, sub, cls) => `<div class="tile"><div class="label">${label}</div><div class="value ${cls || ''}">${value}</div><div class="sub">${sub}</div></div>`;
+const tile = (label, value, sub, cls) => `<div class="tile" data-key="${esc(label)}"><div class="label">${label}</div><div class="value ${cls || ''}">${value}</div><div class="sub">${sub}</div></div>`;
 function scoreboard(s) {
   const st = s.stats;
   const seg = `<span class="seg">${['24h', '7d', '30d', 'all'].map((w) => `<button class="${w === scoreWin ? 'cur' : ''}" onclick="setWin('${w}')">${w}</button>`).join('')}</span>`;
@@ -510,7 +681,7 @@ function scoreboard(s) {
     : `<table><tr><th>model</th><th class="num">landed</th><th class="num">sent back</th><th>why</th></tr>${models.map((m) => {
       const lost = sb.by_model[m] || { total: 0, by_reason: {} };
       const why = Object.entries(lost.by_reason).sort((a, b) => b[1] - a[1]).map(([k, n]) => `${esc(k)} ${n}`).join(' · ');
-      return `<tr><td class="mono">${esc(m)}</td><td class="num">${w.landed_by[m] || 0}</td><td class="num">${lost.total}</td><td class="reasons">${why}</td></tr>`;
+      return `<tr data-key="${esc(m)}"><td class="mono">${esc(m)}</td><td class="num">${w.landed_by[m] || 0}</td><td class="num">${lost.total}</td><td class="reasons">${why}</td></tr>`;
     }).join('')}</table>`;
   // model cost: what each role's sessions say they spent (Claude Code's total_cost_usd,
   // opencode's per-step cost; $0 for a local model), the bar its share of the window's
@@ -527,7 +698,7 @@ function scoreboard(s) {
   const more = fin.length > FINISHED_SHOWN ? ` <button class="hist" onclick="setScoreAll(${!scoreAll})">${scoreAll ? '▾ the first ' + FINISHED_SHOWN : '▸ all ' + fin.length}</button>` : '';
   const finished = fin.length === 0 ? '<div class="empty">nothing finished in this window</div>'
     : `<table><tr><th>bead</th><th>title</th><th></th><th class="num">rounds</th><th>landed by</th><th class="num">to land</th><th class="num">closed</th></tr>${shown.map((b) => `
-    <tr><td class="id">${esc(b.id)}${st.repos.length > 1 ? ` <span class="muted">${esc(b.slug)}</span>` : ''}</td><td class="title"><span class="t" title="${esc(b.title)}">${b.url ? `<a href="${esc(b.url)}" target="_blank" rel="noopener">${esc(b.title)} ↗</a>` : esc(b.title)}</span></td>
+    <tr data-key="${esc(b.id)}"><td class="id">${esc(b.id)}${st.repos.length > 1 ? ` <span class="muted">${esc(b.slug)}</span>` : ''}</td><td class="title"><span class="t" title="${esc(b.title)}">${b.url ? `<a href="${esc(b.url)}" target="_blank" rel="noopener">${esc(b.title)} ↗</a>` : esc(b.title)}</span></td>
         <td class="fit">${b.how === 'landed' ? '<span class="chip ok">landed</span>' : '<span class="chip hand" title="closed by hand after the loop had worked it">by hand</span>'}${b.escalated ? ' <span class="chip warn" title="escalated to the last stage by hand">escalated</span>' : ''}${b.answers ? ` <span class="chip" title="answers you gave">${b.answers} answer${b.answers > 1 ? 's' : ''}</span>` : ''}</td>
         <td class="num">${b.rounds}</td><td class="mono muted fit">${b.how === 'landed' ? esc(b.worker) : ''}</td><td class="num">${b.how === 'landed' ? dur(b.time_to_land_s) : ''}</td><td class="num muted">${ago(b.closed, s.now)} ago</td></tr>`).join('')}</table>`;
   const perRepo = st.repos.length > 1 ? ` · ${Object.entries(w.by_repo).map(([k, v]) => `${esc(k)} ${v.landed}`).join(', ')}` : '';
@@ -562,45 +733,45 @@ function repo(r, now, ticking) {
       + (p.stopped_on && !p.brief ? fold(`stop:${b.id}`, 'what it stopped on', `<pre class="text">${esc(p.stopped_on)}</pre>`) : '');
   };
   const human = r.parked.length === 0 ? '<div class="empty">nothing waiting on you</div>' : `<table>${r.parked.map((b) => `
-    <tr><td class="id">${esc(b.id)}</td><td class="title"><span class="t" title="${esc(b.title || '')}">${esc(b.title || '')}</span></td>
+    <tr data-key="${esc(b.id)}"><td class="id">${esc(b.id)}</td><td class="title"><span class="t" title="${esc(b.title || '')}">${esc(b.title || '')}</span></td>
         <td class="fit">${reasonChip(b)} ${failChip(b.failures)}${histToggle(b)}</td>
-        <td class="act">${claudeBtn(r, b)} <button ${busyAction ? 'disabled' : ''} onclick="act('reopen',{repo:${js(r.repo)},id:${js(b.id)}})" title="back in the dev queue as is">Reopen</button></td></tr>
-    <tr class="sub"><td></td><td colspan="3" class="why">${askBlock(b)}${histList(b, r)}${b.notes ? fold(`notes:${b.id}`, 'the bead\'s notes', `<pre class="hist">${esc(b.notes)}</pre>`) : ''}
+        <td class="act">${claudeBtn(r, b)} ${lever('Reopen', 'reopen', { repo: r.repo, id: b.id }, { title: 'back in the dev queue as is' })}</td></tr>
+    <tr class="sub" data-key="${esc(b.id)}:why"><td></td><td colspan="3" class="why">${askBlock(b)}${histList(b, r)}${b.notes ? fold(`notes:${b.id}`, 'the bead\'s notes', `<pre class="hist">${esc(b.notes)}</pre>`) : ''}
       <div class="reply">
-        <textarea id="ans-${esc(b.id)}" rows="2" placeholder="Your answer, or the context it lacked — goes on the bead under the question; the next round reads both"></textarea>
-        <button ${busyAction ? 'disabled' : ''} onclick="act('answer',{repo:${js(r.repo)},id:${js(b.id)},text:document.getElementById('ans-${esc(b.id)}').value})">Answer &amp; resume</button>
-        <span class="muted">or work it with Claude yourself, in its worktree:</span> <code class="cmd">${esc(b.open_cmd)}</code> <button onclick="navigator.clipboard.writeText(${js(b.open_cmd)})" title="copy">Copy</button>
+        ${box(`ans-${b.id}`, 'Your answer, or the context it lacked — goes on the bead under the question; the next round reads both')}
+        <div class="actions">${lever('Answer &amp; resume', 'answer', { repo: r.repo, id: b.id }, { cls: 'primary', send: `ans-${b.id}` })}<span class="hint">Ctrl+Enter sends</span>
+          <span class="alt">or work it with Claude yourself, in its worktree: <code class="cmd">${esc(b.open_cmd)}</code> <button onclick="copy(${js(b.open_cmd)})" title="copy the command">Copy</button></span></div>
       </div></td></tr>`).join('')}</table>`;
   // Held: still in its queue, waiting on something outside the loop — the reason, and
   // where it sits. The loop keeps looking; the flag clears by itself when the world
   // changes (a server back, CI reporting, a merge). Listed with parked, since both are
   // yours to look at, but nothing here needs a Reopen.
   const held = (r.held || []).length === 0 ? '' : `<table>${r.held.map((b) => `
-    <tr><td class="id">${esc(b.id)}</td><td class="title"><span class="t" title="${esc(b.title || '')}">${esc(b.title || '')}</span></td>
+    <tr data-key="${esc(b.id)}"><td class="id">${esc(b.id)}</td><td class="title"><span class="t" title="${esc(b.title || '')}">${esc(b.title || '')}</span></td>
         <td class="fit"><span class="chip warn">held</span> <span class="muted">in ${esc(b.where)} · ${ago(b.since, now)}</span></td>
         <td class="act">${b.where === 'merge' ? '' : claudeBtn(r, b)}</td></tr>
-    <tr class="sub"><td></td><td colspan="3" class="why">${esc(b.why)}</td></tr>`).join('')}</table>`;
+    <tr class="sub" data-key="${esc(b.id)}:why"><td></td><td colspan="3" class="why">${esc(b.why)}</td></tr>`).join('')}</table>`;
   // Decisions: a bead of type `decision` (or labelled needs-human) in this repo is a
   // question for you, asked by the loop, an agent, or your own planning — the text in
   // full, since it is what you decide on. Answer & close puts the answer on the bead as
   // its close reason, where whoever asked reads it; beads that depended on it unblock.
   const decisions = (r.decisions || []).length === 0 ? '' : `<table class="decisions">${r.decisions.map((d) => `
-    <tr><td class="id">${esc(d.id)}</td><td class="title"><b>${esc(d.title || '')}</b></td>
+    <tr data-key="${esc(d.id)}"><td class="id">${esc(d.id)}</td><td class="title"><b>${esc(d.title || '')}</b></td>
         <td class="fit"><span class="chip warn">question</span></td><td class="act"></td></tr>
-    <tr class="sub"><td></td><td colspan="3" class="why"><pre class="text">${esc(d.description || '(no description)')}</pre>
+    <tr class="sub" data-key="${esc(d.id)}:why"><td></td><td colspan="3" class="why"><pre class="text">${esc(d.description || '(no description)')}</pre>
       <div class="reply">
-        <textarea id="dec-${esc(d.id)}" rows="2" placeholder="Your decision — goes on the bead as its close reason; whoever asked reads it there"></textarea>
-        <button ${busyAction ? 'disabled' : ''} onclick="act('decide',{repo:${js(r.repo)},id:${js(d.id)},text:document.getElementById('dec-${esc(d.id)}').value})">Answer &amp; close</button>
+        ${box(`dec-${d.id}`, 'Your decision — goes on the bead as its close reason; whoever asked reads it there')}
+        <div class="actions">${lever('Answer &amp; close', 'decide', { repo: r.repo, id: d.id }, { cls: 'primary', send: `dec-${d.id}` })}<span class="hint">Ctrl+Enter sends</span></div>
       </div></td></tr>`).join('')}</table>`;
   // The priority repo: the lanes look at it first on every pass; otherwise round-robin.
   const prio = r.priority
-    ? `<button ${busyAction ? 'disabled' : ''} class="prio on" onclick="act('priority',{repo:'none'})" title="the lanes look at this repo first on every pass; click to go back to round-robin">★ priority</button>`
-    : `<button ${busyAction ? 'disabled' : ''} class="prio" onclick="act('priority',{repo:${js(r.repo)}})" title="the lanes look at this repo first on every pass">☆ make priority</button>`;
+    ? lever('★ priority', 'priority', { repo: 'none' }, { cls: 'prio on', title: 'the lanes look at this repo first on every pass; click to go back to round-robin' })
+    : lever('☆ make priority', 'priority', { repo: r.repo }, { cls: 'prio', title: 'the lanes look at this repo first on every pass' });
   return `<section class="card" id="repo-${esc(r.slug)}">
     <h2>${esc(r.slug)} ${prio} <span class="cfg">${esc(r.label)} · ${esc(r.base)} · merge ${esc(r.merge)} · stages: ${stages} · then ${esc(r.on_exhaust)}${r.attach ? '' : ' · <b>no attach</b>: sessions not visible'}</span></h2>
     <div class="queues">${queueCol('dev', r.queues.dev, r, now)}${queueCol('review', r.queues.review, r, now)}${queueCol('merge', r.queues.merge, r, now)}${claudeCol(r)}</div>
     ${strays(r, now)}
-    <h3 class="human">Needs you<span class="n">${(r.decisions || []).length + r.parked.length + (r.held || []).length}</span><span class="note">a decision asked of you; a question the last stage could not answer, stages exhausted, a PR closed unmerged; a bead held in its queue by something outside the loop — each with why, until you act or the world changes</span></h3>${decisions}${human}${held}
+    <h3 class="human">Needs you<span class="n">${(r.decisions || []).length + r.parked.length + (r.held || []).length}</span><span class="note">a decision asked of you · a bead parked on a question, exhausted, or its PR closed · a bead held in its queue by something outside the loop</span></h3>${decisions}${human}${held}
   </section>`;
 }
 
@@ -619,6 +790,11 @@ let showSys = false;
 try { showSys = localStorage.getItem('showSys') === '1'; } catch { /* no storage: the default, every load */ }
 window.setSys = (on) => { showSys = !!on; try { localStorage.setItem('showSys', showSys ? '1' : '0'); } catch { /* not remembered, still applied */ } render(); };
 
+// The log follows its tail until you scroll up to read something, and again once you
+// scroll back down: known from the scrolling, not from where it is at render time.
+let logTail = true;
+document.addEventListener('scroll', (e) => { const t = e.target; if (t && t.id === 'log') logTail = t.scrollHeight - t.scrollTop - t.clientHeight < 12; }, true);
+
 function render() {
   if (!last) return;
   header(last);
@@ -627,20 +803,28 @@ function render() {
     : lines.length === 0 ? '<div class="empty">only systemd’s own lines so far</div>'
     : `<pre class="log" id="log">${lines.map((l) => `<span class="t">${clock(l.t)}</span>  <span class="${l.cls}">${esc(l.m)}</span>`).join("\n")}</pre>`;
   const sysBox = `<label class="opt" title="systemd’s Starting/Finished/Stopped lines for the unit"><input type="checkbox" ${showSys ? 'checked' : ''} onchange="setSys(this.checked)">systemd lines</label>`;
-  $('main').innerHTML = (last.error ? `<div class="banner">status failed: ${esc(last.error)}</div>` : '')
-    + (last.repos.length === 0 ? '<section class="card"><div class="empty">no repos: set <span class="mono">repos</span> in ~/.config/bead-loop/config.toml</div></section>' : lanesPane(last) + scoreboard(last))
+  patch($('main'), (last.error ? `<div class="banner" data-key="error">status failed: ${esc(last.error)}</div>` : '')
+    + (last.repos.length === 0 ? '<section class="card" data-key="norepos"><div class="empty">no repos: set <span class="mono">repos</span> in ~/.config/bead-loop/config.toml</div></section>' : lanesPane(last) + scoreboard(last))
     + last.repos.map((r) => repo(r, last.now, last.service.available && (last.service.active === 'active' || last.service.active === 'activating'))).join("")
-    + `<section class="card"><h3 class="log">Supervisor log${sysBox}</h3>${log}</section>`;
-  const el = $('log'); if (el) el.scrollTop = el.scrollHeight;
+    + `<section class="card" id="journal"><h3 class="log">Supervisor log${sysBox}</h3>${log}</section>`);
+  const el = $('log'); if (el && logTail) el.scrollTop = el.scrollHeight;
   $('foot').textContent = `state as of ${clock(last.now)} · pushed on every change`;
+  // The tab says how many things wait on you.
+  const waiting = last.repos.reduce((n, r) => n + (r.decisions || []).length + r.parked.length, 0);
+  document.title = waiting ? `(${waiting}) bead-loop` : 'bead-loop';
 }
 // Pushed, not polled: the server sends the whole state whenever anything in it changes.
-// EventSource reconnects by itself; the dot says which.
+// EventSource reconnects by itself; the dot says which, and the page dims while the
+// stream is down — what it shows is as of the footer's time.
 // A hidden tab drops its stream and picks it up again when shown: a browser allows six
 // connections to one host, and a forgotten tab holding one is how the seventh "hangs".
 // It also means an unwatched page costs the server nothing.
 let live = false, es = null;
-function setLive(on, text) { live = on; $('live').innerHTML = on ? '<span class="dot on"></span><span class="muted">live</span>' : `<span class="dot ${text === 'paused' ? '' : 'bad'}"></span><span class="muted">${text || 'reconnecting…'}</span>`; }
+function setLive(on, text) {
+  live = on;
+  patch($('live'), on ? '<span class="dot on"></span><span class="muted">live</span>' : `<span class="dot ${text === 'paused' ? '' : 'bad'}"></span><span class="muted">${text || 'reconnecting…'}</span>`);
+  if (document.body && document.body.classList) document.body.classList.toggle('stale', !on && !!last && text !== 'paused');
+}
 function connect() {
   if (es) return;
   setLive(false, 'connecting…');
