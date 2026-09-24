@@ -746,6 +746,7 @@ function repo(r, now, ticking) {
         ${box(`ans-${b.id}`, 'Your answer, or the context it lacked — goes on the bead under the question; the next round reads both')}
         <div class="actions">${lever('Answer &amp; resume', 'answer', { repo: r.repo, id: b.id }, { cls: 'primary', send: `ans-${b.id}` })}<span class="hint">Ctrl+Enter sends</span>
           <span class="alt">or work it with Claude yourself, in its worktree: <code class="cmd">${esc(b.open_cmd)}</code> <button onclick="copy(${js(b.open_cmd)})" title="copy the command">Copy</button></span></div>
+        ${b.waiting && b.waiting.length > 0 ? `<div class="muted">${b.waiting.length} bead${b.waiting.length === 1 ? '' : 's'} wait on it: ${b.waiting.map((id) => esc(id)).join(', ')}</div>` : ''}
       </div></td></tr>`).join('')}</table>`;
   // Held: still in its queue, waiting on something outside the loop — the reason, and
   // where it sits. The loop keeps looking; the flag clears by itself when the world

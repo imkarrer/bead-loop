@@ -163,10 +163,26 @@ pub fn has_claude_stage(repo: &Repo) -> bool {
 /// The status from what bd said — the ready beads and the in_progress ones — and the
 /// lanes the loop runs.
 pub fn status_json_from(repo: &Repo, open: Value, inprog: Value, specs: &[crate::config::LaneSpec]) -> Value {
+    use std::collections::HashMap;
     let mut byid: Map<String, Value> = Map::new();
     for b in open.as_array().into_iter().flatten().chain(inprog.as_array().into_iter().flatten()) {
         if let Some(id) = b.get("id").and_then(|i| i.as_str()) {
             byid.insert(id.to_string(), b.clone());
+        }
+    }
+    // Collect which open beads block each parked bead (waiting field)
+    let mut waiting_map: HashMap<String, Vec<String>> = HashMap::new();
+    for b in open.as_array().into_iter().flatten() {
+        if let Some(id) = b.get("id").and_then(|i| i.as_str()) {
+            if let Some(deps) = b.get("dependencies").and_then(|d| d.as_array()) {
+                for dep in deps {
+                    if dep.get("dependency_type").and_then(|t| t.as_str()) == Some("blocks") {
+                        if let Some(dep_id) = dep.get("id").and_then(|i| i.as_str()) {
+                            waiting_map.entry(dep_id.to_string()).or_default().push(id.to_string());
+                        }
+                    }
+                }
+            }
         }
     }
     // merge queue
@@ -243,6 +259,8 @@ pub fn status_json_from(repo: &Repo, open: Value, inprog: Value, specs: &[crate:
             m.insert("parked".into(), parked.unwrap_or(Value::Null));
             m.insert("notes".into(), json!(notes));
             m.insert("open_cmd".into(), json!(format!("bead-supervisor open {} {id}", repo.repo.display())));
+            let waiting = waiting_map.get(&id).map(|v| json!(v)).unwrap_or(Value::Array(vec![]));
+            m.insert("waiting".into(), waiting);
             Value::Object(m)
         })
         .collect();
@@ -617,7 +635,7 @@ mod tests {
         let open = json!([
             {"id":"t-2","title":"Second","priority":2,"labels":["delegate:local"]},
             {"id":"t-3","title":"Third","priority":1},
-            {"id":"t-7","title":"Seventh","priority":2},
+            {"id":"t-7","title":"Seventh","priority":2,"dependencies":[{"id":"t-5","dependency_type":"blocks"}]},
             {"id":"t-8","title":"Eighth","priority":2},
         ]);
         let inprog = json!([
@@ -680,6 +698,16 @@ mod tests {
         assert_eq!(j["max_inflight"], Value::Null, "unlimited prints as null");
         assert_eq!(j["priority"], false);
         assert_eq!(j["paused"], json!({"dev": false, "review": false, "claude": false}), "one flag per lane the loop runs");
+        assert_eq!(j["parked"][0]["waiting"], json!(["t-7"]), "t-7 blocks on t-5");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn parked_beads_report_waiting() {
+        // t-5 is parked, t-2 and t-3 are open with no dependencies, t-7 is open and blocks on t-5
+        let (d, _repo, j) = laid_out("status-waiting");
+        assert_eq!(j["parked"][0]["id"], "t-5");
+        assert_eq!(j["parked"][0]["waiting"], json!(["t-7"]), "t-7 blocks on t-5, others don't");
         let _ = std::fs::remove_dir_all(&d);
     }
 

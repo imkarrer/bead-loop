@@ -300,9 +300,7 @@ its rounds and their logs, and its ways out.
 
 ## Not built
 
-- A bead whose blocker is parked is invisible from the queue that is empty because of
-  it: the page does not yet say "N beads wait on it" under a parked bead.
 - A server down is found one bead at a time (each round comes back empty and is held)
-  rather than once per lane with a probe; the lane keeps trying beads until the backoff
-  covers them all.
+   rather than once per lane with a probe; the lane keeps trying beads until the backoff
+   covers them all.
 - Disk is not watched.
