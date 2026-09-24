@@ -34,7 +34,9 @@
         "pkg-path": "nodejs"
       },
       "opencode": {
-        "pkg-path": "opencode"
+        "pkg-path": "opencode",
+        "pkg-group": "opencode",
+        "version": "1.18.29"
       },
       "rustc": {
         "pkg-path": "rustc"
@@ -939,93 +941,6 @@
       "priority": 5
     },
     {
-      "attr_path": "opencode",
-      "broken": false,
-      "derivation": "/nix/store/6vi5r68wwi2w7qwdnpis693wgzp3awmw-opencode-1.18.30.drv",
-      "description": "AI coding agent built for the terminal",
-      "install_id": "opencode",
-      "license": "MIT",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=ef34387ddd751e1ab8857adf4676492d32eb24ec",
-      "name": "opencode-1.18.30",
-      "pname": "opencode",
-      "rev": "ef34387ddd751e1ab8857adf4676492d32eb24ec",
-      "rev_count": 1073009,
-      "rev_date": "2026-09-13T08:01:44Z",
-      "scrape_date": "2026-09-15T04:58:37.157250Z",
-      "stabilities": [
-        "unstable"
-      ],
-      "unfree": false,
-      "version": "1.18.30",
-      "outputs_to_install": [
-        "out"
-      ],
-      "outputs": {
-        "out": "/nix/store/4aw913h4jj4g5chbw3zj485vvx0x6qg9-opencode-1.18.30"
-      },
-      "system": "aarch64-darwin",
-      "group": "toplevel",
-      "priority": 5
-    },
-    {
-      "attr_path": "opencode",
-      "broken": false,
-      "derivation": "/nix/store/qjnp48d2pdy08aafs060b37wr2pq8xsb-opencode-1.18.30.drv",
-      "description": "AI coding agent built for the terminal",
-      "install_id": "opencode",
-      "license": "MIT",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=ef34387ddd751e1ab8857adf4676492d32eb24ec",
-      "name": "opencode-1.18.30",
-      "pname": "opencode",
-      "rev": "ef34387ddd751e1ab8857adf4676492d32eb24ec",
-      "rev_count": 1073009,
-      "rev_date": "2026-09-13T08:01:44Z",
-      "scrape_date": "2026-09-15T05:30:54.538817Z",
-      "stabilities": [
-        "unstable"
-      ],
-      "unfree": false,
-      "version": "1.18.30",
-      "outputs_to_install": [
-        "out"
-      ],
-      "outputs": {
-        "out": "/nix/store/mwfdfdysh4b1hc2h0qpjiyxkwxr5i6xi-opencode-1.18.30"
-      },
-      "system": "aarch64-linux",
-      "group": "toplevel",
-      "priority": 5
-    },
-    {
-      "attr_path": "opencode",
-      "broken": false,
-      "derivation": "/nix/store/whag06hr5wp9acimjlpqwpcdracj7ajf-opencode-1.18.30.drv",
-      "description": "AI coding agent built for the terminal",
-      "install_id": "opencode",
-      "license": "MIT",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=ef34387ddd751e1ab8857adf4676492d32eb24ec",
-      "name": "opencode-1.18.30",
-      "pname": "opencode",
-      "rev": "ef34387ddd751e1ab8857adf4676492d32eb24ec",
-      "rev_count": 1073009,
-      "rev_date": "2026-09-13T08:01:44Z",
-      "scrape_date": "2026-09-15T06:08:04.306065Z",
-      "stabilities": [
-        "unstable"
-      ],
-      "unfree": false,
-      "version": "1.18.30",
-      "outputs_to_install": [
-        "out"
-      ],
-      "outputs": {
-        "out": "/nix/store/0lrwsxvld88jz8qj9r04vqr7n3rpzvh1-opencode-1.18.30"
-      },
-      "system": "x86_64-linux",
-      "group": "toplevel",
-      "priority": 5
-    },
-    {
       "attr_path": "rustc",
       "broken": false,
       "derivation": "/nix/store/sqbzbgwqqn62fcwayrm0yk3778fdhmyj-rustc-wrapper-1.98.1.drv",
@@ -1311,6 +1226,96 @@
       },
       "system": "x86_64-linux",
       "group": "toplevel",
+      "priority": 5
+    },
+    {
+      "attr_path": "opencode",
+      "broken": false,
+      "derivation": "/nix/store/m075lww0f6887xn893l4ayvp43m61aii-opencode-1.18.29.drv",
+      "description": "AI coding agent built for the terminal",
+      "install_id": "opencode",
+      "license": "MIT",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=8ce4ef6cb6f871616146b9fe26d2a5ae594e94fe",
+      "name": "opencode-1.18.29",
+      "pname": "opencode",
+      "rev": "8ce4ef6cb6f871616146b9fe26d2a5ae594e94fe",
+      "rev_count": 1070770,
+      "rev_date": "2026-09-10T02:20:05Z",
+      "scrape_date": "2026-09-11T04:58:36.554364Z",
+      "stabilities": [
+        "unstable",
+        "staging"
+      ],
+      "unfree": false,
+      "version": "1.18.29",
+      "outputs_to_install": [
+        "out"
+      ],
+      "outputs": {
+        "out": "/nix/store/vrx105gx82gkhw3bbk404y605nv3nd0a-opencode-1.18.29"
+      },
+      "system": "aarch64-darwin",
+      "group": "opencode",
+      "priority": 5
+    },
+    {
+      "attr_path": "opencode",
+      "broken": false,
+      "derivation": "/nix/store/0dygf77vkaljlw6mj970h9dc1yniaclf-opencode-1.18.29.drv",
+      "description": "AI coding agent built for the terminal",
+      "install_id": "opencode",
+      "license": "MIT",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=8ce4ef6cb6f871616146b9fe26d2a5ae594e94fe",
+      "name": "opencode-1.18.29",
+      "pname": "opencode",
+      "rev": "8ce4ef6cb6f871616146b9fe26d2a5ae594e94fe",
+      "rev_count": 1070770,
+      "rev_date": "2026-09-10T02:20:05Z",
+      "scrape_date": "2026-09-11T05:31:07.767557Z",
+      "stabilities": [
+        "unstable",
+        "staging"
+      ],
+      "unfree": false,
+      "version": "1.18.29",
+      "outputs_to_install": [
+        "out"
+      ],
+      "outputs": {
+        "out": "/nix/store/bggjqhxp5sapm7qnbd8jcwhmmwnbv9gh-opencode-1.18.29"
+      },
+      "system": "aarch64-linux",
+      "group": "opencode",
+      "priority": 5
+    },
+    {
+      "attr_path": "opencode",
+      "broken": false,
+      "derivation": "/nix/store/npzz9h3a43b1bnlgabvcwydaka2nzkdn-opencode-1.18.29.drv",
+      "description": "AI coding agent built for the terminal",
+      "install_id": "opencode",
+      "license": "MIT",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=8ce4ef6cb6f871616146b9fe26d2a5ae594e94fe",
+      "name": "opencode-1.18.29",
+      "pname": "opencode",
+      "rev": "8ce4ef6cb6f871616146b9fe26d2a5ae594e94fe",
+      "rev_count": 1070770,
+      "rev_date": "2026-09-10T02:20:05Z",
+      "scrape_date": "2026-09-11T06:07:29.555347Z",
+      "stabilities": [
+        "unstable",
+        "staging"
+      ],
+      "unfree": false,
+      "version": "1.18.29",
+      "outputs_to_install": [
+        "out"
+      ],
+      "outputs": {
+        "out": "/nix/store/6pw7n475sa1d4scq8sy1qkdn2bcy0glc-opencode-1.18.29"
+      },
+      "system": "x86_64-linux",
+      "group": "opencode",
       "priority": 5
     }
   ]

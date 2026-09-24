@@ -7,6 +7,9 @@ After=network.target
 # @HERE@/.flox/env/manifest.toml, the same way on every box; systemctl and
 # journalctl, for what it shows, are on the system PATH flox activate inherits.
 ExecStart=/run/current-system/sw/bin/flox activate -d @HERE@ -- bead-loop-ui
+# The supervisor it asks is the installed one: a deploy clone has no target/ for the
+# UI's own lookup, and the flox hook's PATH does not reach ~/.local/bin.
+Environment=BEAD_SUPERVISOR=%h/.local/bin/bead-supervisor
 Restart=on-failure
 RestartSec=5
 

@@ -8,10 +8,12 @@ After=network-online.target
 # sessions the lanes are on (the TERM handler) and the next start recovers the rounds
 # it cut short, with no failure charged.
 Type=simple
-# flox activate resolves bd, gh, opencode, git, curl and the binary itself from
+# flox activate resolves bd, gh, opencode, git, curl from
 # @HERE@/.flox/env/manifest.toml, the same way on every box; only flox's own
-# path (a NixOS system fact, not a login profile) is hardcoded.
-ExecStart=/run/current-system/sw/bin/flox activate -d @HERE@ -- bead-supervisor run
+# path (a NixOS system fact, not a login profile) is hardcoded. The binary is the one
+# install.sh put in ~/.local/bin (the deploy's release download): a deploy clone has
+# no target/, so the flox hook's PATH does not find it by name.
+ExecStart=/run/current-system/sw/bin/flox activate -d @HERE@ -- %h/.local/bin/bead-supervisor run
 Restart=on-failure
 RestartSec=10
 
