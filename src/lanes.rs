@@ -370,7 +370,14 @@ pub fn tick(ctx: &Ctx) {
 pub fn recover(ctx: &Ctx) {
     for r in &ctx.repos {
         let repo = Repo::load(r, ctx.opts.model_flag.as_deref());
+        // Which bead each lane marker named, and when: the round in flight when the stop
+        // came, for the freshness check below — a session from well before that round is
+        // not this restart's to rejoin, even if it is still the newest on the worktree.
+        let mut lane_mtimes = std::collections::HashMap::new();
         for name in repo.lane_files() {
+            if let Some(id) = repo.lane_bead(&name) {
+                lane_mtimes.insert(id, mtime(&repo.lane_path(&name)));
+            }
             log(&format!("{}: stale lane.{name} from a stop; cleared", repo.slug));
             repo.lane_clear(&name);
         }
@@ -396,13 +403,28 @@ pub fn recover(ctx: &Ctx) {
                 // back in its queue with a marker, and the lane that takes it waits on the
                 // session instead of starting one — rather than abort it and start over.
                 if in_review || is_inprog {
+                    let kind = if in_review { "reviewer" } else { "worker" };
                     if let Some(sid) = crate::harness::running_session(&repo, &dir) {
-                        let kind = if in_review { "reviewer" } else { "worker" };
                         repo.rejoin_set(&id, &sid, kind);
                         if !in_review {
                             crate::shell::bd_status(&repo, &id, "open");
                         }
                         log(&format!("{}: {id}: {kind} session {sid} still running on the server after the stop; rejoining it", repo.slug));
+                        continue;
+                    }
+                    // Not busy — but did it finish in the gap between the stop and this
+                    // start, its result never read? Rejoin it anyway: rejoin_session finds
+                    // it not busy and reads its messages at once.
+                    let cutoff = lane_mtimes.get(&id).copied().unwrap_or(0);
+                    if let Some(sid) = crate::harness::finished_session(&repo, &id, &dir, kind, cutoff) {
+                        repo.rejoin_set(&id, &sid, kind);
+                        if !in_review {
+                            crate::shell::bd_status(&repo, &id, "open");
+                        }
+                        log(&format!(
+                            "{}: {id}: {kind} session {sid} finished between the stop and the start; rejoining it so its result is not lost",
+                            repo.slug
+                        ));
                         continue;
                     }
                 }

@@ -381,6 +381,33 @@ pub fn running_session(repo: &Repo, dir: &Path) -> Option<String> {
     sessions_on(&repo.attach, dir).into_iter().next()
 }
 
+/// A session that said DONE (or APPROVE) between the stop and this start: not busy now,
+/// so `running_session` misses it, but its result is sitting on the server unread. From
+/// `GET /session?directory=DIR` (newest first): the newest one, if its title is this
+/// bead's `ID · KIND` (`· worker · round N` or `· worker · gate fix`; `· reviewer · round
+/// N`) and it was updated after `cutoff` (the dev/review lane marker's mtime at the stop,
+/// epoch seconds) — the round that was running when the marker was written, not some
+/// older session the worktree happens to still carry.
+pub fn finished_session(repo: &Repo, id: &str, dir: &Path, kind: &str, cutoff: i64) -> Option<String> {
+    let attach = repo.attach.as_str();
+    if attach.is_empty() || !crate::util::have("curl") {
+        return None;
+    }
+    let dir_s = dir.to_string_lossy();
+    let body = crate::shell::curl_get(&format!("{attach}/session"), Some(&dir_s), 5)?;
+    let list: Value = serde_json::from_str(&body).ok()?;
+    let newest = list.as_array()?.first()?;
+    let title = newest.get("title").and_then(|t| t.as_str()).unwrap_or("");
+    if !title.starts_with(&format!("{id} · {kind}")) {
+        return None;
+    }
+    let updated = newest.pointer("/time/updated").and_then(|t| t.as_i64()).unwrap_or(0);
+    if updated < cutoff * 1000 {
+        return None;
+    }
+    newest.get("id").and_then(|v| v.as_str()).map(str::to_string)
+}
+
 fn rejoin_poll() -> f64 {
     std::env::var("BEAD_LOOP_REJOIN_POLL").ok().and_then(|s| s.parse().ok()).unwrap_or(5.0)
 }

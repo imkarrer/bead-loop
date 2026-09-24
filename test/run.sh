@@ -659,6 +659,40 @@ case_restart_rejoins_the_reviewer_session() {
   assert_file "$R/inflight/t-1" "to a PR"
   assert_match "$(cat "$T/sup.log")" "t-1: review approved" "its APPROVE taken"
 }
+case_recover_rejoins_a_session_that_finished_in_the_gap() {
+  # A session that said DONE between the stop and the start: not busy, so
+  # running_session misses it, but its result is sitting on the server unread. recover
+  # asks GET .../session?directory=WT (the list, newest first) and finds it there —
+  # titled by this bead's round, newer than nothing came before it — and rejoins it the
+  # same as a session still going, rather than reopening the bead as interrupted and
+  # losing its last words.
+  setup true auto stub/reviewer 'attach = "http://oc.test:4096"'; echo hang >"$TEST_CTRL/worker"
+  mkdir -p "$BEAD_LOOP_STATE"; touch "$BEAD_LOOP_STATE/restart"
+  setsid "$SUP" --once tick 2>>"$T/sup.log" & pid=$!
+  until grep -q '^bead-worker' "$TEST_CTRL/calls" 2>/dev/null; do sleep 0.1; done
+  echo '{"ses_live":{"type":"busy"}}' >"$TEST_CTRL/session-status.json"   # the server is on it now
+  sleep 0.3
+  kill -TERM -- -"$pid"; rc=0; wait "$pid" || rc=$?
+  assert_eq "$rc" 143 "exits 143 on TERM"
+  R=$BEAD_LOOP_STATE/repo
+  # The session finishes on the server while nothing is listening: idle before recover
+  # even runs, its DONE among its messages, its title the round that just ran.
+  jq -n '[{id:"ses_live", parentID:null, agent:"bead-worker", model:{providerID:"fast",id:"m"}, title:"t-1 · worker · round 1", time:{created:0, updated:(now*1000)}}]' >"$TEST_CTRL/sessions.json"
+  echo '{}' >"$TEST_CTRL/session-status.json"
+  jq -cn '[{info:{role:"assistant"},parts:[{type:"text",text:"DONE: work.txt written"}]}]' >"$TEST_CTRL/messages.json"
+  echo work >"$R/wt/t-1/work.txt"
+  sup recover "$REPO"
+  assert_match "$(cat "$T/sup.log")" "t-1: worker session ses_live finished between the stop and the start; rejoining it" "recover found it idle but unread"
+  assert_eq "$(cat "$R/rejoin/t-1" 2>/dev/null)" "ses_live worker" "the rejoin marker"
+  assert_eq "$(bead .status)" open "back in the dev queue"
+  ! grep -q 'interrupted by a stop' <<<"$(bead .notes)" && ok || bad "not noted as interrupted: its result stands"
+  BEAD_LOOP_REJOIN_POLL=0.1 sup --once tick; wait
+  assert_match "$(cat "$T/sup.log")" "dev: bead t-1 .*rejoining session ses_live" "the lane rejoined rather than started"
+  assert_eq "$(calls)" "bead-worker bead-reviewer" "one worker call in all; the reviewer took its DONE"
+  assert_file "$R/inflight/t-1" "to a PR"
+  assert_nofile "$R/rejoin/t-1" "the marker is spent"
+}
+
 case_new_attempt_aborts_leftover_session() {
   setup true auto '' 'attach = "http://oc.test:4096"'
   echo '{"ses_old":{"type":"busy"}}' >"$TEST_CTRL/session-status.json"
