@@ -156,7 +156,11 @@ branch kept. A **restart** — the deploy's, which drops `$STATE_DIR/restart` fi
 aborts nothing: the sessions go on inside `opencode-web.service`, and the next process
 **rejoins** them (`recover` finds a session still running under a bead's worktree, puts
 the bead back in its queue first with a `rejoin/ID` marker, and the lane that takes it
-waits on that session instead of starting one). Every start **recovers** first: stale
+waits on that session instead of starting one). A session that instead *finished* in the
+gap between the stop and the start — the model said DONE while no process was
+listening — is rejoined too: `recover` asks the server what ran under the worktree
+(`GET /session?directory=`), and a session titled by this bead's round is rejoined the
+same way, so its result is read rather than the bead reopened as interrupted. Every start **recovers** first: stale
 lane markers go, orphan sessions are aborted (or rejoined), and a dev round a stop cut
 short is back in the dev queue with no failure charged. The binary also watches its own
 path, and re-execs itself at the next moment every lane is idle when the file there has
