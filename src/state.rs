@@ -9,6 +9,10 @@
 //!   file says what. Shown in the human queue, polled, cleared when the reason goes.
 //! - `parked/ID`   the record of a parking: reason, stage, question, brief
 //! - `rejoin/ID`   `SID worker|reviewer`, a session to wait on after a restart
+//! - `target/ID`   the `[targets.NAME]` name `for_bead` resolved at claim, when it is not
+//!   the default target — read back by `Repo::for_id` so the review lane, the merge
+//!   watcher, `open`, `answer` and `escalate` act on the same checkout; goes with
+//!   `inflight/ID` at close and at park (docs/design-targets.md)
 //! - `.ID.conflict` in the inflight marker list
 //! - `lane.<name>` the lane names are dev, review, claude, or the [[lanes]] names
 //! - `wt/ID` the worktree while a bead is on a lane or waiting for review
@@ -54,6 +58,26 @@ impl Repo {
     }
     pub fn held_path(&self, id: &str) -> PathBuf {
         self.rs.join("held").join(id)
+    }
+    pub fn target_path(&self, id: &str) -> PathBuf {
+        self.rs.join("target").join(id)
+    }
+    /// The target `for_bead` resolved for this bead at claim, `""` for the default
+    /// target (no file, or an unreadable one) — `Repo::for_id`'s source.
+    pub fn target_of(&self, id: &str) -> String {
+        read_to_string(&self.target_path(id)).map(|s| s.trim().to_string()).unwrap_or_default()
+    }
+    /// Record the target a bead claimed on; `""` clears the file (the default target
+    /// needs none written, and a bead moving back to it should leave none behind).
+    pub fn set_target(&self, id: &str, name: &str) {
+        if name.is_empty() {
+            self.clear_target(id);
+        } else {
+            write_file(&self.target_path(id), &format!("{name}\n"));
+        }
+    }
+    pub fn clear_target(&self, id: &str) {
+        let _ = std::fs::remove_file(self.target_path(id));
     }
     pub fn wt(&self, id: &str) -> PathBuf {
         self.rs.join("wt").join(id)

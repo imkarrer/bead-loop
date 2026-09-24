@@ -185,6 +185,7 @@ code is fixed.
 | ready | a lane picks, stage found | dev | — | fresh from `origin/BASE`, or the kept branch resumed |
 | ready | a lane picks, stages exhausted (`park`) | human (parked, the brief) | — | — |
 | ready | the stage's worker is `claude/*`, signed out | ready (held: signed out; re-probed on every wake, Sign in rings the bell) | — | — |
+| ready | `work:NAME` names no `[targets.NAME]`, or two `work:` labels (`Repo::for_bead`) | ready (held: no such target) | — | not made |
 | ready | a session to rejoin (`rejoin/ID`) | dev, first in the queue; the lane waits on the session | — | as it was |
 | dev | `git fetch` fails, or git refuses the worktree | ready (held, with git's words) | — | not made |
 | dev | setup fails | ready (held: "setup failed", the output's tail) | — | removed |

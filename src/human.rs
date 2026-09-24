@@ -23,6 +23,7 @@ fn refuse_if_in_merge(repo: &Repo, id: &str, what: &str) {
 /// bead on a lane or waiting for review keeps its place; its next round is the escalated
 /// one. Noted on the bead, like every other change the loop makes.
 pub fn escalate(repo: &Repo, id: &str) {
+    let repo = &repo.for_id(id);
     refuse_if_in_merge(repo, id, "escalating");
     let n = repo.last_stage_start();
     let st = match repo.stage_for(n) {
@@ -56,6 +57,7 @@ pub fn escalate(repo: &Repo, id: &str) {
 /// round, and the bead goes back to the dev queue at the stage it stopped on: the round
 /// that stopped to ask is forgiven (one failure off).
 pub fn answer(repo: &Repo, id: &str, text: &str) {
+    let repo = &repo.for_id(id);
     refuse_if_in_merge(repo, id, "answering");
     let n = repo.failures_of(id);
     if n > 0 {
@@ -75,18 +77,22 @@ pub fn answer(repo: &Repo, id: &str, text: &str) {
 /// Interactive Claude Code, your terminal, your session.
 pub fn open_bead(repo: &Repo, id: &str) -> ! {
     crate::config::need("claude");
+    let repo = &repo.for_id(id);
     let json = bd_show(repo, id);
     let branch = format!("bead/{id}");
     let wt = repo.wt(id);
-    let _ = git(&repo.repo, &["fetch", "-q", "origin", &repo.base]);
+    let _ = git(&repo.repo, &["fetch", "-q", &repo.base_remote, &repo.base]);
     if !wt.is_dir() {
         if branch_exists(repo, &branch) {
             if !local_branch_exists(repo, &branch) {
-                git_must(&repo.repo, &["branch", "-q", "--track", &branch, &format!("origin/{branch}")]);
+                git_must(&repo.repo, &["branch", "-q", "--track", &branch, &format!("{}/{branch}", repo.push_remote)]);
             }
             git_must(&repo.repo, &["worktree", "add", "-q", &wt.to_string_lossy(), &branch]);
         } else {
-            git_must(&repo.repo, &["worktree", "add", "-q", "-b", &branch, &wt.to_string_lossy(), &format!("origin/{}", repo.base)]);
+            git_must(
+                &repo.repo,
+                &["worktree", "add", "-q", "-b", &branch, &wt.to_string_lossy(), &format!("{}/{}", repo.base_remote, repo.base)],
+            );
         }
         if !repo.setup.is_empty() {
             log(&format!("{}: setup: {}", repo.slug, repo.setup));

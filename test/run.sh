@@ -52,8 +52,38 @@ setup() {  # setup [GATE] [MERGE] [REVIEW_MODEL] [EXTRA_TOML]
 }
 sup() { "$SUP" "$@" 2>>"$T/sup.log"; }
 bead() { jq -r ".[] | select(.id==\"t-1\") | $1" "$BD_STATE/issues.json"; }
+bead3() { jq -r ".[] | select(.id==\"t-3\") | $1" "$BD_STATE/issues.json"; }
 set_checks() {  # set_checks '[{"context":"ci","state":"SUCCESS"}]'
   jq --argjson c "$1" '.statusCheckRollup=$c' "$TEST_CTRL/pr.json" >"$TEST_CTRL/pr.tmp" && mv "$TEST_CTRL/pr.tmp" "$TEST_CTRL/pr.json"
+}
+# setup_target: the suite's second origin (docs/design-targets.md's "Order of work" #2) —
+# a target beside the beads repo, for beads carrying work:t. $T/target.git is the fork
+# bead/t-3 pushes to (push_remote, default origin, unset in [targets.t]); a *third* bare
+# repo, $T/target-upstream.git, holds main — the base bead/t-3 forks from and the PR
+# reviews and opens against (base_remote = upstream, explicit). $T/target.git is left
+# without a main of its own on purpose: if code ever fell back to a hardcoded origin/main
+# it would find nothing there, where upstream/main resolves and carries real content —
+# a fork with a divergent or absent main is the realistic shape (docs/design-targets.md's
+# preservation-workbench example forks a repo it does not otherwise track).
+# shellcheck disable=SC2120  # forwarded to setup, whose own callers do pass these
+setup_target() {  # setup_target [GATE] [MERGE] [REVIEW_MODEL] [EXTRA_TOML]
+  setup "$@"
+  git init -q --bare "$T/target.git"
+  git init -q --bare "$T/target-upstream.git"
+  local tmp; tmp=$(mktemp -d)
+  git clone -q "file://$T/target-upstream.git" "$tmp" 2>/dev/null
+  echo base >"$tmp/README"
+  git -C "$tmp" add -A && git -C "$tmp" commit -qm base && git -C "$tmp" branch -qM main && git -C "$tmp" push -q -u origin main
+  rm -rf "$tmp"
+  # A bare `init` leaves HEAD on whatever init.defaultBranch was before anything was
+  # pushed; unlike a real GitHub repo, it does not follow main on its own, and `git
+  # remote show` then reports "HEAD branch: (unknown)" — base_remote's HEAD (base.rs
+  # remote_head) needs it set right, same as a real host's default branch would be.
+  git -C "$T/target-upstream.git" symbolic-ref HEAD refs/heads/main
+  git clone -q "file://$T/target.git" "$T/target" 2>/dev/null
+  git -C "$T/target" remote add upstream "file://$T/target-upstream.git"
+  printf '\n[targets.t]\npath = "%s"\npr_repo = "up/target"\nbase_remote = "upstream"\n' "$T/target" >>"$REPO/.bead-loop.toml"
+  jq '. + [{id:"t-3", title:"Theirs", description:"Edit work.txt", acceptance_criteria:"work.txt exists", status:"open", priority:2, issue_type:"task", labels:["delegate:local","work:t"]}]' "$BD_STATE/issues.json" >"$BD_STATE/i.tmp" && mv "$BD_STATE/i.tmp" "$BD_STATE/issues.json"
 }
 
 # ---- assertions ----------------------------------------------------------------
@@ -217,7 +247,7 @@ case_ci_pending_then_green() {
   assert_eq "$(bead .status)" in_progress "pending: bead waits"
   set_checks '[{"context":"ci","state":"SUCCESS"},{"__typename":"CheckRun","conclusion":"SUCCESS"}]'; sup reconcile "$REPO"
   assert_eq "$(jq -r .state "$TEST_CTRL/pr.json")" MERGED "green: merged"
-  assert_match "$(cat "$TEST_CTRL/gh.log")" "pr merge 7 --squash --delete-branch" "squash, branch deleted"
+  assert_match "$(cat "$TEST_CTRL/gh.log")" "pr merge https://github.com/example/repo/pull/7 --squash --delete-branch" "squash, branch deleted"
   assert_eq "$(bead .status)" closed "green: bead closed"
   assert_match "$(bead .close_reason)" "ci=SUCCESS" "close reason quotes the checks"
   assert_nofile "$BEAD_LOOP_STATE/repo/inflight/t-1" "inflight cleared"
@@ -242,7 +272,7 @@ case_ci_red() {
 }
 case_merge_pipeline() {
   setup true pipeline; sup work "$REPO"
-  assert_match "$(cat "$TEST_CTRL/gh.log")" "pr edit 7 --add-label automerge" "labelled as soon as the PR opens"
+  assert_match "$(cat "$TEST_CTRL/gh.log")" "pr edit https://github.com/example/repo/pull/7 --add-label automerge" "labelled as soon as the PR opens"
   assert_eq "$(jq -r '.labels | join(",")' "$TEST_CTRL/pr.json")" automerge "default label is automerge"
   set_checks '[{"context":"ci","state":"SUCCESS"}]'; sup reconcile "$REPO"
   assert_eq "$(jq -r .state "$TEST_CTRL/pr.json")" OPEN "green: the tick does not merge, the pipeline does"
@@ -258,8 +288,8 @@ case_merge_pipeline_label_and_adoption() {
   jq '. + [{id:"t-9", title:"Theirs", description:"z", status:"open", priority:2, labels:[]}]' "$BD_STATE/issues.json" >"$BD_STATE/i.tmp" && mv "$BD_STATE/i.tmp" "$BD_STATE/issues.json"
   jq -n '[{number:41, headRefName:"bead/t-9", url:"https://github.com/example/repo/pull/41", state:"OPEN", checks:[{context:"ci",state:"SUCCESS"}]}]' >"$TEST_CTRL/extra-prs.json"
   sup reconcile "$REPO"
-  assert_eq "$(cat "$TEST_CTRL/labels-extra")" "41 ship-it" "an adopted PR gets the configured label too"
-  ! grep -q 'pr merge 41' "$TEST_CTRL/gh.log" && ok || bad "and is left to the pipeline"
+  assert_eq "$(cat "$TEST_CTRL/labels-extra")" "https://github.com/example/repo/pull/41 ship-it" "an adopted PR gets the configured label too"
+  ! grep -q 'pr merge' "$TEST_CTRL/gh.log" && ok || bad "and is left to the pipeline"
 }
 case_merge_pipeline_label_missing() {
   setup true pipeline; touch "$TEST_CTRL/label-missing"; sup work "$REPO"
@@ -272,7 +302,7 @@ case_behind_then_closed_unmerged() {
   setup; sup work "$REPO"
   jq '.mergeStateStatus="BEHIND"' "$TEST_CTRL/pr.json" >"$TEST_CTRL/pr.tmp" && mv "$TEST_CTRL/pr.tmp" "$TEST_CTRL/pr.json"
   set_checks '[{"context":"ci","state":"SUCCESS"}]'; sup reconcile "$REPO"
-  assert_match "$(cat "$TEST_CTRL/gh.log")" "pr update-branch 7" "behind: branch updated, not merged"
+  assert_match "$(cat "$TEST_CTRL/gh.log")" "pr update-branch https://github.com/example/repo/pull/7" "behind: branch updated, not merged"
   assert_eq "$(jq -r .state "$TEST_CTRL/pr.json")" OPEN "behind: waits for CI to rerun"
   # Someone closes it instead: parked for you, out of the merge queue.
   jq '.state="CLOSED"' "$TEST_CTRL/pr.json" >"$TEST_CTRL/pr.tmp" && mv "$TEST_CTRL/pr.tmp" "$TEST_CTRL/pr.json"; sup reconcile "$REPO"
@@ -410,13 +440,14 @@ case_adopts_foreign_bead_prs() {
   jq -n '[{number:41, headRefName:"bead/t-9-some-slug", url:"https://github.com/example/repo/pull/41", state:"OPEN", checks:[{context:"ci",state:"SUCCESS"}]},
           {number:42, headRefName:"feature/not-a-bead", url:"https://github.com/example/repo/pull/42", state:"OPEN", checks:[{context:"ci",state:"SUCCESS"}]}]' >"$TEST_CTRL/extra-prs.json"
   sup reconcile "$REPO"
-  assert_match "$(cat "$TEST_CTRL/gh.log")" "pr merge 41 --squash" "green foreign bead PR merged"
-  ! grep -q 'pr merge 42' "$TEST_CTRL/gh.log" && ok || bad "non-bead branch left alone"
+  assert_match "$(cat "$TEST_CTRL/gh.log")" "pr merge https://github.com/example/repo/pull/41 --squash" "green foreign bead PR merged"
+  ! grep -q 'pull/42' "$TEST_CTRL/gh.log" && ok || bad "non-bead branch left alone"
   assert_eq "$(jq -r '.[]|select(.id=="t-9")|.status' "$BD_STATE/issues.json")" closed "its bead closed"
   assert_nofile "$BEAD_LOOP_STATE/repo/inflight/t-9" "untracked after merge"
 }
 case_adopted_prs_do_not_block_new_work() {
   setup
+  jq '. + [{id:"x-1", title:"Theirs", description:"z", status:"open", priority:2, labels:[]}]' "$BD_STATE/issues.json" >"$BD_STATE/i.tmp" && mv "$BD_STATE/i.tmp" "$BD_STATE/issues.json"
   jq -n '[{number:41, headRefName:"bead/x-1", url:"https://github.com/example/repo/pull/41", state:"OPEN", checks:[{context:"ci",state:"PENDING"}]}]' >"$TEST_CTRL/extra-prs.json"
   sup --once tick
   assert_file "$BEAD_LOOP_STATE/repo/inflight/x-1" "adopted and tracked"
@@ -1016,6 +1047,51 @@ case_conflicting_pr_rebased_by_the_last_stage() {
   jq '.mergeable="MERGEABLE"' "$TEST_CTRL/pr.json" >"$TEST_CTRL/pr.tmp" && mv "$TEST_CTRL/pr.tmp" "$TEST_CTRL/pr.json"
   : >"$TEST_CTRL/calls"; printf 'approve\napprove\n' >"$TEST_CTRL/review"; sup work "$REPO"
   assert_eq "$(cut -d' ' -f3 "$TEST_CTRL/calls" | head -1)" "stub/senior" "conflict_worker does the rebase"
+}
+
+# ---- targets (docs/design-targets.md) -----------------------------------------------
+case_target() {
+  # A bead labelled work:t claims the [targets.t] checkout: its round works in
+  # $T/target (forked from target-upstream's main, not the beads repo's own origin), its
+  # PR opens against the configured pr_repo, and $RS/target/t-3 remembers the target
+  # until the bead is done.
+  setup_target
+  sup work "$REPO" t-3
+  assert_eq "$(calls)" "bead-worker bead-reviewer" "worker then reviewer, in the target checkout"
+  assert_eq "$(bead3 .status)" in_progress "t-3 parked in_progress until merge"
+  git -C "$T/target.git" show-ref -q refs/heads/bead/t-3 && ok || bad "target.git has no branch bead/t-3"
+  assert_nobranch bead/t-3 "the beads repo's own origin has no bead/t-3"
+  assert_eq "$(git -C "$T/target.git" show bead/t-3:README)" base "forked from target-upstream's main (its README), not a stale copy on the fork"
+  assert_match "$(cat "$TEST_CTRL/gh.log")" "pr create --repo up/target" "PR opened on the configured pr_repo"
+  assert_match "$(cat "$TEST_CTRL/gh.log")" -- "--head [^ ]\{1,\}:bead/t-3" "the head names the fork's owner (Repo::head_ref)"
+  assert_eq "$(cat "$BEAD_LOOP_STATE/repo/target/t-3")" t "target/t-3 holds the target's name"
+  # Merged: closed, and target/t-3 goes with inflight/t-3.
+  set_checks '[{"context":"ci","state":"SUCCESS"}]'; sup reconcile "$REPO"
+  assert_eq "$(bead3 .status)" closed "merged: closed"
+  assert_nofile "$BEAD_LOOP_STATE/repo/inflight/t-3" "inflight cleared"
+  assert_nofile "$BEAD_LOOP_STATE/repo/target/t-3" "target/t-3 removed with inflight/t-3"
+}
+case_target_unknown() {
+  # work:NAME naming no [targets.NAME] (or two work: labels) is a config mistake, not the
+  # bead's: held with the reason, no failure, and no round — no worktree at all.
+  setup
+  jq '. + [{id:"t-4", title:"Unknown target", description:"z", status:"open", priority:2, labels:["delegate:local","work:zzz"]}]' "$BD_STATE/issues.json" >"$BD_STATE/i.tmp" && mv "$BD_STATE/i.tmp" "$BD_STATE/issues.json"
+  sup work "$REPO" t-4
+  assert_eq "$(calls)" "" "no model called: held before any round"
+  assert_eq "$(jq -r '.[] | select(.id=="t-4") | .status' "$BD_STATE/issues.json")" open "still in the dev queue"
+  assert_eq "$(cat "$BEAD_LOOP_STATE/repo/failures/t-4" 2>/dev/null || echo 0)" 0 "no failure charged"
+  assert_match "$(cat "$BEAD_LOOP_STATE/repo/held/t-4")" "work:zzz" "held, naming the label"
+  assert_match "$(jq -r '.[] | select(.id=="t-4") | .notes' "$BD_STATE/issues.json")" "held, no failure charged" "noted on the bead"
+  assert_nofile "$BEAD_LOOP_STATE/repo/wt/t-4" "no worktree created"
+}
+case_target_review_lane() {
+  # The reviewer's diff is taken in the target checkout against upstream's main — not
+  # against origin/main, which does not even exist on this fork (setup_target's point).
+  setup_target
+  sup work "$REPO" t-3
+  assert_match "$(cat "$TEST_CTRL/prompt.2")" "The diff against main is under" "the base name is still just main"
+  assert_match "$(cat "$TEST_CTRL/prompt.2")" "<diff>" "reviewer got a diff"
+  assert_match "$(cat "$TEST_CTRL/prompt.2")" "work.txt" "the diff shows the worker's change: computed against upstream/main, which has it"
 }
 
 # ---- the state machine's exits (docs/state-machine.md) ------------------------------------
