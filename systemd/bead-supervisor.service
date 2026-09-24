@@ -8,11 +8,12 @@ After=network-online.target
 # sessions the lanes are on (the TERM handler) and the next start recovers the rounds
 # it cut short, with no failure charged.
 Type=simple
-ExecStart=%h/.local/bin/bead-supervisor run
+# flox activate resolves bd, gh, opencode, git, curl and the binary itself from
+# @HERE@/.flox/env/manifest.toml, the same way on every box; only flox's own
+# path (a NixOS system fact, not a login profile) is hardcoded.
+ExecStart=/run/current-system/sw/bin/flox activate -d @HERE@ -- bead-supervisor run
 Restart=on-failure
 RestartSec=10
-# opencode, bd, gh, git, curl, claude come from the login profile.
-Environment=PATH=%h/.local/bin:%h/.nix-profile/bin:/run/current-system/sw/bin:/usr/bin:/bin
 
 [Install]
 WantedBy=default.target

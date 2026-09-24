@@ -1,5 +1,5 @@
 //! The one description of a repo's state, as JSON: config, the three queues in their
-//! order, the two lanes and what each is on, the parked and held beads, and every
+//! order, each lane and what it is on, the parked and held beads, and every
 //! worktree with what the attached opencode server has under it. `status` renders it as
 //! text; `--json status` prints it for the web UI. The JSON is the bash's, key for key.
 use crate::config::Repo;
@@ -12,12 +12,18 @@ use std::path::Path;
 
 /// `sessions_json DIR`: the server's top-level sessions under DIR, newest first, with the
 /// state and web UI url worked out. A session the server calls busy with no `opencode run`
-/// client left on this box is an orphan.
+/// client left on this box has no client for one of two reasons: `rejoin/ID` (state.rs)
+/// names it — a restart found it and the loop is already polling it, same as a rejoined
+/// round's client would (harness.rs rejoin_session) — or nothing does, which is a real
+/// **orphan**: something else killed the client (`kill -9`, a crash) and nothing is
+/// coming back for it.
 pub fn sessions_json(repo: &Repo, dir: &Path) -> Value {
     if repo.attach.is_empty() || !crate::util::have("curl") {
         return json!([]);
     }
     let d = dir.to_string_lossy().into_owned();
+    let bead_id = dir.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+    let rejoin_sid = repo.rejoin_of(&bead_id).map(|(sid, _)| sid);
     let busy: Value =
         curl_get(&format!("{}/session/status", repo.attach), Some(&d), 3).and_then(|s| serde_json::from_str(&s).ok()).unwrap_or(json!({}));
     let list: Value =
@@ -37,6 +43,15 @@ pub fn sessions_json(repo: &Repo, dir: &Path) -> Value {
         .map(|s| {
             let id = s.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
             let is_busy = busy.get(&id).map(|b| !b.is_null() && b != &Value::Bool(false)).unwrap_or(false);
+            let state = if !is_busy {
+                "idle"
+            } else if clients > 0 {
+                "busy"
+            } else if rejoin_sid.as_deref() == Some(id.as_str()) {
+                "rejoin"
+            } else {
+                "orphan"
+            };
             json!({
                 "id": id,
                 "agent": s.get("agent").cloned().unwrap_or(Value::Null),
@@ -45,7 +60,7 @@ pub fn sessions_json(repo: &Repo, dir: &Path) -> Value {
                     s.pointer("/model/id").and_then(|v| v.as_str()).unwrap_or("null")),
                 "title": s.get("title").and_then(|v| v.as_str()).unwrap_or(""),
                 "updated": (updated(s) / 1000.0).floor() as i64,
-                "state": if is_busy { if clients > 0 { "busy" } else { "orphan" } } else { "idle" },
+                "state": state,
                 "url": format!("{url}/session/{id}"),
             })
         })
@@ -435,7 +450,11 @@ pub fn status_text(j: &Value) -> String {
             if st == "idle" {
                 continue;
             }
-            let state_col = if st == "orphan" { "ORPHAN".to_string() } else { pad(st, 6) };
+            let state_col = match st {
+                "orphan" => "ORPHAN".to_string(),
+                "rejoin" => "REJOIN".to_string(),
+                _ => pad(st, 6),
+            };
             out.push_str(&format!(
                 "  {}  {}  {}  {}  {}  {}\n",
                 state_col,
@@ -450,6 +469,8 @@ pub fn status_text(j: &Value) -> String {
                     "          no client on this box; stop it:  curl -X POST {attach}/session/{}/abort\n",
                     s(sess, "id")
                 ));
+            } else if st == "rejoin" {
+                out.push_str("          the loop already restarted and is waiting on this session; leave it (aborting costs a failure)\n");
             }
         }
     }
@@ -714,11 +735,17 @@ mod tests {
         j["attach"] = json!("http://oc.test:4096");
         j["worktrees"][0]["sessions"] = json!([
             {"id":"ses_rev","agent":"bead-reviewer","model":"slow/m","title":"Reviewing","updated": now(),"state":"orphan","url":"http://oc.test:4096/x/session/ses_rev"},
+            {"id":"ses_wrk","agent":"bead-worker","model":"fast/m","title":"Working","updated": now(),"state":"rejoin","url":"http://oc.test:4096/x/session/ses_wrk"},
             {"id":"ses_old","agent":"bead-worker","model":"fast/m","title":"Old","updated": 0,"state":"idle","url":"u"}
         ]);
         let t = status_text(&j);
         assert!(t.contains("  ORPHAN  bead-reviewer  slow/m              0s ago   Reviewing                                 http://oc.test:4096/x/session/ses_rev\n"), "{t}");
         assert!(t.contains("stop it:  curl -X POST http://oc.test:4096/session/ses_rev/abort\n"));
+        // A rejoined session is not an orphan: the loop already restarted and is polling
+        // it (harness.rs rejoin_session), so the abort hint would be actively wrong.
+        assert!(t.contains("  REJOIN  bead-worker    fast/m              0s ago   Working                                   http://oc.test:4096/x/session/ses_wrk\n"), "{t}");
+        assert!(t.contains("the loop already restarted and is waiting on this session; leave it (aborting costs a failure)\n"));
+        assert!(!t.contains("stop it:  curl -X POST http://oc.test:4096/session/ses_wrk/abort"), "no abort hint for a rejoin");
         assert!(!t.contains("ses_old"), "idle sessions are history, not shown");
         let empty =
             status_text(&status_json_from(&crate::config::test_repo(&d.join("e"), &["a"]), json!([]), json!([]), &default_lanes(false)));

@@ -45,9 +45,6 @@
       "shellcheck": {
         "pkg-path": "shellcheck",
         "outputs": "all"
-      },
-      "yq": {
-        "pkg-path": "yq-go"
       }
     },
     "vars": {
@@ -1311,93 +1308,6 @@
         "doc": "/nix/store/l86fy7xdmavvqqd3i33l430jkjpa1gzx-shellcheck-0.11.0-doc",
         "man": "/nix/store/yjlrw4p8z0423ishzxdddhjw2fgxpix6-shellcheck-0.11.0-man",
         "out": "/nix/store/l2zzhk2pr7572id61c34d368xfinpk25-shellcheck-0.11.0"
-      },
-      "system": "x86_64-linux",
-      "group": "toplevel",
-      "priority": 5
-    },
-    {
-      "attr_path": "yq-go",
-      "broken": false,
-      "derivation": "/nix/store/g8w1sza3hv5dyzmgcb0npns0zb1b4f70-yq-go-4.53.3.drv",
-      "description": "Portable command-line YAML processor",
-      "install_id": "yq",
-      "license": "MIT",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=ef34387ddd751e1ab8857adf4676492d32eb24ec",
-      "name": "yq-go-4.53.3",
-      "pname": "yq-go",
-      "rev": "ef34387ddd751e1ab8857adf4676492d32eb24ec",
-      "rev_count": 1073009,
-      "rev_date": "2026-09-13T08:01:44Z",
-      "scrape_date": "2026-09-15T05:01:10.870417Z",
-      "stabilities": [
-        "unstable"
-      ],
-      "unfree": false,
-      "version": "4.53.3",
-      "outputs_to_install": [
-        "out"
-      ],
-      "outputs": {
-        "out": "/nix/store/v3ayf8is5s9c90z6bwqvsjvya4wvmsfk-yq-go-4.53.3"
-      },
-      "system": "aarch64-darwin",
-      "group": "toplevel",
-      "priority": 5
-    },
-    {
-      "attr_path": "yq-go",
-      "broken": false,
-      "derivation": "/nix/store/i7ac8n0hfhqshxnqjccbwqzhkxgh662g-yq-go-4.53.3.drv",
-      "description": "Portable command-line YAML processor",
-      "install_id": "yq",
-      "license": "MIT",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=ef34387ddd751e1ab8857adf4676492d32eb24ec",
-      "name": "yq-go-4.53.3",
-      "pname": "yq-go",
-      "rev": "ef34387ddd751e1ab8857adf4676492d32eb24ec",
-      "rev_count": 1073009,
-      "rev_date": "2026-09-13T08:01:44Z",
-      "scrape_date": "2026-09-15T05:34:05.623625Z",
-      "stabilities": [
-        "unstable"
-      ],
-      "unfree": false,
-      "version": "4.53.3",
-      "outputs_to_install": [
-        "out"
-      ],
-      "outputs": {
-        "out": "/nix/store/bnyxyzgh0qh5vqciarwx2rdd02p3165h-yq-go-4.53.3"
-      },
-      "system": "aarch64-linux",
-      "group": "toplevel",
-      "priority": 5
-    },
-    {
-      "attr_path": "yq-go",
-      "broken": false,
-      "derivation": "/nix/store/c4bn1xsbm2pcagd72a5s72z0xa7g8ynz-yq-go-4.53.3.drv",
-      "description": "Portable command-line YAML processor",
-      "install_id": "yq",
-      "license": "MIT",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=ef34387ddd751e1ab8857adf4676492d32eb24ec",
-      "name": "yq-go-4.53.3",
-      "pname": "yq-go",
-      "rev": "ef34387ddd751e1ab8857adf4676492d32eb24ec",
-      "rev_count": 1073009,
-      "rev_date": "2026-09-13T08:01:44Z",
-      "scrape_date": "2026-09-15T06:11:22.729862Z",
-      "stabilities": [
-        "unstable"
-      ],
-      "unfree": false,
-      "version": "4.53.3",
-      "outputs_to_install": [
-        "out"
-      ],
-      "outputs": {
-        "out": "/nix/store/wnh2xakcycx328c14s9dvpwq2diyg8hf-yq-go-4.53.3"
       },
       "system": "x86_64-linux",
       "group": "toplevel",
