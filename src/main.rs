@@ -26,6 +26,7 @@
 //!   bead-supervisor stats [REPO...]       the scoreboard: landed, first-try, without Claude, rounds and time per
 //!                                         landing, send-backs by reason and model, model cost — 24h/7d/30d/all
 //!   bead-supervisor log REPO [BEAD_ID]    follow the newest worker/reviewer session: tool calls and text
+//!   bead-supervisor doctor [--json]         one line per dependency probe (green/red), or JSON array
 //!
 //!   --dry-run    pick the bead, print the prompt, change nothing
 //!   --once       tick: one pass of each lane, in turn, whether or not more is queued
@@ -34,6 +35,7 @@
 //!   --local      implement, gate and review; keep the branch here, no push, no PR
 //!   --model M    opencode provider/model for the worker this run
 mod config;
+mod doctor;
 mod harness;
 mod human;
 mod lanes;
@@ -48,6 +50,7 @@ mod status;
 mod util;
 
 use config::{config_dir, Layers, Repo};
+use doctor::run as doctor_run;
 use round::Opts;
 use std::path::PathBuf;
 use util::{die, log};
@@ -109,7 +112,8 @@ fn main() {
     // One supervisor at a time for anything that runs rounds or the merge queue; the
     // read-only and the one-bead commands are free.
     let _lock = match cmd.as_str() {
-        "status" | "stats" | "log" | "watch" | "lane" | "pause" | "resume" | "escalate" | "answer" | "open" | "priority" | "wake" => None,
+        "status" | "stats" | "log" | "watch" | "lane" | "pause" | "resume" | "escalate" | "answer" | "open" | "priority" | "wake"
+        | "doctor" => None,
         _ => match lanes::try_lock(&state_dir.join("lock")) {
             Some(l) => Some(l),
             None => {
@@ -220,6 +224,10 @@ fn main() {
         "log" => {
             let repo = repo_at(0);
             status::log_follow(&repo, rest.get(1).map(String::as_str));
+        }
+        "doctor" => {
+            let loaded: Vec<Repo> = repos.iter().map(|r| Repo::load(r, opts.model_flag.as_deref())).collect();
+            doctor_run(&loaded, json);
         }
         other => die(&format!("unknown command {other}")),
     }

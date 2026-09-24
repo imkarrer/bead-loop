@@ -131,23 +131,9 @@ config, and have CI report a status on the repo's PRs with `gh` logged in. Every
 ## Run
 
 ```bash
-bead-supervisor run                                     # what the service runs: the resident loop
-bead-supervisor --dry-run work ~/src/repo               # the bead the dev lane would take, and its prompt
-bead-supervisor --local work ~/src/repo inq-abc.1       # implement, gate, review; no push
-bead-supervisor work ~/src/repo                         # one bead through both lanes, to a PR
-bead-supervisor watch                                   # the lanes, queues, parked and held, every 5 s
-bead-supervisor answer ~/src/repo inq-abc.1 "use --dry-run"   # reply to a parked bead; back to the dev queue
-bead-supervisor escalate ~/src/repo inq-abc.1           # to the last stage (Claude) now
-bead-supervisor open ~/src/repo inq-abc.1               # you + Claude Code in the bead's worktree, question in hand
+bead-supervisor doctor                                  # every dependency probed, red or green, one line each; --json for the page
 ```
 
-`install.sh` already started the units (see Install); by hand, the same command it runs
-is `systemctl --user enable --now opencode-web.service bead-loop-ui.service
-bead-supervisor.timer`. `systemctl --user stop bead-supervisor.timer` (or the page's
-**Off**) takes the loop back down; `gpu-mode game`/`work` toggles it and the local model
-server together where that command exists.
-
-`--help` lists the rest (`tick`, `wake`, `pause`, `priority`, `recover`, `stats`, `log`).
 The page, **<http://127.0.0.1:4097>**, shows the lanes, the scoreboard, the queues and
 **Needs you** — every parked bead with its question, every held bead with its reason —
 with a lever for each thing you would otherwise type.

@@ -111,6 +111,18 @@ render_page() {
     require(process.argv[2]);' "$1" "$T/page.js" "${2-}"
 }
 
+# render_banner STATE.json: the page's script the same way, but the doctor banner element
+# instead of main — {hidden, html} once the state has been pushed through it.
+render_banner() {
+  sed -n '/^<script>/,/^<\/script>/p' "$HERE/../ui/index.html" | sed '1d;$d' >"$T/page.js"
+  node -e '
+    const els = {}; const el = (id) => els[id] ||= { id, innerHTML: "", textContent: "", hidden: false, dataset: {}, scrollTop: 0, scrollHeight: 0, value: "" };
+    global.document = { getElementById: el, addEventListener() {}, hidden: false };
+    global.window = global; global.setInterval = () => {};
+    global.EventSource = class { constructor() { setTimeout(() => { this.onopen(); this.onmessage({ data: require("fs").readFileSync(process.argv[1], "utf8") }); const b = el("doctor"); console.log(JSON.stringify({ hidden: b.hidden, html: b.innerHTML })); }, 0); } };
+    require(process.argv[2]);' "$1" "$T/page.js"
+}
+
 # ---- cases -------------------------------------------------------------------------
 case_dry_run() {
   setup; out=$(sup --dry-run work "$REPO")
@@ -1402,6 +1414,40 @@ case_lanes_from_toml() {
   assert_match "$out" "fast lane:   *t-2 " "status: the fast lane is on t-2"
   assert_eq "$(sup --json status "$REPO" | jq -r '(.queues.dev | length), (.parked | length)' | tr '\n' ' ')" "0 0 " "json: neither bead is queued or parked while on a lane"
   kill -TERM -- -"$pid"; wait "$pid" 2>/dev/null || true
+}
+
+case_doctor() {
+  # Every dependency probed, red or green: bd's version and git are real; gh auth, claude
+  # auth, the opencode provider named in the stages (its /models) and the attach server
+  # (GET /session) are the stubs; systemctl is stubbed too, so the three units are
+  # deterministic. All green first, then Claude signed out is the one red line.
+  setup true auto stub/reviewer 'attach = "http://oc.test:4096"'
+  export OPENCODE_CONFIG=$T/opencode.json
+  jq -n '{provider:{stub:{options:{baseURL:"http://oc.test:4096"}}}}' >"$OPENCODE_CONFIG"
+  out=$(sup doctor "$REPO")
+  assert_match "$out" '^\[green\] bd: ' "one line per probe, bd first"
+  assert_match "$out" '\[green\] opencode provider stub: reachable at http://oc.test:4096' "the provider named in the stages"
+  assert_match "$out" '\[green\] attach server: reachable at http://oc.test:4096' "GET /session"
+  assert_match "$out" '\[green\] systemd units: ' "the three units, stubbed active"
+  j=$(sup --json doctor "$REPO")
+  assert_eq "$(printf '%s' "$j" | jq -r 'type')" array "--json: an array"
+  assert_eq "$(printf '%s' "$j" | jq -r '[.[] | (has("name") and has("ok") and has("detail"))] | all')" true "--json: each probe is {name, ok, detail}"
+  assert_eq "$(printf '%s' "$j" | jq -r '[.[].ok] | all')" true "--json: all green too"
+
+  : >"$TEST_CTRL/claude-signed-out"
+  rc=0; out=$(sup doctor "$REPO") || rc=$?
+  assert_eq "$rc" 1 "doctor: exits 1 with a red line when claude auth status says signed out"
+  assert_match "$out" '\[red\] claude auth: signed out' "the red line names claude"
+  assert_match "$out" '\[green\] bd: ' "and the rest stayed green"
+
+  # The page banner: nothing red, no banner; one red probe, one banner naming it.
+  jq -n '{now:1,repos:[],claude:null,doctor:[{name:"gh auth",ok:true,detail:"logged in"}],stats:null,login:null,error:null,timer:{available:false},service:{available:false},log:[],gpu:{available:false}}' >"$T/state-green.json"
+  b=$(render_banner "$T/state-green.json")
+  assert_eq "$(printf '%s' "$b" | jq -r '.hidden')" true "green: the banner is hidden"
+  jq '.doctor = [{name:"claude auth",ok:false,detail:"signed out"}]' "$T/state-green.json" >"$T/state-red.json"
+  b=$(render_banner "$T/state-red.json")
+  assert_eq "$(printf '%s' "$b" | jq -r '.hidden')" false "one red probe: the banner shows"
+  assert_match "$(printf '%s' "$b" | jq -r '.html')" '1 check red.*claude auth: signed out' "and names it"
 }
 
 # ---- main ----------------------------------------------------------------------------
