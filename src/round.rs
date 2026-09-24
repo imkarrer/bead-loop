@@ -16,7 +16,9 @@ use crate::shell::{
 };
 use crate::signals;
 use crate::state::{dev_queue, review_queue, StageHit};
-use crate::util::{cut_bytes, date_iminutes, die, first_line, log, read_to_string, stamp, stderr_str, stdout_str, tail_lines, write_file};
+use crate::util::{
+    cut_bytes, date_iminutes, die, first_line, log, read_to_string, stamp, stderr_str, stdout_str, tail_bytes, tail_lines, write_file,
+};
 use serde_json::Value;
 use std::path::Path;
 
@@ -394,6 +396,37 @@ pub fn gate_fix_prompt(prompt: &str, gate: &str, gate_out: &str) -> String {
     )
 }
 
+/// The post-mortem's prompt: the bead's title and criteria, the worker's last words (cut
+/// to the tail — a failure is at the end, not the start), and the gate's tail when there
+/// was one.
+pub fn postmortem_prompt(bead: &Value, worker_text: &str, gate_tail: &str) -> String {
+    let mut out =
+        format!("<bead>\n{}\n</bead>\n\n<worker-transcript>\n{}\n</worker-transcript>", render_bead(bead), tail_bytes(worker_text, 8000));
+    if !gate_tail.is_empty() {
+        out.push_str(&format!("\n\n<gate-output>\n{gate_tail}\n</gate-output>"));
+    }
+    out.push_str(
+        "\n\nIn at most five lines, as three numbered lines:\n1. What the worker tried.\n2. Where and why it stopped.\n3. The first thing the next round should do.\n\nName files and commands from the transcript exactly as they appear; do not guess what the worker meant. No verdict, no format beyond the three numbered lines.",
+    );
+    out
+}
+
+/// The post-mortem note appended to a send-back: empty when there is no pre-check model,
+/// or when the model never answers or errors — never a hold, never a failure of its own,
+/// so the note it cannot write is simply not there.
+fn postmortem(repo: &Repo, id: &str, wt: &Path, json: &Value, worker_text: &str, gate_tail: &str, logf: &Path) -> String {
+    if repo.precheck_model.is_empty() {
+        return String::new();
+    }
+    let prompt = postmortem_prompt(json, worker_text, gate_tail);
+    let logp = std::path::PathBuf::from(format!("{}.postmortem.jsonl", logf.display()));
+    let r = run_agent(repo, "bead-postmortem", &repo.precheck_model, wt, &logp, &prompt, &format!("{id} · post-mortem"), 120, Some(json));
+    if r.empty || r.rc != 0 {
+        return String::new();
+    }
+    format!("\nPost-mortem ({}):\n{}", repo.precheck_model, cut_bytes(&r.text, 1500))
+}
+
 /// The reviewer's prompt: the bead, the worker's report, the diff against the base.
 pub fn review_prompt(json: &Value, base: &str, report: &str, stat: &str, diff: &str) -> String {
     format!(
@@ -638,16 +671,9 @@ pub fn dev_one(repo: &Repo, opts: &Opts, id: Option<&str>, last_id: &mut Option<
         return Pass::Worked;
     }
     if r.rc != 0 {
-        send_back(
-            repo,
-            &id,
-            &wt,
-            false,
-            &format!("worker exited {} (timeout={timeout} s). Log: {}", r.rc, worker_log.display()),
-            &model,
-            st.last,
-            Some(&logf),
-        );
+        let note = format!("worker exited {} (timeout={timeout} s). Log: {}", r.rc, worker_log.display());
+        let pm = postmortem(repo, &id, &wt, &json, &r.text, "", &logf);
+        send_back(repo, &id, &wt, false, &format!("{note}{pm}"), &model, st.last, Some(&logf));
         return Pass::Worked;
     }
     if let Some(b) = last_line_starting(&r.text, "BLOCKED:") {
@@ -655,16 +681,9 @@ pub fn dev_one(repo: &Repo, opts: &Opts, id: Option<&str>, last_id: &mut Option<
         return Pass::Worked;
     }
     if !settle_worktree(repo, &wt, &format!("{id}: {title}")) {
-        send_back(
-            repo,
-            &id,
-            &wt,
-            false,
-            &format!("worker made no commit. Last words: {}", tail_lines(&r.text, 3)),
-            &model,
-            st.last,
-            Some(&logf),
-        );
+        let note = format!("worker made no commit. Last words: {}", tail_lines(&r.text, 3));
+        let pm = postmortem(repo, &id, &wt, &json, &r.text, "", &logf);
+        send_back(repo, &id, &wt, false, &format!("{note}{pm}"), &model, st.last, Some(&logf));
         return Pass::Worked;
     }
     // The gate gets one fix round inside the lane: a compiler message is the cheapest review there is.
@@ -686,16 +705,9 @@ pub fn dev_one(repo: &Repo, opts: &Opts, id: Option<&str>, last_id: &mut Option<
             return Pass::Worked;
         }
         if r2.rc != 0 {
-            send_back(
-                repo,
-                &id,
-                &wt,
-                false,
-                &format!("worker exited {} in gate fix round. Log: {}", r2.rc, fix_log.display()),
-                &model,
-                st.last,
-                Some(&logf),
-            );
+            let note = format!("worker exited {} in gate fix round. Log: {}", r2.rc, fix_log.display());
+            let pm = postmortem(repo, &id, &wt, &json, &r2.text, &gate_out, &logf);
+            send_back(repo, &id, &wt, false, &format!("{note}{pm}"), &model, st.last, Some(&logf));
             return Pass::Worked;
         }
         if let Some(b) = last_line_starting(&r2.text, "BLOCKED:") {
@@ -707,7 +719,9 @@ pub fn dev_one(repo: &Repo, opts: &Opts, id: Option<&str>, last_id: &mut Option<
         if !run_gate(repo, &wt, &gate2) {
             cut_short(repo, &id);
             let tail = tail_lines(&read_to_string(&gate2).unwrap_or_default(), 15);
-            send_back(repo, &id, &wt, false, &format!("gate failed twice: {}\n{tail}", repo.gate), &model, st.last, Some(&logf));
+            let note = format!("gate failed twice: {}\n{tail}", repo.gate);
+            let pm = postmortem(repo, &id, &wt, &json, &r2.text, &tail, &logf);
+            send_back(repo, &id, &wt, false, &format!("{note}{pm}"), &model, st.last, Some(&logf));
             return Pass::Worked;
         }
         final_text = r2.text;
@@ -999,6 +1013,19 @@ mod tests {
         let p = gate_fix_prompt("PROMPT", "cargo test", "error[E0308]\n  --> x.rs:1");
         assert!(p.starts_with("PROMPT\n\nYour commit on this branch failed the repository's gate: `cargo test`."));
         assert!(p.ends_with("<gate-output>\nerror[E0308]\n  --> x.rs:1\n</gate-output>"));
+    }
+    #[test]
+    fn postmortem_prompt_carries_bead_transcript_and_gate() {
+        let j: Value = serde_json::json!([{"id":"t-1","title":"T","description":"D","acceptance_criteria":"AC"}]);
+        let p = postmortem_prompt(&j, "I tried this.\nBLOCKED: no such flag", "error[E0308]");
+        assert!(p.contains("<bead>\nid: t-1"));
+        assert!(p.contains("ACCEPTANCE CRITERIA:\nAC"));
+        assert!(p.contains("<worker-transcript>\nI tried this.\nBLOCKED: no such flag\n</worker-transcript>"));
+        assert!(p.contains("<gate-output>\nerror[E0308]\n</gate-output>"));
+        assert!(p.contains("1. What the worker tried."));
+        assert!(p.ends_with("do not guess what the worker meant. No verdict, no format beyond the three numbered lines."));
+        let no_gate = postmortem_prompt(&j, "text", "");
+        assert!(!no_gate.contains("<gate-output>"), "no gate output when there was none");
     }
     #[test]
     fn review_prompt_carries_report_and_diff() {

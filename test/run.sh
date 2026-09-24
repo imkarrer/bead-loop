@@ -125,6 +125,22 @@ case_no_commit() {
   assert_match "$(bead .notes)" "no commit" "noted"
   assert_nobranch bead/t-1 "nothing pushed"
 }
+case_postmortem() {
+  setup true auto '' 'precheck_model = "stub/precheck"'
+  echo nocommit >"$TEST_CTRL/worker"; sup work "$REPO"
+  assert_eq "$(calls)" "bead-worker bead-postmortem" "the post-mortem runs after the worker"
+  assert_match "$(sed -n 2p "$TEST_CTRL/calls")" " stub/precheck " "on the precheck model"
+  assert_match "$(bead .notes)" "Post-mortem (stub/precheck):" "the note carries the post-mortem"
+  assert_match "$(bead .notes)" "1. Tried to edit work.txt." "the stub's three lines"
+}
+case_postmortem_unavailable() {
+  setup true auto '' 'precheck_model = "stub/precheck"'
+  echo nocommit >"$TEST_CTRL/worker"; echo server-error >"$TEST_CTRL/postmortem"
+  sup work "$REPO"
+  assert_match "$(bead .notes)" "worker made no commit" "the tail alone"
+  ! grep -q "Post-mortem" <<<"$(bead .notes)" && ok || bad "no post-mortem line when it errored"
+  assert_eq "$(cat "$BEAD_LOOP_STATE/repo/failures/t-1")" 1 "failures still 1, no hold"
+}
 case_uncommitted_is_settled() {
   setup; echo uncommitted >"$TEST_CTRL/worker"; sup work "$REPO"
   assert_branch bead/t-1 "supervisor committed the leftovers and pushed"
