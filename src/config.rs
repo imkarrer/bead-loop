@@ -923,4 +923,66 @@ mod tests {
         assert_eq!(out.repo, r.repo, "so it is the default target");
         let _ = std::fs::remove_dir_all(&d);
     }
+
+    #[test]
+    fn config_keys_are_documented() {
+        const KEYS: &[&str] = &[
+            "repos",
+            "lanes",
+            "label",
+            "base",
+            "setup",
+            "gate",
+            "model",
+            "review_model",
+            "stages",
+            "on_exhaust",
+            "conflict_worker",
+            "brief_model",
+            "merge",
+            "merge_label",
+            "adopt",
+            "max_inflight",
+            "worker_timeout",
+            "attach",
+        ];
+        let docs = include_str!("../docs/config.md");
+        for key in KEYS {
+            let row = if *key == "stages" || *key == "lanes" {
+                format!("| `[[{key}]]` |")
+            } else {
+                format!("| `{key}` |")
+            };
+            assert!(docs.contains(&row), "key {key} missing from docs/config.md");
+        }
+
+        // model and attach are read by Repo::load but are not given example lines in
+        // bead-loop.example.toml (only documented in docs/config.md); repos and lanes
+        // are global-only and never appear in a repo's example file either.
+        let example = include_str!("../bead-loop.example.toml");
+        for key in KEYS {
+            if matches!(*key, "repos" | "lanes" | "model" | "attach") {
+                continue;
+            }
+            let assign = format!("{key} =");
+            let table = format!("[[{key}]]");
+            let found = example.lines().any(|line| {
+                let line = line.strip_prefix("# ").unwrap_or(line);
+                line.starts_with(&assign) || line.starts_with(&table)
+            });
+            assert!(found, "key {key} missing from bead-loop.example.toml");
+        }
+
+        for line in docs.lines() {
+            if line.starts_with("## ") {
+                break;
+            }
+            if let Some(rest) = line.strip_prefix("| `") {
+                let name = rest.split('`').next().unwrap();
+                let name = name.strip_prefix("[[").unwrap_or(name);
+                let name = name.strip_suffix("]]").unwrap_or(name);
+                assert!(KEYS.contains(&name), "docs/config.md documents undocumented key {name}");
+            }
+        }
+    }
 }
