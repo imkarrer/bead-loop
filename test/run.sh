@@ -52,8 +52,38 @@ setup() {  # setup [GATE] [MERGE] [REVIEW_MODEL] [EXTRA_TOML]
 }
 sup() { "$SUP" "$@" 2>>"$T/sup.log"; }
 bead() { jq -r ".[] | select(.id==\"t-1\") | $1" "$BD_STATE/issues.json"; }
+bead3() { jq -r ".[] | select(.id==\"t-3\") | $1" "$BD_STATE/issues.json"; }
 set_checks() {  # set_checks '[{"context":"ci","state":"SUCCESS"}]'
   jq --argjson c "$1" '.statusCheckRollup=$c' "$TEST_CTRL/pr.json" >"$TEST_CTRL/pr.tmp" && mv "$TEST_CTRL/pr.tmp" "$TEST_CTRL/pr.json"
+}
+# setup_target: the suite's second origin (docs/design-targets.md's "Order of work" #2) —
+# a target beside the beads repo, for beads carrying work:t. $T/target.git is the fork
+# bead/t-3 pushes to (push_remote, default origin, unset in [targets.t]); a *third* bare
+# repo, $T/target-upstream.git, holds main — the base bead/t-3 forks from and the PR
+# reviews and opens against (base_remote = upstream, explicit). $T/target.git is left
+# without a main of its own on purpose: if code ever fell back to a hardcoded origin/main
+# it would find nothing there, where upstream/main resolves and carries real content —
+# a fork with a divergent or absent main is the realistic shape (docs/design-targets.md's
+# preservation-workbench example forks a repo it does not otherwise track).
+# shellcheck disable=SC2120  # forwarded to setup, whose own callers do pass these
+setup_target() {  # setup_target [GATE] [MERGE] [REVIEW_MODEL] [EXTRA_TOML]
+  setup "$@"
+  git init -q --bare "$T/target.git"
+  git init -q --bare "$T/target-upstream.git"
+  local tmp; tmp=$(mktemp -d)
+  git clone -q "file://$T/target-upstream.git" "$tmp" 2>/dev/null
+  echo base >"$tmp/README"
+  git -C "$tmp" add -A && git -C "$tmp" commit -qm base && git -C "$tmp" branch -qM main && git -C "$tmp" push -q -u origin main
+  rm -rf "$tmp"
+  # A bare `init` leaves HEAD on whatever init.defaultBranch was before anything was
+  # pushed; unlike a real GitHub repo, it does not follow main on its own, and `git
+  # remote show` then reports "HEAD branch: (unknown)" — base_remote's HEAD (base.rs
+  # remote_head) needs it set right, same as a real host's default branch would be.
+  git -C "$T/target-upstream.git" symbolic-ref HEAD refs/heads/main
+  git clone -q "file://$T/target.git" "$T/target" 2>/dev/null
+  git -C "$T/target" remote add upstream "file://$T/target-upstream.git"
+  printf '\n[targets.t]\npath = "%s"\npr_repo = "up/target"\nbase_remote = "upstream"\n' "$T/target" >>"$REPO/.bead-loop.toml"
+  jq '. + [{id:"t-3", title:"Theirs", description:"Edit work.txt", acceptance_criteria:"work.txt exists", status:"open", priority:2, issue_type:"task", labels:["delegate:local","work:t"]}]' "$BD_STATE/issues.json" >"$BD_STATE/i.tmp" && mv "$BD_STATE/i.tmp" "$BD_STATE/issues.json"
 }
 
 # ---- assertions ----------------------------------------------------------------
@@ -137,6 +167,22 @@ case_no_commit() {
   assert_match "$(bead .notes)" "no commit" "noted"
   assert_nobranch bead/t-1 "nothing pushed"
 }
+case_postmortem() {
+  setup true auto '' 'precheck_model = "stub/precheck"'
+  echo nocommit >"$TEST_CTRL/worker"; sup work "$REPO"
+  assert_eq "$(calls)" "bead-worker bead-postmortem" "the post-mortem runs after the worker"
+  assert_match "$(sed -n 2p "$TEST_CTRL/calls")" " stub/precheck " "on the precheck model"
+  assert_match "$(bead .notes)" "Post-mortem (stub/precheck):" "the note carries the post-mortem"
+  assert_match "$(bead .notes)" "1. Tried to edit work.txt." "the stub's three lines"
+}
+case_postmortem_unavailable() {
+  setup true auto '' 'precheck_model = "stub/precheck"'
+  echo nocommit >"$TEST_CTRL/worker"; echo server-error >"$TEST_CTRL/postmortem"
+  sup work "$REPO"
+  assert_match "$(bead .notes)" "worker made no commit" "the tail alone"
+  ! grep -q "Post-mortem" <<<"$(bead .notes)" && ok || bad "no post-mortem line when it errored"
+  assert_eq "$(cat "$BEAD_LOOP_STATE/repo/failures/t-1")" 1 "failures still 1, no hold"
+}
 case_uncommitted_is_settled() {
   setup; echo uncommitted >"$TEST_CTRL/worker"; sup work "$REPO"
   assert_branch bead/t-1 "supervisor committed the leftovers and pushed"
@@ -213,7 +259,7 @@ case_ci_pending_then_green() {
   assert_eq "$(bead .status)" in_progress "pending: bead waits"
   set_checks '[{"context":"ci","state":"SUCCESS"},{"__typename":"CheckRun","conclusion":"SUCCESS"}]'; sup reconcile "$REPO"
   assert_eq "$(jq -r .state "$TEST_CTRL/pr.json")" MERGED "green: merged"
-  assert_match "$(cat "$TEST_CTRL/gh.log")" "pr merge 7 --squash --delete-branch" "squash, branch deleted"
+  assert_match "$(cat "$TEST_CTRL/gh.log")" "pr merge https://github.com/example/repo/pull/7 --squash --delete-branch" "squash, branch deleted"
   assert_eq "$(bead .status)" closed "green: bead closed"
   assert_match "$(bead .close_reason)" "ci=SUCCESS" "close reason quotes the checks"
   assert_nofile "$BEAD_LOOP_STATE/repo/inflight/t-1" "inflight cleared"
@@ -238,7 +284,7 @@ case_ci_red() {
 }
 case_merge_pipeline() {
   setup true pipeline; sup work "$REPO"
-  assert_match "$(cat "$TEST_CTRL/gh.log")" "pr edit 7 --add-label automerge" "labelled as soon as the PR opens"
+  assert_match "$(cat "$TEST_CTRL/gh.log")" "pr edit https://github.com/example/repo/pull/7 --add-label automerge" "labelled as soon as the PR opens"
   assert_eq "$(jq -r '.labels | join(",")' "$TEST_CTRL/pr.json")" automerge "default label is automerge"
   set_checks '[{"context":"ci","state":"SUCCESS"}]'; sup reconcile "$REPO"
   assert_eq "$(jq -r .state "$TEST_CTRL/pr.json")" OPEN "green: the tick does not merge, the pipeline does"
@@ -254,8 +300,8 @@ case_merge_pipeline_label_and_adoption() {
   jq '. + [{id:"t-9", title:"Theirs", description:"z", status:"open", priority:2, labels:[]}]' "$BD_STATE/issues.json" >"$BD_STATE/i.tmp" && mv "$BD_STATE/i.tmp" "$BD_STATE/issues.json"
   jq -n '[{number:41, headRefName:"bead/t-9", url:"https://github.com/example/repo/pull/41", state:"OPEN", checks:[{context:"ci",state:"SUCCESS"}]}]' >"$TEST_CTRL/extra-prs.json"
   sup reconcile "$REPO"
-  assert_eq "$(cat "$TEST_CTRL/labels-extra")" "41 ship-it" "an adopted PR gets the configured label too"
-  ! grep -q 'pr merge 41' "$TEST_CTRL/gh.log" && ok || bad "and is left to the pipeline"
+  assert_eq "$(cat "$TEST_CTRL/labels-extra")" "https://github.com/example/repo/pull/41 ship-it" "an adopted PR gets the configured label too"
+  ! grep -q 'pr merge' "$TEST_CTRL/gh.log" && ok || bad "and is left to the pipeline"
 }
 case_merge_pipeline_label_missing() {
   setup true pipeline; touch "$TEST_CTRL/label-missing"; sup work "$REPO"
@@ -268,7 +314,7 @@ case_behind_then_closed_unmerged() {
   setup; sup work "$REPO"
   jq '.mergeStateStatus="BEHIND"' "$TEST_CTRL/pr.json" >"$TEST_CTRL/pr.tmp" && mv "$TEST_CTRL/pr.tmp" "$TEST_CTRL/pr.json"
   set_checks '[{"context":"ci","state":"SUCCESS"}]'; sup reconcile "$REPO"
-  assert_match "$(cat "$TEST_CTRL/gh.log")" "pr update-branch 7" "behind: branch updated, not merged"
+  assert_match "$(cat "$TEST_CTRL/gh.log")" "pr update-branch https://github.com/example/repo/pull/7" "behind: branch updated, not merged"
   assert_eq "$(jq -r .state "$TEST_CTRL/pr.json")" OPEN "behind: waits for CI to rerun"
   # Someone closes it instead: parked for you, out of the merge queue.
   jq '.state="CLOSED"' "$TEST_CTRL/pr.json" >"$TEST_CTRL/pr.tmp" && mv "$TEST_CTRL/pr.tmp" "$TEST_CTRL/pr.json"; sup reconcile "$REPO"
@@ -406,13 +452,14 @@ case_adopts_foreign_bead_prs() {
   jq -n '[{number:41, headRefName:"bead/t-9-some-slug", url:"https://github.com/example/repo/pull/41", state:"OPEN", checks:[{context:"ci",state:"SUCCESS"}]},
           {number:42, headRefName:"feature/not-a-bead", url:"https://github.com/example/repo/pull/42", state:"OPEN", checks:[{context:"ci",state:"SUCCESS"}]}]' >"$TEST_CTRL/extra-prs.json"
   sup reconcile "$REPO"
-  assert_match "$(cat "$TEST_CTRL/gh.log")" "pr merge 41 --squash" "green foreign bead PR merged"
-  ! grep -q 'pr merge 42' "$TEST_CTRL/gh.log" && ok || bad "non-bead branch left alone"
+  assert_match "$(cat "$TEST_CTRL/gh.log")" "pr merge https://github.com/example/repo/pull/41 --squash" "green foreign bead PR merged"
+  ! grep -q 'pull/42' "$TEST_CTRL/gh.log" && ok || bad "non-bead branch left alone"
   assert_eq "$(jq -r '.[]|select(.id=="t-9")|.status' "$BD_STATE/issues.json")" closed "its bead closed"
   assert_nofile "$BEAD_LOOP_STATE/repo/inflight/t-9" "untracked after merge"
 }
 case_adopted_prs_do_not_block_new_work() {
   setup
+  jq '. + [{id:"x-1", title:"Theirs", description:"z", status:"open", priority:2, labels:[]}]' "$BD_STATE/issues.json" >"$BD_STATE/i.tmp" && mv "$BD_STATE/i.tmp" "$BD_STATE/issues.json"
   jq -n '[{number:41, headRefName:"bead/x-1", url:"https://github.com/example/repo/pull/41", state:"OPEN", checks:[{context:"ci",state:"PENDING"}]}]' >"$TEST_CTRL/extra-prs.json"
   sup --once tick
   assert_file "$BEAD_LOOP_STATE/repo/inflight/x-1" "adopted and tracked"
@@ -692,7 +739,7 @@ case_status_json_and_ui() {
   dec=$(printf '%s' "$html" | tr '\n' ' ' | grep -o '<table class="decisions">.*' | cut -c1-1200)
   assert_match "$dec" 'class="id">t-8</td><td class="title"><b>Which ntfy topic?</b>' "the decision, first"
   assert_match "$dec" 'Which topic, and for which events?' "with its text in full"
-  assert_match "$dec" "onclick=\"act('decide',{repo:" "and the Answer &amp; close lever"
+  assert_match "$dec" "<button class=\"primary\" onclick=\"send('decide',{repo:" "and the Answer &amp; close lever, the box's text with it"
   assert_match "$(printf '%s' "$html" | grep -o '<div class="q claude">.*' | cut -c1-400)" '<h3>Claude<span class="n">1</span></h3>' "the Claude column, with its count"
   assert_match "$(printf '%s' "$html" | grep -o '<div class="q claude">.*' | cut -c1-600)" 'class="id">t-7</td>.*dev queue #3' "t-7 in it, with where it sits"
   assert_match "$(printf '%s' "$html" | grep -o '<div class="q dev">.*' | cut -c1-3000)" 'title="sent back to dev 2 times">2×</span> <button class="hist" onclick="toggleHist(.t-7.)"[^>]*>▸ 2 rounds</button>' "t-7's round history behind a toggle, closed"
@@ -707,15 +754,24 @@ case_status_json_and_ui() {
   assert_match "$hum" 'toggleFold(&quot;notes:t-5&quot;)">▸ the bead&#39;s notes</button>' "the notes folded"
   assert_eq "$(printf '%s' "$hum" | grep -c 'WHAT HAPPENED')" 0 "closed: the brief not shown"
   opened=$(render_page "$T/state.json" "toggleHist('t-5'); toggleFold('brief:t-5')" | tr '\n' ' ' | grep -o '<h3 class="human">.*' | cut -c1-6000)
-  assert_match "$opened" '<div class="round"><div class="head">round 1 <span class="chip worker">stub/worker</span><span class="muted">stage 1</span><span class="muted">2026-09-18 17:00</span></div><pre class="note">gate failed twice: npm test boom: 1 of 2 tests failed</pre><div class="logs">logs: <button class="link " onclick="toggleLog(&quot;'"$REPO"'&quot;,&quot;t-5.20260918T170000.gate&quot;)" title="t-5.20260918T170000.gate">▸ gate</button></div></div>' "round 1: who, when, the note in full, its gate log to open"
-  assert_match "$opened" '<div class="round"><div class="head">round 2 .*<pre class="note">review (stub/reviewer) rejected: REJECT: x.ts:1 wrong</pre></div>' "round 2, no logs"
+  assert_match "$opened" '<div class="round" data-key="1"><div class="head">round 1 <span class="chip worker">stub/worker</span><span class="muted">stage 1</span><span class="muted">2026-09-18 17:00</span></div><pre class="note">gate failed twice: npm test boom: 1 of 2 tests failed</pre><div class="logs">logs: <button class="link " onclick="toggleLog(&quot;'"$REPO"'&quot;,&quot;t-5.20260918T170000.gate&quot;)" title="t-5.20260918T170000.gate">▸ gate</button></div></div>' "round 1: who, when, the note in full, its gate log to open"
+  assert_match "$opened" '<div class="round" data-key="2"><div class="head">round 2 .*<pre class="note">review (stub/reviewer) rejected: REJECT: x.ts:1 wrong</pre></div>' "round 2, no logs"
   assert_match "$opened" '<pre class="text">WHAT HAPPENED: round 1 broke a test. WHY: the bead asks for two things.</pre>' "the brief, opened"
   assert_match "$(printf '%s' "$html" | grep -o '<div class="q dev">.*' | cut -c1-3000)" 'onclick="toggleHist(.t-7.)"' "a queue row has the same toggle"
   # A note to a bead in a queue, from its row: the lever, the box under the row once
   # opened, and the action — an operator note on the bead, nothing else moved.
   assert_match "$(printf '%s' "$html" | grep -o '<div class="q dev">.*' | cut -c1-3000)" 'onclick="toggleNote(&quot;t-2&quot;)" title="a note on the bead; its next round reads it">✎ note</button>' "each queue row offers a note"
   assert_eq "$(printf '%s' "$html" | grep -c 'id="note-t-2"')" 0 "no box until opened"
-  assert_match "$(render_page "$T/state.json" "toggleNote('t-2')" | tr '\n' ' ' | grep -o '<div class="q dev">.*' | cut -c1-4000)" '<textarea id="note-t-2" rows="2" placeholder="Context it lacked.*<button  onclick="act(.note.,{repo:' "opened: the box and Add note under the row"
+  assert_match "$(render_page "$T/state.json" "toggleNote('t-2')" | tr '\n' ' ' | grep -o '<div class="q dev">.*' | cut -c1-4000)" '<textarea id="note-t-2" rows="2" placeholder="Context it lacked.*<button class="primary" onclick="send(.note.,{repo:' "opened: the box and Add note under the row"
+  # A box keeps its draft across a reload of the page: rendered into the textarea from
+  # the browser's storage, under the box's id.
+  assert_match "$(render_page "$T/state.json" "global.localStorage = { getItem: (k) => k === 'draft:ans-t-5' ? 'half an answer' : null, setItem() {}, removeItem() {} }; setScoreAll(false)" | grep -o '<textarea id="ans-t-5"[^>]*>[^<]*</textarea>')" '>half an answer</textarea>' "the answer box carries its draft"
+  # A lever that asks first is not a dialog: pressed once, the button gives way to its
+  # question and a yes, in place; Cancel (or Escape) puts the button back.
+  asked=$(render_page "$T/state.json" "act('escalate', { repo: $(jq -c .repos[0].repo "$T/state.json"), id: 't-2' }, 'asked')" | tr '\n' ' ' | grep -o '<div class="q dev">.*' | cut -c1-2000)
+  assert_match "$asked" '<td class="act"><span class="confirm" data-key="confirm"><span class="q">Work t-2 with claude/opus now? It goes to the last stage and back into the dev queue, ahead of its failure count.</span><button class="yes " onclick="act(.escalate.,{repo:[^}]*,id:&quot;t-2&quot;})">Work with Claude opus</button><button class="no" onclick="unask()">Cancel</button></span></td>' "the question and the yes, in the button's place"
+  assert_eq "$(printf '%s' "$asked" | grep -o 'class="confirm"' | wc -l)" 1 "only that lever asks"
+  assert_eq "$(render_page "$T/state.json" "act('escalate', { repo: $(jq -c .repos[0].repo "$T/state.json"), id: 't-2' }, 'asked'); unask()" | grep -c 'class="confirm"')" 0 "cancelled: the button is back"
   assert_match "$("$REAL_CURL" -s -m 3 -X POST -H 'content-type: application/json' -d "{\"repo\":\"$REPO\",\"id\":\"t-2\",\"text\":\"the flag is --dry-run, see lib/x.ts:9\"}" "http://127.0.0.1:$port/api/note")" '"noted":"t-2"' "note from the page"
   assert_match "$(jq -r '.[]|select(.id=="t-2")|.notes' "$BD_STATE/issues.json")" "^operator 20[0-9-]*T[0-9:]*+00:00: the flag is --dry-run, see lib/x.ts:9$" "an operator note on the bead, dated as answer's are"
   assert_eq "$(jq -r '.[]|select(.id=="t-2")|.status' "$BD_STATE/issues.json")" open "nothing else moved"
@@ -727,7 +783,7 @@ case_status_json_and_ui() {
   assert_match "$("$REAL_CURL" -s -m 3 "http://127.0.0.1:$port/api/log?repo=$REPO&file=t-9.none")" "no such log" "a name that is not there"
   # The supervisor log with systemd's own lines in it: hidden by default, the box unchecked.
   jq '.log = [{t: now, msg: "Starting bead-supervisor.service - the bead loop..."}, {t: now, msg: "03:50:01 repo: dev: bead t-2 to stub/worker"}, {t: now, msg: "Finished bead-supervisor.service - the bead loop."}]' "$T/state.json" >"$T/state-log.json"
-  log=$(render_page "$T/state-log.json" | grep -o '<section class="card"><h3 class="log">.*')
+  log=$(render_page "$T/state-log.json" | grep -o '<section class="card" id="journal"><h3 class="log">.*')
   assert_match "$log" '<input type="checkbox"  onchange="setSys(this.checked)">systemd lines</label>' "the systemd lines box, unchecked"
   assert_match "$log" '<span class="pick">repo: dev: bead t-2 to stub/worker</span>' "the loop's line shown"
   assert_eq "$(printf '%s' "$log" | grep -c 'class="sys"')" 0 "systemd's lines hidden"
@@ -1003,6 +1059,51 @@ case_conflicting_pr_rebased_by_the_last_stage() {
   jq '.mergeable="MERGEABLE"' "$TEST_CTRL/pr.json" >"$TEST_CTRL/pr.tmp" && mv "$TEST_CTRL/pr.tmp" "$TEST_CTRL/pr.json"
   : >"$TEST_CTRL/calls"; printf 'approve\napprove\n' >"$TEST_CTRL/review"; sup work "$REPO"
   assert_eq "$(cut -d' ' -f3 "$TEST_CTRL/calls" | head -1)" "stub/senior" "conflict_worker does the rebase"
+}
+
+# ---- targets (docs/design-targets.md) -----------------------------------------------
+case_target() {
+  # A bead labelled work:t claims the [targets.t] checkout: its round works in
+  # $T/target (forked from target-upstream's main, not the beads repo's own origin), its
+  # PR opens against the configured pr_repo, and $RS/target/t-3 remembers the target
+  # until the bead is done.
+  setup_target
+  sup work "$REPO" t-3
+  assert_eq "$(calls)" "bead-worker bead-reviewer" "worker then reviewer, in the target checkout"
+  assert_eq "$(bead3 .status)" in_progress "t-3 parked in_progress until merge"
+  git -C "$T/target.git" show-ref -q refs/heads/bead/t-3 && ok || bad "target.git has no branch bead/t-3"
+  assert_nobranch bead/t-3 "the beads repo's own origin has no bead/t-3"
+  assert_eq "$(git -C "$T/target.git" show bead/t-3:README)" base "forked from target-upstream's main (its README), not a stale copy on the fork"
+  assert_match "$(cat "$TEST_CTRL/gh.log")" "pr create --repo up/target" "PR opened on the configured pr_repo"
+  assert_match "$(cat "$TEST_CTRL/gh.log")" -- "--head [^ ]\{1,\}:bead/t-3" "the head names the fork's owner (Repo::head_ref)"
+  assert_eq "$(cat "$BEAD_LOOP_STATE/repo/target/t-3")" t "target/t-3 holds the target's name"
+  # Merged: closed, and target/t-3 goes with inflight/t-3.
+  set_checks '[{"context":"ci","state":"SUCCESS"}]'; sup reconcile "$REPO"
+  assert_eq "$(bead3 .status)" closed "merged: closed"
+  assert_nofile "$BEAD_LOOP_STATE/repo/inflight/t-3" "inflight cleared"
+  assert_nofile "$BEAD_LOOP_STATE/repo/target/t-3" "target/t-3 removed with inflight/t-3"
+}
+case_target_unknown() {
+  # work:NAME naming no [targets.NAME] (or two work: labels) is a config mistake, not the
+  # bead's: held with the reason, no failure, and no round — no worktree at all.
+  setup
+  jq '. + [{id:"t-4", title:"Unknown target", description:"z", status:"open", priority:2, labels:["delegate:local","work:zzz"]}]' "$BD_STATE/issues.json" >"$BD_STATE/i.tmp" && mv "$BD_STATE/i.tmp" "$BD_STATE/issues.json"
+  sup work "$REPO" t-4
+  assert_eq "$(calls)" "" "no model called: held before any round"
+  assert_eq "$(jq -r '.[] | select(.id=="t-4") | .status' "$BD_STATE/issues.json")" open "still in the dev queue"
+  assert_eq "$(cat "$BEAD_LOOP_STATE/repo/failures/t-4" 2>/dev/null || echo 0)" 0 "no failure charged"
+  assert_match "$(cat "$BEAD_LOOP_STATE/repo/held/t-4")" "work:zzz" "held, naming the label"
+  assert_match "$(jq -r '.[] | select(.id=="t-4") | .notes' "$BD_STATE/issues.json")" "held, no failure charged" "noted on the bead"
+  assert_nofile "$BEAD_LOOP_STATE/repo/wt/t-4" "no worktree created"
+}
+case_target_review_lane() {
+  # The reviewer's diff is taken in the target checkout against upstream's main — not
+  # against origin/main, which does not even exist on this fork (setup_target's point).
+  setup_target
+  sup work "$REPO" t-3
+  assert_match "$(cat "$TEST_CTRL/prompt.2")" "The diff against main is under" "the base name is still just main"
+  assert_match "$(cat "$TEST_CTRL/prompt.2")" "<diff>" "reviewer got a diff"
+  assert_match "$(cat "$TEST_CTRL/prompt.2")" "work.txt" "the diff shows the worker's change: computed against upstream/main, which has it"
 }
 
 # ---- the state machine's exits (docs/state-machine.md) ------------------------------------

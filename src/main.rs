@@ -6,10 +6,10 @@
 //!   bead-supervisor tick [REPO...]        one pass to idle: reconcile, both lanes side by side until both queues
 //!                                         drain and both lanes idle, reconcile again, exit
 //!   bead-supervisor work REPO [BEAD_ID]   one bead through dev and review now (top of the dev queue, or the id given)
-//!   bead-supervisor lane dev|review|claude   one lane by itself, until its queue is empty (claude: the lane a
-//!                                         claude/* stage gets, so a bead on it never waits behind the GPU)
-//!   bead-supervisor pause dev|review|claude  the lane starts no new round until `resume` (the others go on)
-//!   bead-supervisor resume dev|review|claude
+//!   bead-supervisor lane NAME   one lane by itself, until its queue is empty (NAME is a lane name from the
+//!                                         [[lanes]] config table)
+//!   bead-supervisor pause NAME  the lane starts no new round until `resume` (the others go on)
+//!   bead-supervisor resume NAME
 //!   bead-supervisor priority REPO|none    the repo the lanes look at first on every pass (else round-robin)
 //!   bead-supervisor wake                  ring the bell: every lane looks at its queue now
 //!   bead-supervisor escalate REPO ID      put the bead on the last stage (Claude, usually) and back in the dev
@@ -35,6 +35,7 @@
 //!   --local      implement, gate and review; keep the branch here, no push, no PR
 //!   --model M    opencode provider/model for the worker this run
 mod config;
+mod doctor;
 mod harness;
 mod human;
 mod lanes;
@@ -47,13 +48,12 @@ mod state;
 mod stats;
 mod status;
 mod util;
-mod doctor;
 
 use config::{config_dir, Layers, Repo};
+use doctor::run as doctor_run;
 use round::Opts;
 use std::path::PathBuf;
 use util::{die, log};
-use doctor::run as doctor_run;
 
 fn usage() -> ! {
     let src = include_str!("main.rs");
@@ -112,7 +112,8 @@ fn main() {
     // One supervisor at a time for anything that runs rounds or the merge queue; the
     // read-only and the one-bead commands are free.
     let _lock = match cmd.as_str() {
-        "status" | "stats" | "log" | "watch" | "lane" | "pause" | "resume" | "escalate" | "answer" | "open" | "priority" | "wake" | "doctor" => None,
+        "status" | "stats" | "log" | "watch" | "lane" | "pause" | "resume" | "escalate" | "answer" | "open" | "priority" | "wake"
+        | "doctor" => None,
         _ => match lanes::try_lock(&state_dir.join("lock")) {
             Some(l) => Some(l),
             None => {

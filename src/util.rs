@@ -114,6 +114,18 @@ pub fn cut_bytes(s: &str, n: usize) -> &str {
     &s[..i]
 }
 
+/// The last N bytes of a text (`tail -c N`), cut at a char boundary.
+pub fn tail_bytes(s: &str, n: usize) -> &str {
+    if s.len() <= n {
+        return s;
+    }
+    let mut i = s.len() - n;
+    while !s.is_char_boundary(i) {
+        i += 1;
+    }
+    &s[i..]
+}
+
 pub fn read_to_string(p: &Path) -> Option<String> {
     std::fs::read_to_string(p).ok()
 }
@@ -229,6 +241,8 @@ mod tests {
         assert_eq!(tail_lines("a\nb\nc", 2), "b\nc");
         assert_eq!(cut_bytes("héllo", 2), "h");
         assert_eq!(cut_bytes("abc", 10), "abc");
+        assert_eq!(tail_bytes("héllo", 2), "lo");
+        assert_eq!(tail_bytes("abc", 10), "abc");
         assert_eq!(first_line("x\ny"), "x");
         assert_eq!(first_line(""), "");
     }

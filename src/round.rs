@@ -16,7 +16,9 @@ use crate::shell::{
 };
 use crate::signals;
 use crate::state::{dev_queue, review_queue, StageHit};
-use crate::util::{cut_bytes, date_iminutes, die, first_line, log, read_to_string, stamp, stderr_str, stdout_str, tail_lines, write_file};
+use crate::util::{
+    cut_bytes, date_iminutes, die, first_line, log, read_to_string, stamp, stderr_str, stdout_str, tail_bytes, tail_lines, write_file,
+};
 use serde_json::Value;
 use std::path::Path;
 
@@ -85,7 +87,7 @@ pub fn settle_worktree(repo: &Repo, wt: &Path, msg: &str) -> bool {
     if !git_out(wt, &["status", "--porcelain"]).trim().is_empty() && git_ok(wt, &["add", "-A"]) {
         let _ = git(wt, &["commit", "-q", "-m", msg]);
     }
-    !git_out(wt, &["rev-list", &format!("origin/{}..HEAD", repo.base)]).trim().is_empty()
+    !git_out(wt, &["rev-list", &format!("{}/{}..HEAD", repo.base_remote, repo.base)]).trim().is_empty()
 }
 
 pub fn run_gate(repo: &Repo, wt: &Path, logf: &Path) -> bool {
@@ -262,12 +264,15 @@ pub fn hold(repo: &Repo, id: &str, wt: Option<&Path>, why: &str) {
 pub fn make_worktree(repo: &Repo, branch: &str, wt: &Path, resumed: bool) -> Result<(), String> {
     if resumed {
         if !local_branch_exists(repo, branch) {
-            git_try(&repo.repo, &["branch", "-q", "--track", branch, &format!("origin/{branch}")])?;
+            git_try(&repo.repo, &["branch", "-q", "--track", branch, &format!("{}/{branch}", repo.push_remote)])?;
         }
         git_try(&repo.repo, &["worktree", "add", "-q", &wt.to_string_lossy(), branch])?;
     } else {
         let _ = git(&repo.repo, &["branch", "-D", branch]);
-        git_try(&repo.repo, &["worktree", "add", "-q", "-b", branch, &wt.to_string_lossy(), &format!("origin/{}", repo.base)])?;
+        git_try(
+            &repo.repo,
+            &["worktree", "add", "-q", "-b", branch, &wt.to_string_lossy(), &format!("{}/{}", repo.base_remote, repo.base)],
+        )?;
     }
     Ok(())
 }
@@ -294,6 +299,7 @@ pub fn send_back(repo: &Repo, id: &str, wt: &Path, keep: bool, note: &str, model
     };
     if let Some(reason) = parked.clone() {
         park(repo, id, reason, Some(wt));
+        repo.clear_target(id);
     }
     clear_lane_of(repo, id);
     repo.release(id);
@@ -322,14 +328,18 @@ pub fn park_cleanup(repo: &Repo, wt: &Path) {
     let _ = git(&repo.repo, &["worktree", "remove", "--force", &wt.to_string_lossy()]);
 }
 
-/// The harness label a bead may carry, applied to the stage's worker.
-fn apply_harness_label(repo: &Repo, id: &str, json: &Value, model: &mut String) {
-    let labels: Vec<&str> = json
-        .get(0)
+/// A bead's `labels` array, as `bd show --json` carries it.
+fn bead_labels(json: &Value) -> Vec<&str> {
+    json.get(0)
         .and_then(|b| b.get("labels"))
         .and_then(|l| l.as_array())
         .map(|a| a.iter().filter_map(|v| v.as_str()).collect())
-        .unwrap_or_default();
+        .unwrap_or_default()
+}
+
+/// The harness label a bead may carry, applied to the stage's worker.
+fn apply_harness_label(repo: &Repo, id: &str, json: &Value, model: &mut String) {
+    let labels = bead_labels(json);
     let (m, why) = harness_for(&labels, model);
     *model = m;
     if let Some(why) = why {
@@ -354,10 +364,12 @@ pub fn harness_for(labels: &[&str], model: &str) -> (String, Option<String>) {
     (model.to_string(), None)
 }
 
-/// The rebase work order a conflict round carries under the bead.
-pub fn rebase_order(base: &str) -> String {
+/// The rebase work order a conflict round carries under the bead: `base_remote` names
+/// the fetch and the rebase target alike (both named, not positional, so the two never
+/// drift out of sync with each other).
+pub fn rebase_order(base_remote: &str, base: &str) -> String {
     format!(
-        "\n\nThis branch has an open pull request that GitHub cannot merge: it conflicts with {base}. Your job this round is the rebase, not new work. Run: git fetch origin && git rebase origin/{base}. Resolve every conflict so that both what this branch set out to do (the bead above, and the commits already on the branch) and what {base} changed since are kept; do not drop either side to make the conflict go away. Then run the gate if one is given, make sure the acceptance criteria still hold, and end with DONE: <what conflicted and how you resolved it>. Do not squash or rewrite the branch beyond the rebase."
+        "\n\nThis branch has an open pull request that GitHub cannot merge: it conflicts with {base}. Your job this round is the rebase, not new work. Run: git fetch {base_remote} && git rebase {base_remote}/{base}. Resolve every conflict so that both what this branch set out to do (the bead above, and the commits already on the branch) and what {base} changed since are kept; do not drop either side to make the conflict go away. Then run the gate if one is given, make sure the acceptance criteria still hold, and end with DONE: <what conflicted and how you resolved it>. Do not squash or rewrite the branch beyond the rebase."
     )
 }
 
@@ -394,6 +406,37 @@ pub fn gate_fix_prompt(prompt: &str, gate: &str, gate_out: &str) -> String {
     )
 }
 
+/// The post-mortem's prompt: the bead's title and criteria, the worker's last words (cut
+/// to the tail — a failure is at the end, not the start), and the gate's tail when there
+/// was one.
+pub fn postmortem_prompt(bead: &Value, worker_text: &str, gate_tail: &str) -> String {
+    let mut out =
+        format!("<bead>\n{}\n</bead>\n\n<worker-transcript>\n{}\n</worker-transcript>", render_bead(bead), tail_bytes(worker_text, 8000));
+    if !gate_tail.is_empty() {
+        out.push_str(&format!("\n\n<gate-output>\n{gate_tail}\n</gate-output>"));
+    }
+    out.push_str(
+        "\n\nIn at most five lines, as three numbered lines:\n1. What the worker tried.\n2. Where and why it stopped.\n3. The first thing the next round should do.\n\nName files and commands from the transcript exactly as they appear; do not guess what the worker meant. No verdict, no format beyond the three numbered lines.",
+    );
+    out
+}
+
+/// The post-mortem note appended to a send-back: empty when there is no pre-check model,
+/// or when the model never answers or errors — never a hold, never a failure of its own,
+/// so the note it cannot write is simply not there.
+fn postmortem(repo: &Repo, id: &str, wt: &Path, json: &Value, worker_text: &str, gate_tail: &str, logf: &Path) -> String {
+    if repo.precheck_model.is_empty() {
+        return String::new();
+    }
+    let prompt = postmortem_prompt(json, worker_text, gate_tail);
+    let logp = std::path::PathBuf::from(format!("{}.postmortem.jsonl", logf.display()));
+    let r = run_agent(repo, "bead-postmortem", &repo.precheck_model, wt, &logp, &prompt, &format!("{id} · post-mortem"), 120, Some(json));
+    if r.empty || r.rc != 0 {
+        return String::new();
+    }
+    format!("\nPost-mortem ({}):\n{}", repo.precheck_model, cut_bytes(&r.text, 1500))
+}
+
 /// The reviewer's prompt: the bead, the worker's report, the diff against the base.
 pub fn review_prompt(json: &Value, base: &str, report: &str, stat: &str, diff: &str) -> String {
     format!(
@@ -416,6 +459,50 @@ pub fn reject_block(text: &str) -> String {
         }
     }
     out.join("\n")
+}
+
+/// The pre-checker's prompt: the bead, the worker's report, the diff against the base —
+/// uncut, unlike the reviewer's (the caller cuts it, per bead .2).
+// No caller yet: the round does not send anything to the pre-checker until a later bead
+// wires it in.
+#[allow(dead_code)]
+pub fn precheck_prompt(json: &Value, report: &str, stat: &str, diff: &str) -> String {
+    format!(
+        "<bead>\n{}\n</bead>\n\n<worker-report>\n{report}\n</worker-report>\n\n<diff>\n{stat}{diff}\n</diff>\n\nEnd with PASS: <what you checked> on one line, or SEND BACK: <one line> followed by the 'For the worker:' block your instructions describe.",
+        render_bead(json)
+    )
+}
+
+/// The pre-checker's verdict: a `PASS:` line passes, a `SEND BACK:` line (and everything
+/// under it, as `reject_block` takes it) sends back; if both appear, SEND BACK wins — the
+/// model changed its mind downward. Neither line is `Unparsed`.
+#[allow(dead_code)]
+#[derive(Clone, Debug, PartialEq)]
+pub enum Precheck {
+    Pass,
+    SendBack(String),
+    Unparsed,
+}
+
+#[allow(dead_code)]
+pub fn precheck_verdict(text: &str) -> Precheck {
+    if text.lines().any(|l| l.starts_with("SEND BACK:")) {
+        let mut out = Vec::new();
+        let mut on = false;
+        for l in text.lines() {
+            if l.starts_with("SEND BACK:") {
+                on = true;
+            }
+            if on {
+                out.push(l);
+            }
+        }
+        return Precheck::SendBack(out.join("\n"));
+    }
+    if text.lines().any(|l| l.starts_with("PASS:")) {
+        return Precheck::Pass;
+    }
+    Precheck::Unparsed
 }
 
 /// The PR's body: the bead, its acceptance criteria quoted, the two last words.
@@ -474,6 +561,7 @@ pub fn dev_one(repo: &Repo, opts: &Opts, id: Option<&str>, last_id: &mut Option<
             log(&format!("{}: {id}: stages exhausted ({n} failures), parked", repo.slug));
             bd_status(repo, &id, "in_progress");
             park(repo, &id, Reason::Exhausted, None);
+            repo.clear_target(&id);
             return Pass::Worked;
         }
     };
@@ -482,6 +570,20 @@ pub fn dev_one(repo: &Repo, opts: &Opts, id: Option<&str>, last_id: &mut Option<
     let timeout = st.timeout;
     let hist = history(repo, &id);
     let json = bd_show(repo, &id);
+    // The bead's work:NAME label (docs/design-targets.md): the checkout this round works
+    // in and the GitHub repo its PR goes to. No such label is the default target; two
+    // labels, or one naming no configured target, is a config mistake — held, no failure,
+    // and the lane moves on (`repo` here is the fresh `Repo::load`, still the default,
+    // which is exactly what `hold` needs: the beads repo's own state dir).
+    let labels = bead_labels(&json);
+    let repo = match repo.for_bead(&labels) {
+        Ok(r) => r,
+        Err(e) => {
+            hold(repo, &id, None, &e);
+            return Pass::Worked;
+        }
+    };
+    let repo = &repo;
     let title = json.get(0).and_then(|b| b.get("title")).and_then(|t| t.as_str()).unwrap_or("").to_string();
     apply_harness_label(repo, &id, &json, &mut model);
     let branch = format!("bead/{id}");
@@ -504,7 +606,7 @@ pub fn dev_one(repo: &Repo, opts: &Opts, id: Option<&str>, last_id: &mut Option<
             bd_status(repo, &id, "open");
             return Pass::Nothing;
         }
-        rebase = rebase_order(&repo.base);
+        rebase = rebase_order(&repo.base_remote, &repo.base);
         log(&format!("{}: {id}: conflict round: rebase onto {} by {model}", repo.slug, repo.base));
     }
     // A branch left from an earlier round (sent back by review or CI) is resumed, not
@@ -543,14 +645,18 @@ pub fn dev_one(repo: &Repo, opts: &Opts, id: Option<&str>, last_id: &mut Option<
     }
 
     bd_claim(repo, &id);
+    // The target this bead claimed on, for the review lane, the merge watcher, `open`,
+    // `answer` and `escalate` to read back (`Repo::for_id`) — "" (the default) removes
+    // any stale file from an earlier claim on a different target.
+    repo.set_target(&id, &repo.target);
     // Reopened by hand: the old question is history.
     repo.unpark(&id);
     // The marker carries the lane's name (gpu, cpu, claude — or dev, the default pair's),
     // so status shows the lane on it and two lanes in one repo never share a file.
     let lane_name = lane.map(|l| l.name.as_str()).unwrap_or("dev");
     repo.lane_set(lane_name, &id);
-    if !git_ok(&repo.repo, &["fetch", "-q", "origin", &repo.base]) {
-        hold(repo, &id, None, &format!("git fetch origin {} failed", repo.base));
+    if !git_ok(&repo.repo, &["fetch", "-q", &repo.base_remote, &repo.base]) {
+        hold(repo, &id, None, &format!("git fetch {} {} failed", repo.base_remote, repo.base));
         return Pass::Worked;
     }
     if rejoin.is_none() {
@@ -594,16 +700,9 @@ pub fn dev_one(repo: &Repo, opts: &Opts, id: Option<&str>, last_id: &mut Option<
         return Pass::Worked;
     }
     if r.rc != 0 {
-        send_back(
-            repo,
-            &id,
-            &wt,
-            false,
-            &format!("worker exited {} (timeout={timeout} s). Log: {}", r.rc, worker_log.display()),
-            &model,
-            st.last,
-            Some(&logf),
-        );
+        let note = format!("worker exited {} (timeout={timeout} s). Log: {}", r.rc, worker_log.display());
+        let pm = postmortem(repo, &id, &wt, &json, &r.text, "", &logf);
+        send_back(repo, &id, &wt, false, &format!("{note}{pm}"), &model, st.last, Some(&logf));
         return Pass::Worked;
     }
     if let Some(b) = last_line_starting(&r.text, "BLOCKED:") {
@@ -611,16 +710,9 @@ pub fn dev_one(repo: &Repo, opts: &Opts, id: Option<&str>, last_id: &mut Option<
         return Pass::Worked;
     }
     if !settle_worktree(repo, &wt, &format!("{id}: {title}")) {
-        send_back(
-            repo,
-            &id,
-            &wt,
-            false,
-            &format!("worker made no commit. Last words: {}", tail_lines(&r.text, 3)),
-            &model,
-            st.last,
-            Some(&logf),
-        );
+        let note = format!("worker made no commit. Last words: {}", tail_lines(&r.text, 3));
+        let pm = postmortem(repo, &id, &wt, &json, &r.text, "", &logf);
+        send_back(repo, &id, &wt, false, &format!("{note}{pm}"), &model, st.last, Some(&logf));
         return Pass::Worked;
     }
     // The gate gets one fix round inside the lane: a compiler message is the cheapest review there is.
@@ -642,16 +734,9 @@ pub fn dev_one(repo: &Repo, opts: &Opts, id: Option<&str>, last_id: &mut Option<
             return Pass::Worked;
         }
         if r2.rc != 0 {
-            send_back(
-                repo,
-                &id,
-                &wt,
-                false,
-                &format!("worker exited {} in gate fix round. Log: {}", r2.rc, fix_log.display()),
-                &model,
-                st.last,
-                Some(&logf),
-            );
+            let note = format!("worker exited {} in gate fix round. Log: {}", r2.rc, fix_log.display());
+            let pm = postmortem(repo, &id, &wt, &json, &r2.text, &gate_out, &logf);
+            send_back(repo, &id, &wt, false, &format!("{note}{pm}"), &model, st.last, Some(&logf));
             return Pass::Worked;
         }
         if let Some(b) = last_line_starting(&r2.text, "BLOCKED:") {
@@ -663,7 +748,9 @@ pub fn dev_one(repo: &Repo, opts: &Opts, id: Option<&str>, last_id: &mut Option<
         if !run_gate(repo, &wt, &gate2) {
             cut_short(repo, &id);
             let tail = tail_lines(&read_to_string(&gate2).unwrap_or_default(), 15);
-            send_back(repo, &id, &wt, false, &format!("gate failed twice: {}\n{tail}", repo.gate), &model, st.last, Some(&logf));
+            let note = format!("gate failed twice: {}\n{tail}", repo.gate);
+            let pm = postmortem(repo, &id, &wt, &json, &r2.text, &tail, &logf);
+            send_back(repo, &id, &wt, false, &format!("{note}{pm}"), &model, st.last, Some(&logf));
             return Pass::Worked;
         }
         final_text = r2.text;
@@ -698,6 +785,9 @@ pub fn review_one(repo: &Repo, opts: &Opts, id: Option<&str>, lane: Option<&Lane
             None => return Pass::Nothing,
         },
     };
+    // The target dev_one resolved and wrote at claim (`state.rs target_of`): the same
+    // checkout and PR repo act on this bead from here on, whichever the default is.
+    let repo = &repo.for_id(&id);
     let n = repo.failures_of(&id);
     let (mut review_model, model, timeout) = match repo.stage_for(n) {
         Some(st) => (st.review, st.model, st.timeout),
@@ -739,8 +829,9 @@ pub fn review_one(repo: &Repo, opts: &Opts, id: Option<&str>, lane: Option<&Lane
         let r = match &rejoin {
             Some(sid) => crate::harness::rejoin_session(repo, sid, &wt, &review_log, timeout),
             None => {
-                let stat = git_out(&wt, &["diff", &format!("origin/{}...HEAD", repo.base), "--stat"]);
-                let diff = git_out(&wt, &["diff", &format!("origin/{}...HEAD", repo.base)]);
+                let range = format!("{}/{}...HEAD", repo.base_remote, repo.base);
+                let stat = git_out(&wt, &["diff", &range, "--stat"]);
+                let diff = git_out(&wt, &["diff", &range]);
                 let diff = cut_bytes(&diff, 60000);
                 let prompt = review_prompt(&json, &repo.base, &final_text, &stat, diff);
                 run_agent(
@@ -806,7 +897,7 @@ pub fn review_one(repo: &Repo, opts: &Opts, id: Option<&str>, lane: Option<&Lane
         return Pass::Worked;
     }
 
-    match git(&wt, &["push", "-q", "-u", "origin", &branch, "--force-with-lease"]) {
+    match git(&wt, &["push", "-q", "-u", &repo.push_remote, &branch, "--force-with-lease"]) {
         Ok(o) if o.status.success() => {}
         Ok(o) => {
             write_file(&repo.review_path(&id), &format!("{final_text}\n"));
@@ -823,19 +914,26 @@ pub fn review_one(repo: &Repo, opts: &Opts, id: Option<&str>, lane: Option<&Lane
         format!("Reviewer ({review_model}): {}", cut_bytes(&last_line_starting(&verdict, "APPROVE:").unwrap_or_default(), 500))
     };
     let body = pr_body(&id, &title, ac, &worker_line, &reviewer_line);
+    // The head gh's pr create/list --head take: the bare branch on our own repos, else
+    // OWNER:BRANCH (config.rs Repo::head_ref) — and --repo pr_repo, when it is known
+    // (empty in the test suite's local-path remotes, where the owner cannot be parsed).
+    let head = repo.head_ref(&branch);
+    let repo_args: Vec<&str> = if repo.pr_repo.is_empty() { vec![] } else { vec!["--repo", &repo.pr_repo] };
     // A branch sent back by CI already has its PR: the push updated it.
-    let existing = crate::shell::gh_stdout_any(
-        repo,
-        &["pr", "list", "--state", "open", "--head", &branch, "--json", "url", "--jq", ".[0].url // empty"],
-    )
-    .trim()
-    .to_string();
+    let mut list_args = vec!["pr", "list", "--state", "open"];
+    list_args.extend(repo_args.iter().copied());
+    list_args.extend(["--head", &head, "--json", "url", "--jq", ".[0].url // empty"]);
+    let existing = crate::shell::gh_stdout_any(repo, &list_args).trim().to_string();
     let url = if !existing.is_empty() {
         log(&format!("{}: {id}: pushed a new round to {existing}", repo.slug));
         bd_comment(repo, &id, &format!("bead-loop: pushed round {} to {existing}", n + 1));
         existing
     } else {
-        match gh(repo, &["pr", "create", "--base", &repo.base, "--head", &branch, "--title", &format!("{id}: {title}"), "--body", &body]) {
+        let title_line = format!("{id}: {title}");
+        let mut create_args = vec!["pr", "create"];
+        create_args.extend(repo_args.iter().copied());
+        create_args.extend(["--base", &repo.base, "--head", &head, "--title", &title_line, "--body", &body]);
+        match gh(repo, &create_args) {
             Ok(o) if o.status.success() => {
                 let url = stdout_str(&o).trim().to_string();
                 bd_comment(repo, &id, &format!("bead-loop: opened {url}"));
@@ -850,14 +948,13 @@ pub fn review_one(repo: &Repo, opts: &Opts, id: Option<&str>, lane: Option<&Lane
             Err(e) => die(&format!("gh: {e}")),
         }
     };
-    let num = url.rsplit('/').next().unwrap_or("").to_string();
     write_file(&repo.inflight_path(&id), &format!("{url}\n"));
     for m in ["red", "fixing", "conflict"] {
         let _ = std::fs::remove_file(repo.mark(&id, m));
     }
     repo.release(&id);
     if repo.merge == "pipeline" {
-        crate::merge::hand_to_pipeline(repo, &id, &num, &url);
+        crate::merge::hand_to_pipeline(repo, &id, &url);
     }
     let _ = git(&repo.repo, &["worktree", "remove", "--force", &wt.to_string_lossy()]);
     repo.lane_clear(lane_name);
@@ -946,7 +1043,7 @@ mod tests {
         );
         assert!(again.contains("a work order from the senior reviewer"), "told to act on it");
         assert!(again.contains(&format!("<previous-attempts>\n{hist}\n</previous-attempts>")), "the notes verbatim");
-        let rebase = dev_prompt(&j, "bead/t-1", "main", true, "", &rebase_order("main"), "");
+        let rebase = dev_prompt(&j, "bead/t-1", "main", true, "", &rebase_order("origin", "main"), "");
         assert!(rebase.contains("Your job this round is the rebase, not new work. Run: git fetch origin && git rebase origin/main"));
         assert!(rebase.find("rebase origin/main").unwrap() > rebase.find("</bead>").unwrap(), "the order comes after the bead");
     }
@@ -955,6 +1052,19 @@ mod tests {
         let p = gate_fix_prompt("PROMPT", "cargo test", "error[E0308]\n  --> x.rs:1");
         assert!(p.starts_with("PROMPT\n\nYour commit on this branch failed the repository's gate: `cargo test`."));
         assert!(p.ends_with("<gate-output>\nerror[E0308]\n  --> x.rs:1\n</gate-output>"));
+    }
+    #[test]
+    fn postmortem_prompt_carries_bead_transcript_and_gate() {
+        let j: Value = serde_json::json!([{"id":"t-1","title":"T","description":"D","acceptance_criteria":"AC"}]);
+        let p = postmortem_prompt(&j, "I tried this.\nBLOCKED: no such flag", "error[E0308]");
+        assert!(p.contains("<bead>\nid: t-1"));
+        assert!(p.contains("ACCEPTANCE CRITERIA:\nAC"));
+        assert!(p.contains("<worker-transcript>\nI tried this.\nBLOCKED: no such flag\n</worker-transcript>"));
+        assert!(p.contains("<gate-output>\nerror[E0308]\n</gate-output>"));
+        assert!(p.contains("1. What the worker tried."));
+        assert!(p.ends_with("do not guess what the worker meant. No verdict, no format beyond the three numbered lines."));
+        let no_gate = postmortem_prompt(&j, "text", "");
+        assert!(!no_gate.contains("<gate-output>"), "no gate output when there was none");
     }
     #[test]
     fn review_prompt_carries_report_and_diff() {
@@ -973,6 +1083,27 @@ mod tests {
         assert!(block.ends_with("- How to check: grep -c fixed work.txt prints 1"), "to the end");
         assert!(!block.contains("I looked at it."), "what came before it does not");
         assert_eq!(reject_block("APPROVE: fine"), "", "nothing without a REJECT line");
+    }
+    #[test]
+    fn precheck_prompt_carries_bead_report_and_diff() {
+        let j: Value = serde_json::json!([{"id":"t-1","title":"T","description":"D"}]);
+        let p = precheck_prompt(&j, "DONE: did it", " work.txt | 1 +\n", "diff --git a/work.txt");
+        assert!(p.contains("<bead>\nid: t-1"));
+        assert!(p.contains("<worker-report>\nDONE: did it\n</worker-report>"));
+        assert!(p.contains("<diff>\n work.txt | 1 +\ndiff --git a/work.txt\n</diff>"), "stat, then the diff");
+        assert!(p.ends_with("the 'For the worker:' block your instructions describe."));
+    }
+    #[test]
+    fn precheck_verdict_reads_pass_sendback_or_neither() {
+        assert_eq!(precheck_verdict("PASS: checked the three things"), Precheck::Pass);
+        let text = "I looked.\nSEND BACK: work.txt:1 no such command in DONE\nFor the worker:\n- What is wrong: x";
+        assert_eq!(
+            precheck_verdict(text),
+            Precheck::SendBack("SEND BACK: work.txt:1 no such command in DONE\nFor the worker:\n- What is wrong: x".into())
+        );
+        assert_eq!(precheck_verdict("nothing usable here"), Precheck::Unparsed);
+        let both = "PASS: looked fine\nSEND BACK: actually no, work.txt:2";
+        assert_eq!(precheck_verdict(both), Precheck::SendBack("SEND BACK: actually no, work.txt:2".into()), "SEND BACK wins");
     }
     #[test]
     fn pr_body_quotes_the_criteria() {

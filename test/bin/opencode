@@ -5,6 +5,7 @@
 #   abort-delay seconds the server takes for the next abort, once (curl stub): the stop's race
 #   review      one line per round: approve | reject | hang | crash | server-error
 #   brief       shape (default: WHAT HAPPENED / WHY / QUESTION) | plain (no shape) | crash
+#   postmortem  plain (three numbered lines, default) | crash | server-error
 #   slow        seconds every run takes before it answers: a round in flight while the test pauses its lane
 #   calls       appended: "<agent> <dir> <model> <attach>" per run, prompt saved to prompt.<n>
 set -euo pipefail
@@ -60,5 +61,11 @@ case $agent in
       plain) say "I read the rounds; it looks like the flag is missing." ;;
       crash) echo "connection refused" >&2; exit 7 ;;
       *) say "$(printf "WHAT HAPPENED:\nround 1 tried the flag and stopped.\nWHY:\nlib/x.ts has no such flag: the bead is wrong.\nQUESTION:\nIs the flag called --dry-run (add it to the bead), or should the criterion go?")" ;;
+    esac ;;
+  bead-postmortem)
+    case $(cat "$TEST_CTRL/postmortem" 2>/dev/null || echo plain) in
+      crash) echo "connection refused" >&2; exit 7 ;;
+      server-error) server_error ;;
+      *) say "$(printf "1. Tried to edit work.txt.\n2. Stopped without a commit.\n3. Run git status in the worktree first.")" ;;
     esac ;;
 esac

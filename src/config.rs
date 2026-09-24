@@ -251,6 +251,8 @@ pub struct Repo {
     pub conflict_worker: String,
     /// who writes the brief when a bead is parked: the last stage's worker unless set; `none` for no brief
     pub brief_model: String,
+    /// who pre-checks a round's diff before the senior reviewer sees it; `""` is off
+    pub precheck_model: String,
     pub adopt: bool,
     pub max_inflight: u64,
     pub worker_timeout: u64,
@@ -320,6 +322,7 @@ impl Repo {
             on_exhaust: cfg.str("on_exhaust", "park"),
             conflict_worker: cfg.str("conflict_worker", ""),
             brief_model: cfg.str("brief_model", ""),
+            precheck_model: cfg.str("precheck_model", ""),
             adopt: cfg.bool("adopt", true),
             max_inflight: cfg.u64("max_inflight", u64::MAX),
             worker_timeout: cfg.u64("worker_timeout", 3600),
@@ -349,10 +352,8 @@ impl Repo {
     /// exactly one is a clone with `repo` at the target's path and every key it sets
     /// layered over `self`'s (target > beads repo file > global > default — `self` already
     /// carries the last three); two, or one naming no `[targets]` entry, or a path that is
-    /// not a directory, is a config mistake, named in the `Err`.
-    // No caller yet outside the tests below: the dev lane starts calling this at claim
-    // (bl-6hg, docs/design-targets.md).
-    #[allow(dead_code)]
+    /// not a directory, is a config mistake, named in the `Err`. The dev lane calls this at
+    /// claim (bl-6hg, docs/design-targets.md); an `Err` holds the bead, no failure charged.
     pub fn for_bead(&self, labels: &[&str]) -> Result<Repo, String> {
         let prefix = format!("{}:", self.target_label);
         let names: Vec<&str> = labels.iter().filter_map(|l| l.strip_prefix(prefix.as_str())).collect();
@@ -361,6 +362,40 @@ impl Repo {
             [name] => *name,
             _ => return Err(format!("more than one {prefix}* label: {}", names.join(", "))),
         };
+        self.for_target(name, &prefix)
+    }
+
+    /// `for_id ID`: the target `dev_one` resolved and wrote to `$RS/target/ID` at claim
+    /// (`state.rs target_of`), applied the same way `for_bead` does. Missing file, or a
+    /// name no longer in `[targets]`, is the default target — so a bead already in flight
+    /// when the config changes under it is unaffected, and this never errs.
+    pub fn for_id(&self, id: &str) -> Repo {
+        let name = self.target_of(id);
+        if name.is_empty() {
+            return self.clone();
+        }
+        let prefix = format!("{}:", self.target_label);
+        self.for_target(&name, &prefix).unwrap_or_else(|_| self.clone())
+    }
+
+    /// Every target this beads repo configures, resolved, plus the default target
+    /// (`self`) — for `adopt`, which asks GitHub about each distinct `pr_repo` once. A
+    /// target whose path is missing or not configured right is skipped, not an error:
+    /// `for_bead`/`for_id` already hold the beads that would resolve to it.
+    pub fn target_repos(&self) -> Vec<Repo> {
+        let prefix = format!("{}:", self.target_label);
+        let mut v = vec![self.clone()];
+        for name in self.targets.keys() {
+            if let Ok(r) = self.for_target(name, &prefix) {
+                v.push(r);
+            }
+        }
+        v
+    }
+
+    /// The resolution `for_bead`/`for_id` share once a target NAME is known: apply
+    /// `[targets.NAME]` over `self`, target's own key winning, an unset one inheriting.
+    fn for_target(&self, name: &str, prefix: &str) -> Result<Repo, String> {
         let target = match self.targets.get(name) {
             Some(t) => t,
             None => return Err(format!("{prefix}{name}: no [targets.{name}] in .bead-loop.toml")),
@@ -397,13 +432,30 @@ impl Repo {
         r.pr_style = target.pr_style.clone().unwrap_or(r.pr_style);
         Ok(r)
     }
+
+    /// `head_ref BRANCH`: what `gh pr create --head` / `pr list --head` takes for this
+    /// branch. On our own repos the push remote's `owner/repo` (parsed from its url) is
+    /// `pr_repo` itself, so the bare branch name is enough; pushing to a fork whose PR
+    /// goes to someone else's repo needs `OWNER:BRANCH`, OWNER parsed the same way. A
+    /// push remote whose url does not parse (a local path, in the test suite) is treated
+    /// as matching — nothing to disambiguate with, so the bare branch stands.
+    pub fn head_ref(&self, branch: &str) -> String {
+        let push_owner_repo = remote_owner_repo(&self.repo, &self.push_remote);
+        if push_owner_repo.is_empty() || push_owner_repo == self.pr_repo {
+            return branch.to_string();
+        }
+        match push_owner_repo.split_once('/') {
+            Some((owner, _)) => format!("{owner}:{branch}"),
+            None => branch.to_string(),
+        }
+    }
 }
 
 /// The repo's state directories, and the older `attempts/` carried into `failures/`:
 /// same counter, file by file (a status run may have made failures/ first), then the
 /// old directory goes.
 pub fn make_state_dirs(rs: &Path) {
-    for d in ["inflight", "logs", "wt", "review", "failures", "held", "parked", "rejoin"] {
+    for d in ["inflight", "logs", "wt", "review", "failures", "held", "parked", "rejoin", "target"] {
         let _ = std::fs::create_dir_all(rs.join(d));
     }
     let old = rs.join("attempts");
@@ -455,6 +507,7 @@ pub fn test_repo(root: &Path, stages: &[&str]) -> Repo {
         on_exhaust: "park".into(),
         conflict_worker: String::new(),
         brief_model: String::new(),
+        precheck_model: String::new(),
         adopt: true,
         max_inflight: u64::MAX,
         worker_timeout: 60,
@@ -525,7 +578,6 @@ fn remote_head(repo: &Path, remote: &str) -> String {
 }
 
 /// `git -C DIR remote get-url NAME` succeeds: whether that remote exists.
-#[allow(dead_code)] // only `for_bead` calls this so far
 fn remote_exists(dir: &Path, name: &str) -> bool {
     crate::util::output(crate::util::cmd("git").args(["-C"]).arg(dir).args(["remote", "get-url", name]))
         .map(|o| o.status.success())

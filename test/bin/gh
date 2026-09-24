@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 # Stub gh for bead-loop tests. PR state in $TEST_CTRL/pr.json; actions logged to $TEST_CTRL/gh.log.
+# view/edit/merge/update-branch take the PR's url (bead-loop no longer passes a bare
+# number, so it needs no cwd); --repo REPO is accepted and just recorded in gh.log, as
+# the real gh would use it and this stub has only ever had one virtual repo.
 set -euo pipefail
 echo "$*" >>"$TEST_CTRL/gh.log"
 # auth status: like the claude stub, signed in unless the test says otherwise.
@@ -8,17 +11,24 @@ if [ "$1" = auth ] && [ "$2" = status ]; then
   echo "✓ Logged in to github.com"; exit 0
 fi
 [ "$1" = pr ] || { echo "stub gh: only pr" >&2; exit 2; }
+primary_url() { [ -e "$TEST_CTRL/pr.json" ] && jq -r .url "$TEST_CTRL/pr.json" 2>/dev/null || true; }
+# The primary PR (pr.json) or an extra one (extra-prs.json), by its url — or, still, a
+# bare number, for anything that has not moved off it.
+is_primary() { [ "$1" = 7 ] || [ "$1" = "$(primary_url)" ]; }
 case $2 in
   create)
-    head=; while [ $# -gt 0 ]; do [ "$1" = --head ] && head=$2; shift; done
-    jq -n --arg h "$head" '{state:"OPEN", head:$h, mergeStateStatus:"CLEAN", statusCheckRollup:[], url:"https://github.com/example/repo/pull/7"}' >"$TEST_CTRL/pr.json"
+    head=; repo=; while [ $# -gt 0 ]; do case $1 in --head) head=$2;; --repo) repo=$2;; esac; shift; done
+    jq -n --arg h "$head" --arg r "$repo" '{state:"OPEN", head:$h, repo:$r, mergeStateStatus:"CLEAN", statusCheckRollup:[], url:"https://github.com/example/repo/pull/7"}' >"$TEST_CTRL/pr.json"
     echo https://github.com/example/repo/pull/7 ;;
   list)
     # The stub's one PR (if any) plus any extra PRs the test planted in extra-prs.json.
-    # --head matches a headRefName exactly, as gh's does; --search 'head:X' is a substring
-    # match, as GitHub's search qualifier is (a caller checks a hit against the real id).
+    # --head matches a headRefName exactly, as gh's does — OWNER:branch (a fork's PR head)
+    # matches on the branch alone, as gh's cross-fork match does; --search 'head:X' is a
+    # substring match, as GitHub's search qualifier is (a caller checks a hit against the
+    # real id).
     filter=.; head=; state=; search=
-    while [ $# -gt 0 ]; do case $1 in --jq) filter=$2; shift;; --head) head=$2; shift;; --state) state=$2; shift;; --search) search=$2; shift;; esac; shift; done
+    while [ $# -gt 0 ]; do case $1 in --jq) filter=$2; shift;; --head) head=$2; shift;; --state) state=$2; shift;; --search) search=$2; shift;; --repo) shift;; esac; shift; done
+    head=${head#*:}
     needle=${search#head:}
     { [ -e "$TEST_CTRL/pr.json" ] && jq '{number:7, headRefName:.head, url, state}' "$TEST_CTRL/pr.json"; jq ".[]" "$TEST_CTRL/extra-prs.json" 2>/dev/null; } \
       | jq -s . \
@@ -28,19 +38,19 @@ case $2 in
       | jq -r "$filter"
     ;;
   view)
-    if [ "$3" = 7 ]; then jq '{state, mergedAt: null, mergeable: (.mergeable // "MERGEABLE"), mergeStateStatus, statusCheckRollup, url}' "$TEST_CTRL/pr.json"
-    else jq --argjson n "$3" '.[] | select(.number==$n) | {state, mergedAt: null, mergeStateStatus: "CLEAN", statusCheckRollup: .checks, url}' "$TEST_CTRL/extra-prs.json"; fi ;;
+    if is_primary "$3"; then jq '{state, mergedAt: null, mergeable: (.mergeable // "MERGEABLE"), mergeStateStatus, statusCheckRollup, url}' "$TEST_CTRL/pr.json"
+    else jq --arg u "$3" --argjson n "${3##*/}" '.[] | select(.url==$u or .number==$n) | {state, mergedAt: null, mergeStateStatus: "CLEAN", statusCheckRollup: .checks, url}' "$TEST_CTRL/extra-prs.json"; fi ;;
   edit)
     # --add-label L: labels land in pr.json (or labels-extra for planted PRs). A test plants
     # $TEST_CTRL/label-missing to have GitHub refuse, as it does for a label the repo lacks.
-    n=$3 l=; while [ $# -gt 0 ]; do [ "$1" = --add-label ] && l=$2; shift; done
+    id=$3 l=; while [ $# -gt 0 ]; do [ "$1" = --add-label ] && l=$2; shift; done
     [ -e "$TEST_CTRL/label-missing" ] && { echo "'$l' not found" >&2; exit 1; }
-    if [ "$n" = 7 ]; then jq --arg l "$l" '.labels += [$l]' "$TEST_CTRL/pr.json" >"$TEST_CTRL/pr.json.tmp" && mv "$TEST_CTRL/pr.json.tmp" "$TEST_CTRL/pr.json"
-    else echo "$n $l" >>"$TEST_CTRL/labels-extra"; fi ;;
+    if is_primary "$id"; then jq --arg l "$l" '.labels += [$l]' "$TEST_CTRL/pr.json" >"$TEST_CTRL/pr.json.tmp" && mv "$TEST_CTRL/pr.json.tmp" "$TEST_CTRL/pr.json"
+    else echo "$id $l" >>"$TEST_CTRL/labels-extra"; fi ;;
   merge)
     # A test plants $TEST_CTRL/merge-refused to have GitHub refuse (branch protection).
     [ -e "$TEST_CTRL/merge-refused" ] && { echo "Pull request is not mergeable: protected branch" >&2; exit 1; }
-    if [ "$3" = 7 ]; then jq '.state="MERGED"' "$TEST_CTRL/pr.json" >"$TEST_CTRL/pr.json.tmp" && mv "$TEST_CTRL/pr.json.tmp" "$TEST_CTRL/pr.json"
+    if is_primary "$3"; then jq '.state="MERGED"' "$TEST_CTRL/pr.json" >"$TEST_CTRL/pr.json.tmp" && mv "$TEST_CTRL/pr.json.tmp" "$TEST_CTRL/pr.json"
     else echo "$3" >>"$TEST_CTRL/merged-extra"; fi ;;
   update-branch) jq '.mergeStateStatus="CLEAN"' "$TEST_CTRL/pr.json" >"$TEST_CTRL/pr.json.tmp" && mv "$TEST_CTRL/pr.json.tmp" "$TEST_CTRL/pr.json" ;;
   *) echo "stub gh: unknown pr $2" >&2; exit 2 ;;

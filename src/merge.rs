@@ -6,7 +6,7 @@
 //! state: the PR is still asked about on every pass, and the flag clears when it moves.
 use crate::config::Repo;
 use crate::round::send_back;
-use crate::shell::{bd_close, bd_note, bd_ready, bd_status, gh, gh_ok, gh_out, git};
+use crate::shell::{bd_close, bd_knows, bd_note, bd_ready_json, bd_status, gh, gh_ok, gh_out, git};
 use crate::util::{date_iminutes, log, mtime, now, read_to_string, stderr_str, stdout_str, touch};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -123,6 +123,7 @@ pub fn close_merged(repo: &Repo, id: &str, url: &str, view: &Value) {
         }
     }
     let _ = std::fs::remove_file(repo.inflight_path(id));
+    repo.clear_target(id);
     for m in ["red", "nocheck", "adopted", "held"] {
         let _ = std::fs::remove_file(repo.mark(id, m));
     }
@@ -132,11 +133,12 @@ pub fn close_merged(repo: &Repo, id: &str, url: &str, view: &Value) {
     repo.wake();
 }
 
-/// `hand_to_pipeline ID NUM URL`: merge = "pipeline". The loop labels the PR and the CI
+/// `hand_to_pipeline ID URL`: merge = "pipeline". The loop labels the PR and the CI
 /// pipeline merges it on its own terms; the loop only closes the bead once it is MERGED.
 /// A label the repo does not have cannot be added: noted, held, the PR waits for you.
-pub fn hand_to_pipeline(repo: &Repo, id: &str, num: &str, url: &str) {
-    if gh_ok(repo, &["pr", "edit", num, "--add-label", &repo.merge_label]) {
+/// The url, not the number: `gh pr edit` on it needs no cwd, whichever target it is on.
+pub fn hand_to_pipeline(repo: &Repo, id: &str, url: &str) {
+    if gh_ok(repo, &["pr", "edit", url, "--add-label", &repo.merge_label]) {
         log(&format!("{}: {id}: labelled {} on {url}; the pipeline merges it", repo.slug, repo.merge_label));
     } else {
         bd_note(
@@ -163,37 +165,54 @@ fn held_in_merge(repo: &Repo, id: &str, why: &str) {
 
 /// `adopt`: any open PR on a `bead/<id>[-slug]` branch this loop did not open (another
 /// session, a human) joins the merge queue, so green merges and the bead closes whoever
-/// wrote it. `adopt = false` turns it off.
+/// wrote it. Runs once per distinct `pr_repo` among this beads repo's targets, plus the
+/// default — a target with `adopt = false` is skipped on its own, not the whole repo —
+/// and only for a branch whose bead id this backlog's `bd` actually knows: a `bead/id`
+/// shape in someone else's history on a shared target is not ours to adopt.
 pub fn adopt(repo: &Repo) {
-    if !repo.adopt {
-        return;
+    let mut seen = std::collections::HashSet::new();
+    for r in repo.target_repos() {
+        if !r.adopt || !seen.insert(r.pr_repo.clone()) {
+            continue;
+        }
+        adopt_from(repo, &r);
     }
-    let out = gh_out(
-        repo,
-        &[
-            "pr",
-            "list",
-            "--state",
-            "open",
-            "--limit",
-            "100",
-            "--json",
-            "number,headRefName,url",
-            "--jq",
-            ".[] | select(.headRefName | startswith(\"bead/\")) | [.number, .headRefName, .url] | @tsv",
-        ],
-    )
-    .unwrap_or_default();
+}
+
+/// One target's `pr_repo`: every open `bead/…` PR there this repo does not already
+/// track. `--repo` is passed when `pr_repo` is known; empty (a local-path remote, which
+/// does not parse to `owner/repo` — the test suite's default target) leaves it off, gh's
+/// cwd deciding, exactly as before targets existed.
+fn adopt_from(repo: &Repo, r: &Repo) {
+    let mut args = vec!["pr", "list"];
+    if !r.pr_repo.is_empty() {
+        args.push("--repo");
+        args.push(&r.pr_repo);
+    }
+    args.extend([
+        "--state",
+        "open",
+        "--limit",
+        "100",
+        "--json",
+        "headRefName,url",
+        "--jq",
+        ".[] | select(.headRefName | startswith(\"bead/\")) | [.headRefName, .url] | @tsv",
+    ]);
+    let out = gh_out(r, &args).unwrap_or_default();
     for line in out.lines() {
         let mut parts = line.split('\t');
-        let (num, head, url) = match (parts.next(), parts.next(), parts.next()) {
-            (Some(n), Some(h), Some(u)) if !n.is_empty() => (n, h, u),
+        let (head, url) = match (parts.next(), parts.next()) {
+            (Some(h), Some(u)) if !h.is_empty() => (h, u),
             _ => continue,
         };
         let id = match bead_id_of_branch(head) {
             Some(i) => i,
             None => continue,
         };
+        if !bd_knows(repo, &id) {
+            continue;
+        }
         if repo.inflight_path(&id).exists() {
             continue;
         }
@@ -202,10 +221,11 @@ pub fn adopt(repo: &Repo) {
             continue;
         }
         crate::util::write_file(&repo.inflight_path(&id), &format!("{url}\n"));
+        repo.set_target(&id, &r.target);
         touch(&repo.mark(&id, "adopted"));
         log(&format!("{}: adopted {url} ({head}) as bead {id}", repo.slug));
-        if repo.merge == "pipeline" {
-            hand_to_pipeline(repo, &id, num, url);
+        if r.merge == "pipeline" {
+            hand_to_pipeline(r, &id, url);
         }
     }
 }
@@ -219,26 +239,32 @@ pub fn adopt(repo: &Repo) {
 /// `bead/<id>-slug`; `--search head:...` is a substring match on GitHub's side, so a
 /// hit is still checked against `bead_id_of_branch` before it counts.
 fn close_merged_outside_loop(repo: &Repo) {
-    for id in bd_ready(repo) {
+    let ready = bd_ready_json(repo).as_array().cloned().unwrap_or_default();
+    for b in ready {
+        let id = match b.get("id").and_then(|v| v.as_str()) {
+            Some(i) => i.to_string(),
+            None => continue,
+        };
         if repo.inflight_path(&id).exists() || repo.review_path(&id).exists() || repo.wt(&id).is_dir() {
             continue;
         }
-        let out = gh_out(
-            repo,
-            &[
-                "pr",
-                "list",
-                "--state",
-                "merged",
-                "--search",
-                &format!("head:bead/{id}"),
-                "--json",
-                "url,headRefName",
-                "--jq",
-                ".[] | [.headRefName, .url] | @tsv",
-            ],
-        )
-        .unwrap_or_default();
+        // The bead's own target: its PR, if any, is on that target's pr_repo. A config
+        // mistake here (an unconfigured work:NAME) surfaces as a hold when dev_one next
+        // picks the bead — this pass just leaves it alone.
+        let labels: Vec<&str> =
+            b.get("labels").and_then(|l| l.as_array()).map(|a| a.iter().filter_map(|v| v.as_str()).collect()).unwrap_or_default();
+        let r = match repo.for_bead(&labels) {
+            Ok(r) => r,
+            Err(_) => continue,
+        };
+        let mut args = vec!["pr", "list"];
+        if !r.pr_repo.is_empty() {
+            args.push("--repo");
+            args.push(&r.pr_repo);
+        }
+        let search = format!("head:bead/{id}");
+        args.extend(["--state", "merged", "--search", &search, "--json", "url,headRefName", "--jq", ".[] | [.headRefName, .url] | @tsv"]);
+        let out = gh_out(&r, &args).unwrap_or_default();
         let url = out.lines().find_map(|line| {
             let mut parts = line.split('\t');
             let head = parts.next()?;
@@ -294,33 +320,37 @@ pub fn reconcile(repo: &Repo) {
     adopt(repo);
     close_merged_outside_loop(repo);
     for id in repo.inflight_ids() {
+        // The target this bead claimed on (or was adopted onto): the same checkout and
+        // PR repo `dev_one` used, so `git branch -D` at close and the rebase round land
+        // on the right clone. The url, not the number, so gh needs no cwd either way.
+        let r = repo.for_id(&id);
         let f = repo.inflight_path(&id);
         let url = read_to_string(&f).unwrap_or_default().trim().to_string();
-        let num = url.rsplit('/').next().unwrap_or("").to_string();
         crate::config::need("gh");
-        let view = match gh(repo, &["pr", "view", &num, "--json", "state,mergedAt,mergeable,mergeStateStatus,statusCheckRollup,url"]) {
+        let view = match gh(&r, &["pr", "view", &url, "--json", "state,mergedAt,mergeable,mergeStateStatus,statusCheckRollup,url"]) {
             Ok(o) if o.status.success() => match serde_json::from_str::<Value>(&stdout_str(&o)) {
                 Ok(v) => v,
                 Err(_) => {
-                    log(&format!("{}: cannot read PR {num}", repo.slug));
+                    log(&format!("{}: cannot read PR {url}", repo.slug));
                     continue;
                 }
             },
             Ok(o) => {
-                log(&format!("{}: cannot read PR {num}", repo.slug));
+                log(&format!("{}: cannot read PR {url}", repo.slug));
                 held_in_merge(repo, &id, &format!("gh cannot read {url}: {}", stderr_str(&o).trim().lines().last().unwrap_or("")));
                 continue;
             }
             Err(_) => {
-                log(&format!("{}: cannot read PR {num}", repo.slug));
+                log(&format!("{}: cannot read PR {url}", repo.slug));
                 continue;
             }
         };
         let state = view.get("state").and_then(|s| s.as_str()).unwrap_or("");
         match state {
-            "MERGED" => close_merged(repo, &id, &url, &view),
+            "MERGED" => close_merged(&r, &id, &url, &view),
             "CLOSED" => {
                 let _ = std::fs::remove_file(&f);
+                repo.clear_target(&id);
                 for m in ["red", "nocheck", "adopted", "held"] {
                     let _ = std::fs::remove_file(repo.mark(&id, m));
                 }
@@ -330,13 +360,13 @@ pub fn reconcile(repo: &Repo) {
                 crate::park::park(repo, &id, crate::park::Reason::PrClosed(url.clone()), None);
                 repo.wake();
             }
-            "OPEN" => reconcile_open(repo, &id, &f, &url, &num, &view),
+            "OPEN" => reconcile_open(&r, &id, &f, &url, &view),
             _ => {}
         }
     }
 }
 
-fn reconcile_open(repo: &Repo, id: &str, f: &std::path::Path, url: &str, num: &str, view: &Value) {
+fn reconcile_open(repo: &Repo, id: &str, f: &std::path::Path, url: &str, view: &Value) {
     let adopted = repo.mark(id, "adopted").exists();
     // A PR of ours that conflicts with the base is not CI's problem, and not the model's
     // fault: no failure. It goes back to the dev queue on its own branch with a rebase
@@ -362,12 +392,12 @@ fn reconcile_open(repo: &Repo, id: &str, f: &std::path::Path, url: &str, num: &s
         "green" => {
             if repo.merge == "auto" {
                 if ms == "BEHIND" {
-                    if gh_ok(repo, &["pr", "update-branch", num]) {
+                    if gh_ok(repo, &["pr", "update-branch", url]) {
                         log(&format!("{}: {id}: updated branch, CI reruns", repo.slug));
                     } else {
                         log(&format!("{}: {id}: update-branch failed", repo.slug));
                     }
-                } else if gh_ok(repo, &["pr", "merge", num, "--squash", "--delete-branch"]) {
+                } else if gh_ok(repo, &["pr", "merge", url, "--squash", "--delete-branch"]) {
                     close_merged(repo, id, url, view);
                 } else {
                     log(&format!("{}: {id}: green but merge refused ({ms})", repo.slug));

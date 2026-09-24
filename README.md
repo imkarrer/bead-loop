@@ -95,6 +95,14 @@ broken, CI silent — is never the bead's failure: the bead is **held** with the
 until the world changes. A bead the models cannot land is **parked** for you with a
 written brief: what happened, why, and the question to answer.
 
+## Layout
+
+The three units (`bead-supervisor`, `bead-loop-ui`, `opencode-web`) run their command
+through `flox activate -d @HERE@ --` (where `@HERE@` is the directory from which `install.sh`
+is executed), so every tool resolves from `.flox/env/manifest.toml` the same way on every
+box; `systemctl --user show -p Environment` carries no `PATH=` line. `flox activate` on a
+warm env adds under 100ms.
+
 ## Install
 
 `./install.sh` builds the binary (`cargo build --release`, through `flox activate` when

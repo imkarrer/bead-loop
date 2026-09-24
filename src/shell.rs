@@ -65,6 +65,13 @@ pub fn bd_show(repo: &Repo, id: &str) -> Value {
     v
 }
 
+/// `bd show ID --json` softly: whether this beads repo's `bd` knows the id at all —
+/// `adopt` skips a `bead/<id>…` branch this repo's backlog does not recognize, rather
+/// than die (a branch shaped like ours in someone else's history, on a shared target).
+pub fn bd_knows(repo: &Repo, id: &str) -> bool {
+    !parse_array(&bd_out(repo, &["show", id, "--json"])).as_array().map(|a| a.is_empty()).unwrap_or(true)
+}
+
 fn parse_array(s: &str) -> Value {
     match serde_json::from_str::<Value>(s) {
         Ok(v @ Value::Array(_)) => v,
@@ -182,10 +189,10 @@ pub fn git_must(dir: &Path, args: &[&str]) -> String {
     }
 }
 
-/// `git show-ref -q refs/heads/B || git show-ref -q refs/remotes/origin/B`
+/// `git show-ref -q refs/heads/B || git show-ref -q refs/remotes/PUSH_REMOTE/B`
 pub fn branch_exists(repo: &Repo, branch: &str) -> bool {
     git_ok(&repo.repo, &["show-ref", "-q", &format!("refs/heads/{branch}")])
-        || git_ok(&repo.repo, &["show-ref", "-q", &format!("refs/remotes/origin/{branch}")])
+        || git_ok(&repo.repo, &["show-ref", "-q", &format!("refs/remotes/{}/{branch}", repo.push_remote)])
 }
 
 pub fn local_branch_exists(repo: &Repo, branch: &str) -> bool {
