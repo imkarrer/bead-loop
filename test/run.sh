@@ -1238,6 +1238,8 @@ case_target() {
   assert_match "$(cat "$TEST_CTRL/gh.log")" "pr create --repo up/target" "PR opened on the configured pr_repo"
   assert_match "$(cat "$TEST_CTRL/gh.log")" -- "--head [^ ]\{1,\}:bead/t-3" "the head names the fork's owner (Repo::head_ref)"
   assert_eq "$(cat "$BEAD_LOOP_STATE/repo/target/t-3")" t "target/t-3 holds the target's name"
+  j=$(sup --json status "$REPO")
+  assert_eq "$(jq -r '.queues.merge[] | select(.id=="t-3") | .target' <<<"$j")" t "status --json carries the target"
   # Merged: closed, and target/t-3 goes with inflight/t-3.
   set_checks '[{"context":"ci","state":"SUCCESS"}]'; sup reconcile "$REPO"
   assert_eq "$(bead3 .status)" closed "merged: closed"

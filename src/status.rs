@@ -205,6 +205,10 @@ pub fn status_json_from(repo: &Repo, open: Value, inprog: Value, specs: &[crate:
             m.insert("held".into(), repo.held_why(id).map(|w| json!({"why": w, "since": repo.held_since(id)})).unwrap_or(Value::Null));
             m.insert("merge_mode".into(), json!(repo.for_id(id).merge));
             m.insert("awaiting_since".into(), json!(mtime(&repo.inflight_path(id))));
+            let t = repo.target_of(id);
+            if !t.is_empty() {
+                m.insert("target".into(), Value::String(t));
+            }
             Value::Object(m)
         })
         .collect();
@@ -333,6 +337,11 @@ pub fn status_json_from(repo: &Repo, open: Value, inprog: Value, specs: &[crate:
     let has_claude = repo.stages.iter().any(|s| s.worker.starts_with("claude/") || s.reviewer.starts_with("claude/"));
     let priority =
         crate::lanes::priority_repo(&repo.state_dir).map(|p| p == repo.repo || p.to_string_lossy() == repo.slug).unwrap_or(false);
+    let targets: Vec<Value> = repo
+        .targets
+        .values()
+        .map(|t| json!({"name": t.name, "path": t.path.to_string_lossy(), "pr_repo": t.pr_repo, "merge": t.merge, "open_pr": t.open_pr}))
+        .collect();
     json!({
         "slug": repo.slug, "repo": repo.repo.to_string_lossy(), "label": repo.label, "base": repo.base,
         "merge": repo.merge, "attach": repo.attach, "logs_dir": repo.rs.join("logs").to_string_lossy(),
@@ -349,6 +358,7 @@ pub fn status_json_from(repo: &Repo, open: Value, inprog: Value, specs: &[crate:
         "held": held,
         "decisions": decisions,
         "worktrees": worktrees,
+        "targets": targets,
     })
 }
 
@@ -386,6 +396,14 @@ fn awaiting(since: i64) -> String {
 
 fn s<'a>(v: &'a Value, k: &str) -> &'a str {
     v.get(k).and_then(|x| x.as_str()).unwrap_or("")
+}
+
+/// " [t]" for a bead whose JSON carries a non-default target, else "".
+fn target_tag(b: &Value) -> String {
+    match b.get("target").and_then(|t| t.as_str()) {
+        Some(t) if !t.is_empty() => format!(" [{t}]"),
+        _ => String::new(),
+    }
 }
 
 /// `status_one`: status_json as text.
@@ -433,9 +451,10 @@ pub fn status_text(j: &Value) -> String {
         for (i, b) in list.iter().enumerate() {
             let worker = b["stage"].get("worker").and_then(|w| w.as_str()).unwrap_or("—");
             out.push_str(&format!(
-                "    {} {} {}× {} {}\n",
+                "    {} {}{} {}× {} {}\n",
                 pad(&(i + 1).to_string(), 3),
                 pad(s(b, "id"), 14),
+                target_tag(b),
                 b["failures"],
                 pad(worker, 14),
                 pad(s(b, "title"), 60)
@@ -451,8 +470,9 @@ pub fn status_text(j: &Value) -> String {
             String::new()
         };
         out.push_str(&format!(
-            "    {} {}{}{}{}\n",
+            "    {}{} {}{}{}{}\n",
             pad(s(p, "id"), 14),
+            target_tag(p),
             s(p, "url"),
             if p["red"].as_bool().unwrap_or(false) { "  [red]" } else { "" },
             if p["adopted"].as_bool().unwrap_or(false) { "  [adopted]" } else { "" },
@@ -776,6 +796,24 @@ mod tests {
         assert_eq!(j["parked"][0]["parked"]["brief"], "WHAT HAPPENED:\nx");
         let t = status_text(&j);
         assert!(t.contains("\n  parked:\n    t-9            What should change?\n"), "the text shows the question: {t}");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn status_text_marks_a_targeted_bead() {
+        let d = crate::config::scratch("status-target-text");
+        let repo = crate::config::test_repo(&d, &["stub/worker:stub/reviewer:1"]);
+        repo.set_target("t-1", "t");
+        repo.set_target("t-2", "t");
+        crate::util::write_file(&repo.inflight_path("t-2"), "https://github.com/example/repo/pull/9\n");
+        let open = json!([{"id":"t-1","title":"First","priority":2}, {"id":"t-3","title":"Third","priority":2}]);
+        let inprog = json!([{"id":"t-2","title":"Second"}]);
+        let j = status_json_from(&repo, open, inprog, &default_lanes(false));
+        let t = status_text(&j);
+        let tag = target_tag(&json!({"target": "t"}));
+        assert!(t.contains(&format!("{}{} 0", pad("t-1", 14), tag)), "the dev row: {t}");
+        assert!(t.contains(&format!("{}{} https://", pad("t-2", 14), tag)), "the merge row: {t}");
+        assert!(!t.contains(&format!("{} [t]", pad("t-3", 14))), "t-3 has no target: {t}");
         let _ = std::fs::remove_dir_all(&d);
     }
 

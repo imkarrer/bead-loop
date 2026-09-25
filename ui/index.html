@@ -624,13 +624,13 @@ function strays(r, now) {
 // The queues, in the order the lanes take them. Position is the information: #1 is next.
 // Rows carry the bead's id as their key, so a bead that moves up a place keeps its open
 // history, its note box and what is typed in it.
-const qRow = (i, b, extra, r) => `<tr data-key="${esc(b.id)}"><td class="pos">${i + 1}</td><td class="id">${esc(b.id)}</td><td class="title"><span class="t" title="${esc(b.title || '')}">${esc(b.title || '')}</span></td><td class="fit">${failChip(b.failures)}${histToggle(b)}${noteToggle(b)}${extra || ''}</td></tr>${histRow(b, 4, r)}${noteRow(b, 4, r)}`;
+const qRow = (i, b, extra, r) => `<tr data-key="${esc(b.id)}"><td class="pos">${i + 1}</td><td class="id">${esc(b.id)}${b.target ? ` <span class="muted">[${esc(b.target)}]</span>` : ''}</td><td class="title"><span class="t" title="${esc(b.title || '')}">${esc(b.title || '')}</span></td><td class="fit">${failChip(b.failures)}${histToggle(b)}${noteToggle(b)}${extra || ''}</td></tr>${histRow(b, 4, r)}${noteRow(b, 4, r)}`;
 function queueCol(name, rows, r, now) {
   const empty = { dev: 'nothing ready', review: 'nothing waiting for review', merge: 'no PRs in flight' }[name];
   const sub = { dev: 'no open blocker, fewest failures first, then bd’s order', review: 'gate passed; the reviewer next', merge: r.max_inflight == null ? 'PRs in CI · no cap: dependencies are the gate' : `PRs in CI · dev pauses at ${r.max_inflight}` }[name];
   let body;
   if (rows.length === 0) body = `<div class="empty">${empty}</div>`;
-  else if (name === 'merge') body = `<table>${rows.map((p) => `<tr data-key="${esc(p.id)}"><td class="id">${esc(p.id)}</td><td class="title"><span class="t"><a href="${esc(p.url)}" target="_blank" rel="noopener">${esc(p.url.replace(/^https?:\/\/github\.com\/[^/]+\//, ''))} ↗</a></span></td></tr><tr class="sub" data-key="${esc(p.id)}:pr"><td></td><td>${prChips(p, now, r)}</td></tr>`).join('')}</table>`;
+  else if (name === 'merge') body = `<table>${rows.map((p) => `<tr data-key="${esc(p.id)}"><td class="id">${esc(p.id)}${p.target ? ` <span class="muted">[${esc(p.target)}]</span>` : ''}</td><td class="title"><span class="t"><a href="${esc(p.url)}" target="_blank" rel="noopener">${esc(p.url.replace(/^https?:\/\/github\.com\/[^/]+\//, ''))} ↗</a></span></td></tr><tr class="sub" data-key="${esc(p.id)}:pr"><td></td><td>${prChips(p, now, r)}</td></tr>`).join('')}</table>`;
   else body = `<table>${rows.map((b, i) => qRow(i, b, (name === 'dev' ? ` ${stageChip(b.stage, r)}` : ` <span class="muted">${ago(b.since, now)}</span>${stageChip(b.stage, r).includes('waits for') ? ' <span class="chip bad">waits for Claude sign-in</span>' : ''}`) + `</td><td class="act">${claudeBtn(r, b)}`, r)).join('')}</table>`;
   return `<div class="q ${name}"><h3>${name} queue<span class="n">${rows.length}</span></h3><div class="sub">${sub}</div>${body}</div>`;
 }
