@@ -80,18 +80,20 @@ pub fn render_bead_whole(json: &Value) -> String {
 }
 
 /// The bead's notes without the loop's own lines. The loop notes each event as one entry:
-/// a `bead-loop` line, any body indented under it (shell.rs `bd_note`). Every other line —
-/// the filer's notes, an operator's answer, a note appended by hand — is people's and
-/// stays, and so does one entry of the loop's: a parking's question, which the answer
-/// under it replies to. (An entry from before the body was indented reads, past its first
-/// line, as people's.)
+/// a `bead-loop` line, any body indented under it (shell.rs `bd_note`). People's entries
+/// open with who and when (`people_header`: `operator 2026-09-25T00:59+00:00: ...`, as
+/// human.rs `answer` writes it, or `planner 2026-09-25: ...`) and stay, as does all
+/// before the first loop line (the filer's notes) and one entry of the loop's: a
+/// parking's question, which the answer under it replies to. Any other line belongs to
+/// the entry above it — so the body of an entry from before the body was indented
+/// (#143), unindented as it is, goes with its header too.
 pub fn people_notes(notes: &str) -> String {
     let mut keep = true;
     let mut out = Vec::new();
     for l in notes.lines() {
         if let Some(rest) = l.strip_prefix("bead-loop").filter(|r| r.starts_with([' ', ':'])) {
             keep = rest.trim_start().split_once(": ").is_some_and(|(_, what)| what.starts_with("parked ("));
-        } else if !(l.is_empty() || l.starts_with([' ', '\t'])) {
+        } else if people_header(l) {
             keep = true;
         }
         if keep {
@@ -99,6 +101,16 @@ pub fn people_notes(notes: &str) -> String {
         }
     }
     out.join("\n").trim_matches('\n').to_string()
+}
+
+/// The first line of a people's entry: `WHO DATE` (`operator 2026-09-25T00:59+00:00: x`,
+/// `planner 2026-09-25: x`) or a bare date (`2026-09-21: x`).
+fn people_header(l: &str) -> bool {
+    let date = |s: &str| {
+        let b = s.as_bytes();
+        b.len() >= 10 && b[..10].iter().enumerate().all(|(i, c)| if i == 4 || i == 7 { *c == b'-' } else { c.is_ascii_digit() })
+    };
+    date(l) || l.split_once(' ').is_some_and(|(who, rest)| !who.is_empty() && date(rest))
 }
 
 fn render_bead_with(json: &Value, whole_notes: bool) -> String {
@@ -1704,7 +1716,7 @@ mod tests {
             "  For the worker:",
             "  - What to do: y",
             "bead-loop 2026-09-18T17:06+00:00: round interrupted by a stop; back in the dev queue, no failure charged",
-            "a note appended by hand",
+            "operator 2026-09-18T17:06+00:00: a note appended by hand",
             "bead-loop: CI red on https://github.com/example/repo/pull/7 (ci); PR left open",
             "bead-loop 2026-09-18T17:07+00:00: parked (stages exhausted after 3 rounds). Which flag?",
             "  Or both?",
@@ -1716,7 +1728,7 @@ mod tests {
             [
                 "Filed with: the flag is --dry-run",
                 "  (checked in cli.ts)",
-                "a note appended by hand",
+                "operator 2026-09-18T17:06+00:00: a note appended by hand",
                 "bead-loop 2026-09-18T17:07+00:00: parked (stages exhausted after 3 rounds). Which flag?",
                 "  Or both?",
                 "operator 2026-09-18T18:00+00:00: --dry-run",
@@ -1726,6 +1738,54 @@ mod tests {
         );
         assert_eq!(people_notes("bead-loop 2026-09-18T17:05+00:00: held, no failure charged: x"), "");
         assert_eq!(people_notes("bead-loopy is a word here"), "bead-loopy is a word here", "not the loop's prefix");
+        assert_eq!(
+            people_notes("Filed with: x\nbead-loop 2026-09-18T17:05+00:00: held, no failure charged: x\nan unindented tail"),
+            "Filed with: x",
+            "a line under a loop entry with no who-and-when of its own is the entry's"
+        );
+    }
+
+    #[test]
+    fn people_notes_drop_the_unindented_bodies_of_old_entries() {
+        // bl-efd's notes as they stood on 25 Sep, lines cut short and the '?' run to four:
+        // every loop entry written before #143 has its body unindented under its header.
+        let notes = [
+            "bead-loop round 1 (devbox/coder) 2026-09-21T10:10+00:00: worker exited 124 (timeout=3600 s).",
+            "operator 2026-09-21T10:30+00:00: the config table is in docs/config.md now, not README.md (PR #58 moved it)",
+            "bead-loop round 2 (devbox/coder) 2026-09-21T14:56+00:00: gate failed twice: flox activate -- bash -c 'cargo build --quiet'",
+            "error: character literal may only contain one codepoint",
+            "   --> src/config.rs:756:52",
+            "bead-loop round 3 (devbox/coder) 2026-09-21T19:00+00:00: worker made no commit. Last words: ????",
+            "????",
+            "Continue if you have next steps, or stop and ask for clarification if you are unsure how to proceed.",
+            "bead-loop round 4 (acbox/coder) 2026-09-24T17:40+00:00: review (acbox/reviewer) rejected:",
+            "REJECT: src/config.rs diff also modifies bead-loop.example.toml",
+            "",
+            "For the worker:",
+            "- Why it fails the bead: Acceptance Criteria – “the diff touches only src/config.rs.”",
+            "bead-loop 2026-09-24T17:48+00:00: parked (BLOCKED at the last stage). 1. Should `model` and `attach` be added?",
+            "2. Or should the test's `bead-loop.example.toml` check exclude `model` and `attach`?",
+            "operator 2026-09-25T00:59+00:00: 1: yes — add model and attach to bead-loop.example.toml",
+            "planner 2026-09-25: PR #81's CI red was cargo fmt --check only (tests pass, clippy clean).",
+            "bead-loop round 1 (aider:devbox/coder) 2026-09-25T04:10+00:00: gate failed twice: cargo fmt --check",
+            "+            \"conflict_worker\",",
+            "bead-loop round 2 (devbox/coder) 2026-09-25T15:32+00:00: review (acbox/reviewer) rejected:",
+            "REJECT: src/config.rs diff also modifies bead-loop.example.toml, violating “the diff touches only src/config.rs”.",
+            "- Why it fails the bead: Acceptance Criteria – “the diff touches only src/config.rs.”",
+        ]
+        .join("\n");
+        assert_eq!(
+            people_notes(&notes),
+            [
+                "operator 2026-09-21T10:30+00:00: the config table is in docs/config.md now, not README.md (PR #58 moved it)",
+                "bead-loop 2026-09-24T17:48+00:00: parked (BLOCKED at the last stage). 1. Should `model` and `attach` be added?",
+                "2. Or should the test's `bead-loop.example.toml` check exclude `model` and `attach`?",
+                "operator 2026-09-25T00:59+00:00: 1: yes — add model and attach to bead-loop.example.toml",
+                "planner 2026-09-25: PR #81's CI red was cargo fmt --check only (tests pass, clippy clean).",
+            ]
+            .join("\n"),
+            "people's entries and the parked question; no REJECT body, gate output or last words"
+        );
     }
     #[test]
     fn harness_label_picks_the_worker_harness() {

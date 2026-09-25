@@ -25,7 +25,7 @@ bd search "text"                        # title and id; open issues only
 
 # Notes
 
-A note is text for the owner. Give it a file and line when one exists: `BLOCKED: lib/api.ts:8 has no /api fallback; the task assumes one`.
+A note is text for the owner. Give it a file and line when one exists: `BLOCKED: lib/api.ts:8 has no /api fallback; the task assumes one`. On a bead the loop works, open the note with who and when (`planner 2026-09-25: ...`): a note without one belongs to the entry above it, and when that entry is the loop's own, the loop's prompts leave the note out.
 
 # Git
 

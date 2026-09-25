@@ -39,7 +39,7 @@ that do not. The next round's worker reads the notes of the earlier ones (the la
 records of `beads/ID/rounds.jsonl`), and its reviewer the last one whole, to hold the
 diff to it. The loop also notes every event on the bead, but a prompt carries the bead's
 notes without the loop's own lines: what people wrote — the filer, an answer, a note by
-hand — and the parking question an answer replies to.
+hand that opens with who and when (`planner 2026-09-25: ...`) — and the parking question an answer replies to.
 
 Three things put a bead in the **human queue** as *parked* (`in_progress`, no more rounds
 until you act): the stages are exhausted with `on_exhaust = "park"`, the *last* stage says
