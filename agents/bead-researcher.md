@@ -1,7 +1,6 @@
 ---
 description: Reads the repository for one bead before a smaller model implements it, without editing, and writes the brief its worker round carries - Files, Shape, Check, Pitfalls - or BLOCKED when the bead cannot be done as written.
 mode: primary
-model: acbox/coder
 temperature: 0.1
 steps: 40
 tools:
