@@ -1,7 +1,10 @@
 //! `run_agent`: one non-interactive session, in the harness `Repo::resolve` names for the model —
 //! `claude/<alias>` is Claude Code (`claude -p`, the agent file's body as its system
 //! prompt, tools by role), `aider:<provider>/<model>` is aider on the opencode provider's
-//! server (the dev lane only), anything else is an opencode agent. Prints the last text
+//! server (the dev lane only), anything else is an opencode agent. A provider with
+//! `harness = "command"` runs its `command` (and `model_flag`) under `sh -c` in the
+//! worktree: the prompt on its stdin, `BEAD_ROLE`, `BEAD_MODEL`, `BEAD_AGENT_PROMPT` and
+//! `BEAD_TIMEOUT` in its environment, and its stdout the text. Prints the last text
 //! the agent wrote; returns the harness's exit code.
 //!
 //! Also: aborting sessions on the attached server, and the probes that say whether a
@@ -174,7 +177,7 @@ pub fn run_agent(
         }
         let key = if key.is_empty() { std::env::var("OPENAI_API_KEY").unwrap_or_else(|_| "unused".into()) } else { key };
         c.env("OPENAI_API_KEY", key);
-        rc = run_to_files(&mut c, stdout, stderr);
+        rc = run_to_files(&mut c, stdout, stderr, None);
         clean_aider(dir);
         full = read_to_string(logf).unwrap_or_default();
     } else if r.harness == "claude-code" {
@@ -190,7 +193,7 @@ pub fn run_agent(
         c.args(["--foreground", &timeout_s, "claude", "-p", prompt, "--model", alias, "--output-format", "json"]);
         c.args(["--allowedTools", tools, "--append-system-prompt", &sys, "--no-session-persistence"]);
         c.current_dir(dir);
-        rc = run_to_files(&mut c, stdout, stderr);
+        rc = run_to_files(&mut c, stdout, stderr, None);
         let raw = read_to_string(logf).unwrap_or_default();
         let v = serde_json::from_str::<Value>(&raw).ok();
         let result = v.as_ref().and_then(|v| v.get("result").and_then(|r| r.as_str()).map(str::to_string)).unwrap_or_default();
@@ -212,6 +215,16 @@ pub fn run_agent(
             let _ = std::fs::write(logf, b"");
         }
         full = result;
+    } else if r.harness == "command" {
+        let mut c = cmd("timeout");
+        c.args(["--foreground", &timeout_s, "sh", "-c", &command_line(&r.provider.command, &r.provider.model_flag, &r.model)]);
+        c.current_dir(dir);
+        c.env("BEAD_ROLE", agent.strip_prefix("bead-").unwrap_or(agent));
+        c.env("BEAD_MODEL", &r.model);
+        c.env("BEAD_AGENT_PROMPT", agent_body(agent));
+        c.env("BEAD_TIMEOUT", &timeout_s);
+        rc = run_to_files(&mut c, stdout, stderr, Some(prompt));
+        full = read_to_string(logf).unwrap_or_default();
     } else {
         // --title: the session's name in the web UI, said by us. Left to opencode, a model
         // call names it from the prompt, and on a busy box that call has come back as "????".
@@ -276,15 +289,20 @@ pub fn run_agent(
 }
 
 /// Run with stdout/stderr to files, registering the child so a TERM to the supervisor
-/// reaches it first. Returns the exit code (124 is `timeout`'s).
-fn run_to_files(c: &mut std::process::Command, out: Option<std::fs::File>, err: Option<std::fs::File>) -> i32 {
+/// reaches it first; `stdin`, when given, is written to the child's stdin and closed.
+/// Returns the exit code (124 is `timeout`'s).
+fn run_to_files(c: &mut std::process::Command, out: Option<std::fs::File>, err: Option<std::fs::File>, stdin: Option<&str>) -> i32 {
     use std::process::Stdio;
-    c.stdin(Stdio::null());
+    c.stdin(if stdin.is_some() { Stdio::piped() } else { Stdio::null() });
     c.stdout(out.map(Stdio::from).unwrap_or_else(Stdio::null));
     c.stderr(err.map(Stdio::from).unwrap_or_else(Stdio::null));
     match c.spawn() {
         Ok(mut child) => {
             signals::child_started(child.id());
+            // the handle drops at the end of the block: the child reads EOF before we wait
+            if let (Some(text), Some(mut w)) = (stdin, child.stdin.take()) {
+                let _ = std::io::Write::write_all(&mut w, text.as_bytes());
+            }
             let st = child.wait();
             signals::child_ended(child.id());
             match st {
@@ -296,6 +314,16 @@ fn run_to_files(c: &mut std::process::Command, out: Option<std::fs::File>, err: 
             log(&format!("cannot start {:?}: {e}", c.get_program()));
             127
         }
+    }
+}
+
+/// The command harness's command line: the provider's `command`, and when it sets a
+/// `model_flag`, a space and the flag with every `{model}` replaced by the model.
+pub fn command_line(command: &str, model_flag: &str, model: &str) -> String {
+    if model_flag.is_empty() {
+        command.to_string()
+    } else {
+        format!("{command} {}", model_flag.replace("{model}", model))
     }
 }
 
@@ -792,6 +820,11 @@ mod tests {
         );
         assert!(files_named(None, &d).is_empty());
         let _ = std::fs::remove_dir_all(&d);
+    }
+    #[test]
+    fn command_line_appends_the_model_flag() {
+        assert_eq!(command_line("h.sh", "", "m"), "h.sh", "no model_flag: the command alone");
+        assert_eq!(command_line("h.sh", "--model {model}", "m"), "h.sh --model m");
     }
     #[test]
     fn a_lost_reply_is_found_on_the_server() {
