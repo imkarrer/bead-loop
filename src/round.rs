@@ -323,6 +323,32 @@ pub fn make_worktree(repo: &Repo, branch: &str, wt: &Path, resumed: bool) -> Res
     Ok(())
 }
 
+/// Two round notes are the same REJECT: both start with "review (" and their first
+/// lines starting with "REJECT:", whitespace collapsed, are equal.
+#[cfg_attr(not(test), allow(dead_code))]
+pub fn same_reject(prev: &str, this: &str) -> bool {
+    // Check if both notes start with "review ("
+    if !prev.starts_with("review (") || !this.starts_with("review (") {
+        return false;
+    }
+    // Find the first line that starts with "REJECT:" after trimming whitespace
+    let prev_reject_line = prev.lines().find(|line| line.trim_start().starts_with("REJECT:")).map(|line| line.trim_start());
+    let this_reject_line = this.lines().find(|line| line.trim_start().starts_with("REJECT:")).map(|line| line.trim_start());
+    // If either doesn't have a REJECT line, return false
+    let prev_reject = match prev_reject_line {
+        Some(line) => line,
+        None => return false,
+    };
+    let this_reject = match this_reject_line {
+        Some(line) => line,
+        None => return false,
+    };
+    // Collapse whitespace in both lines and compare
+    let prev_collapsed = prev_reject.split_whitespace().collect::<Vec<_>>().join(" ");
+    let this_collapsed = this_reject.split_whitespace().collect::<Vec<_>>().join(" ");
+    prev_collapsed == this_collapsed
+}
+
 /// `send_back ID WT fresh|keep NOTE`. `stem` is the round's log prefix (`logs/ID.STAMP`),
 /// so the history can name the round's files.
 #[allow(clippy::too_many_arguments)]
@@ -1231,5 +1257,19 @@ mod tests {
     fn hold_backoff_reads_the_environment() {
         // Set only here; the integration suite sets it to 0 for the runs that need a hold to age.
         assert_eq!(hold_backoff(), 300);
+    }
+    #[test]
+    fn same_reject_matches_modulo_whitespace() {
+        let note1 = "review (a/b) rejected:\nREJECT: x.rs:1, missing  key\nFor the worker: one";
+        let note2 = "review (c/d) rejected:\nREJECT: x.rs:1,   missing key\nFor the worker: two";
+        assert!(same_reject(note1, note2));
+        let note3 = "review (a/b) rejected:\nREJECT: x.rs:1 a\nFor the worker: one";
+        let note4 = "review (c/d) rejected:\nREJECT: x.rs:2 b\nFor the worker: two";
+        assert!(!same_reject(note3, note4));
+        let note5 = "review (a/b) rejected:\nREJECT: x.rs:1 a\nFor the worker: one";
+        let note6 = "gate failed twice: cargo test";
+        assert!(!same_reject(note5, note6));
+        let note7 = "review (a/b) rejected:\nFor the worker: one";
+        assert!(!same_reject(note7, note7));
     }
 }
