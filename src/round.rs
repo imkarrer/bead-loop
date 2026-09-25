@@ -724,13 +724,23 @@ pub fn conflict_model(repo: &Repo) -> Option<String> {
 /// its branch after a send-back), the researcher reads and answers. A brief goes to
 /// `research/ID` and the bead back to the dev queue for its worker; `BLOCKED:` parks it
 /// with the researcher's line as the question; nothing from the model holds it. Research
-/// never counts a failure. True when a brief was written.
+/// never counts a failure. A bead labelled `harness:aider` was scoped to its files by whoever
+/// filed it: no round, an empty brief, straight to the worker. True when the worker round
+/// may go next (a brief written, or research skipped).
 fn research_one(repo: &Repo, opts: &Opts, id: &str, lane: Option<&LaneSpec>, last_id: &mut Option<String>) -> bool {
     let n = repo.failures_of(id);
     let Some(st) = repo.stage_for(n) else { return false };
     let model = repo.research_model.clone();
     let json = bd_show(repo, id);
     let labels = bead_labels(&json);
+    if labels.contains(&"harness:aider") {
+        // the lane's time is the reviewer's too: a bead already scoped needs no brief
+        log(&format!("{}: {id}: harness:aider names its files; no research round", repo.slug));
+        if !opts.dry_run {
+            write_file(&repo.research_path(id), "\n");
+        }
+        return true;
+    }
     let repo = match repo.for_bead(&labels) {
         Ok(r) => r,
         Err(e) => {
@@ -759,6 +769,8 @@ fn research_one(repo: &Repo, opts: &Opts, id: &str, lane: Option<&LaneSpec>, las
     let previous = read_to_string(&repo.research_prev_path(id)).unwrap_or_default();
     let last_note = if previous.is_empty() { String::new() } else { crate::park::history(repo, id, 1) };
     let prompt = research_prompt(&json, &repo.base, &previous, &last_note);
+    // a research round holds a lane the reviewer may share: its own, shorter clock
+    let timeout = st.timeout.min(repo.research_timeout);
     let rejoin = repo.rejoin_of(id).filter(|(_, kind)| kind == "research").map(|(sid, _)| sid).filter(|_| wt.is_dir());
     repo.rejoin_clear(id);
     log(&format!(
@@ -797,7 +809,7 @@ fn research_one(repo: &Repo, opts: &Opts, id: &str, lane: Option<&LaneSpec>, las
     }
     let research_log = std::path::PathBuf::from(format!("{}.research.jsonl", logf.display()));
     let r = match &rejoin {
-        Some(sid) => crate::harness::rejoin_session(repo, sid, &wt, &research_log, st.timeout),
+        Some(sid) => crate::harness::rejoin_session(repo, sid, &wt, &research_log, timeout),
         None => run_agent(
             repo,
             "bead-researcher",
@@ -806,7 +818,7 @@ fn research_one(repo: &Repo, opts: &Opts, id: &str, lane: Option<&LaneSpec>, las
             &research_log,
             &prompt,
             &format!("{id} · research · round {}", n + 1),
-            st.timeout,
+            timeout,
             Some(&json),
         ),
     };
