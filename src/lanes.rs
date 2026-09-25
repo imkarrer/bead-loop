@@ -602,7 +602,15 @@ mod tests {
         let first = try_lock(&p).expect("the first taker holds it");
         assert!(try_lock(&p).is_none(), "a second taker is refused while it is held");
         drop(first);
-        assert!(try_lock(&p).is_some(), "and gets it once the holder is gone");
+        // A child another test forks in these few microseconds inherits the open file,
+        // and with it the flock, until it execs: allow it a moment.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        let mut again = try_lock(&p);
+        while again.is_none() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            again = try_lock(&p);
+        }
+        assert!(again.is_some(), "and gets it once the holder is gone");
         let _ = std::fs::remove_dir_all(&t);
     }
     #[test]
