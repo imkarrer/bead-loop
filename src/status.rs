@@ -143,6 +143,10 @@ fn bead_json(repo: &Repo, byid: &Map<String, Value>, id: &str) -> Map<String, Va
     m.insert("history".into(), history_json(repo, id));
     let held = repo.held_why(id).map(|w| json!({"why": w, "since": repo.held_since(id)})).unwrap_or(Value::Null);
     m.insert("held".into(), held);
+    let t = repo.target_of(id);
+    if !t.is_empty() {
+        m.insert("target".into(), Value::String(t));
+    }
     m
 }
 
@@ -603,6 +607,24 @@ mod tests {
         assert_eq!(age(now() - 600), "10m");
         assert_eq!(age(now() - 7200), "2h");
         assert_eq!(age(now() + 5), "0s", "a clock ahead of the file is not negative");
+    }
+
+    #[test]
+    fn bead_json_names_a_non_default_target() {
+        let d = crate::config::scratch("target");
+        let repo = crate::config::test_repo(&d, &["a"]);
+        repo.set_target("t-1", "t");
+        let mut byid = Map::new();
+        byid.insert("t-1".into(), json!({"id": "t-1"}));
+        let result = bead_json(&repo, &byid, "t-1");
+        assert_eq!(result.get("target"), Some(&json!("t")));
+        
+        repo.set_target("t-2", "");
+        let mut byid = Map::new();
+        byid.insert("t-2".into(), json!({"id": "t-2"}));
+        let result = bead_json(&repo, &byid, "t-2");
+        assert!(result.get("target").is_none());
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     /// The lanes the loop runs without [[lanes]] in the global file: dev and review, and
