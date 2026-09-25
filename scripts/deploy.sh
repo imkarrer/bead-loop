@@ -21,9 +21,10 @@
 # Development never blocks a deploy: ~/src/bead-loop (the project the loop works, where
 # bd writes .beads/ and the bead worktrees hang) is not read here.
 #
-#   scripts/deploy.sh            deploy if origin/main moved (what the timer runs), unless an
-#                                aider round is running (it waits: the restart would kill it)
-#   scripts/deploy.sh --force    deploy origin/main's release again, as it is, without waiting
+#   scripts/deploy.sh            deploy the newest released commit on main when it is newer than
+#                                what runs (what the timer runs); waits up to 30 min for an
+#                                aider round in flight (the restart would kill it)
+#   scripts/deploy.sh --force    deploy the newest release on main again, without waiting
 #   scripts/deploy.sh --dry-run  fetch, download and check; install nothing
 set -euo pipefail
 DEPLOY=${BEAD_LOOP_DEPLOY:-$HOME/.local/state/bead-loop/deploy}
@@ -43,18 +44,28 @@ if [ ! -d "$SRC/.git" ]; then
   git clone -q "$url" "$SRC"
 fi
 git -C "$SRC" fetch -q origin main
-want=$(git -C "$SRC" rev-parse origin/main)
+head=$(git -C "$SRC" rev-parse origin/main)
 have=$(cat "$DEPLOY/deployed" 2>/dev/null || true)
-if [ "$want" = "$have" ] && [ "$FORCE" = 0 ] && [ "$DRY" = 0 ]; then exit 0; fi   # nothing new: the timer's usual outcome
+if [ "$head" = "$have" ] && [ "$FORCE" = 0 ] && [ "$DRY" = 0 ]; then exit 0; fi   # nothing new: the timer's usual outcome
+
+# The newest commit on main that has its release, newer than what runs. While merges
+# land faster than the pipeline releases them, origin/main itself rarely has one yet
+# (25 Sep: an hour of "no release yet" with three newer releases published).
+released=$(gh release list -R "$repo" -L 50 --json tagName -q '.[].tagName' 2>/dev/null || true)
+want=''
+for c in $(git -C "$SRC" rev-list --first-parent -n 50 origin/main); do
+  if [ "$c" = "$have" ] && [ "$FORCE" = 0 ]; then break; fi   # nothing newer is released yet
+  if grep -qx "main-${c:0:7}" <<<"$released"; then want=$c; break; fi
+done
+if [ -z "$want" ]; then
+  echo "no release newer than ${have:0:7} yet: the pipeline is still on ${head:0:7}; next time"
+  exit 0
+fi
 
 tag=main-${want:0:7}
 echo "--- :github: release $tag ($(git -C "$SRC" log -1 --format=%s "$want" | cut -c1-80))"
 dl=$DEPLOY/dl; rm -rf "$dl"; mkdir -p "$dl"
 if ! gh release download "$tag" -R "$repo" -p bead-supervisor -D "$dl" 2>"$dl/err"; then
-  if grep -q "release not found" "$dl/err"; then
-    echo "no release $tag yet: the pipeline is still on $want (deployed: ${have:-nothing}); next time"
-    exit 0
-  fi
   echo "gh release download $tag failed:" >&2; cat "$dl/err" >&2; exit 1
 fi
 chmod 755 "$dl/bead-supervisor"
@@ -72,12 +83,20 @@ fi
 
 # An aider round is a child of the loop, not a session on the server: the restart below
 # would kill it (no failure charged, but the round's work is lost). Wait for it; the
-# timer comes back in two minutes, and the worker timeout bounds the wait. --force
-# does not wait.
+# timer comes back in two minutes. The gpu lane starts the next aider round seconds
+# after one ends, so the wait is capped: 30 min after the first deferral the deploy
+# goes ahead and the round in flight is cut short. --force does not wait.
+aider_wait=$DEPLOY/aider-wait
 if [ "$FORCE" = 0 ] && pgrep -u "$(id -u)" -f -- '^timeout --foreground [0-9]+ aider ' >/dev/null; then
-  echo "an aider round is running; $tag waits for it (next time)"
-  exit 0
+  [ -s "$aider_wait" ] || date +%s >"$aider_wait"
+  waited=$(( $(date +%s) - $(cat "$aider_wait") ))
+  if [ "$waited" -lt 1800 ]; then
+    echo "an aider round is running; $tag waits for it (${waited}s so far; next time)"
+    exit 0
+  fi
+  echo "aider rounds have held the deploy ${waited}s; $tag goes ahead (the round in flight is cut short, no failure charged)"
 fi
+rm -f "$aider_wait"
 
 echo "--- :package: install"
 BEAD_SUPERVISOR_BIN=$dl/bead-supervisor "$SRC/install.sh"
