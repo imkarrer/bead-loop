@@ -11,6 +11,7 @@ use crate::config::{loop_home, Repo};
 use crate::signals;
 use crate::util::{cmd, log, output, read_to_string, stdout_str, tail_lines, write_file};
 use serde_json::Value;
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Mutex;
 
@@ -694,6 +695,7 @@ pub fn rejoin_session(repo: &Repo, sid: &str, dir: &Path, logf: &Path, timeout: 
 // nothing, so a lane leaves such a bead in its queue instead and says so. The answer is
 // kept for a minute (the resident loop asks on every wake; the bash asked once a process).
 static CLAUDE_OK: Mutex<Option<(i64, bool)>> = Mutex::new(None);
+static PROBES: Mutex<Option<HashMap<String, (i64, bool)>>> = Mutex::new(None);
 
 pub fn claude_ok() -> bool {
     let now = crate::util::now();
@@ -713,17 +715,46 @@ pub fn claude_ok() -> bool {
     ok
 }
 
+/// Whether a provider's `probe` url answers, cached for a minute per url.
+pub fn probe_ok(url: &str) -> bool {
+    let now = crate::util::now();
+    let mut g = PROBES.lock().unwrap();
+    let map = g.get_or_insert_with(HashMap::new);
+    if let Some((at, ok)) = map.get(url) {
+        if now - at < 60 {
+            return *ok;
+        }
+    }
+    let ok = crate::shell::curl_get(url, None, 5).is_some();
+    map.insert(url.to_string(), (now, ok));
+    ok
+}
+
 /// Forget the cached answer: the page's Sign in, or a wake, asks again.
 pub fn forget_probes() {
     *CLAUDE_OK.lock().unwrap() = None;
+    *PROBES.lock().unwrap() = None;
 }
 
-/// `runnable MODEL`: whether a model can run now.
-pub fn runnable(model: &str) -> bool {
-    if model.starts_with("claude/") {
+/// `runnable(repo, MODEL)`: whether a model can run now.
+pub fn runnable(repo: &Repo, model: &str) -> bool {
+    let r = repo.resolve(model);
+    if r.harness == "claude-code" {
         claude_ok()
+    } else if !r.provider.probe.is_empty() {
+        probe_ok(&r.provider.probe)
     } else {
         true
+    }
+}
+
+/// Why `runnable` said no, for the wait message.
+pub fn why_not(repo: &Repo, model: &str) -> String {
+    let r = repo.resolve(model);
+    if r.harness == "claude-code" {
+        "Claude — it is signed out on this box (claude auth login)".to_string()
+    } else {
+        format!("{} — its probe {} fails", r.provider.name, r.provider.probe)
     }
 }
 
@@ -857,8 +888,14 @@ mod tests {
     }
     #[test]
     fn only_claude_models_need_a_probe() {
-        assert!(runnable("stub/worker"));
-        assert!(runnable("aider:stub/worker"));
-        assert!(runnable(""));
+        let d = crate::config::scratch("runnable");
+        let mut repo = crate::config::test_repo(&d, &["stub/worker"]);
+        assert!(runnable(&repo, "stub/worker"));
+        assert!(runnable(&repo, "aider:stub/worker"));
+        assert!(runnable(&repo, ""));
+        repo.providers
+            .push(crate::config::Provider { probe: "http://127.0.0.1:1/health".into(), ..crate::config::Provider::implicit("down") });
+        assert!(!runnable(&repo, "down/m"));
+        assert!(why_not(&repo, "down/m").contains("down — its probe"));
     }
 }

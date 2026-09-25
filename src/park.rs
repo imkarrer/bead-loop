@@ -10,8 +10,8 @@
 //!   stages exhausted, its PR closed), the stage it stopped on, and what its owner has to
 //!   decide — written by the **brief**: one call to `brief_model` (the last stage's
 //!   worker by default) that reads the rounds and their logs and answers WHAT HAPPENED,
-//!   WHY and QUESTION. Without a model (`brief_model = "none"`, Claude signed out, the
-//!   call failing) the question is the loop's own, from the reason. The question also
+//!   WHY and QUESTION. Without a model (`brief_model = "none"`, its provider not runnable,
+//!   the call failing) the question is the loop's own, from the reason. The question also
 //!   goes on the bead as a note, so the next round reads the answer under it, and so
 //!   `bead-supervisor open` opens Claude Code with it.
 use crate::config::Repo;
@@ -293,7 +293,7 @@ pub fn park(repo: &Repo, id: &str, reason: Reason, wt: Option<&Path>) {
     let mut brief_model_used: Option<String> = None;
     let mut brief_log: Option<String> = None;
     if let Some(model) = brief_model(repo) {
-        if runnable(&model) {
+        if runnable(repo, &model) {
             let bead = bd_show(repo, id);
             let tails: Vec<(String, String)> = rounds
                 .iter()
@@ -332,7 +332,11 @@ pub fn park(repo: &Repo, id: &str, reason: Reason, wt: Option<&Path>) {
                 log(&format!("{}: {id}: the brief did not come ({model} exited {}); the loop's own question stands", repo.slug, r.rc));
             }
         } else {
-            log(&format!("{}: {id}: no brief — {model} cannot run now (Claude signed out); the loop's own question stands", repo.slug));
+            log(&format!(
+                "{}: {id}: no brief — {model} cannot run now ({}); the loop's own question stands",
+                repo.slug,
+                crate::harness::why_not(repo, &model)
+            ));
         }
     }
     // The stage it stopped on: a send-back has just counted (the round ran one failure

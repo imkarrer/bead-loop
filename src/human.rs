@@ -36,11 +36,8 @@ pub fn escalate(repo: &Repo, id: &str) {
         Some(s) => s,
         None => die(&format!("{}: no stage to escalate to", repo.slug)),
     };
-    if !runnable(&st.model) {
-        die(&format!(
-            "{}: {} cannot run: Claude is signed out on this box — sign in first (the page's Sign in, or claude auth login)",
-            repo.slug, st.model
-        ));
+    if !runnable(repo, &st.model) {
+        die(&format!("{}: {} cannot run: {}", repo.slug, st.model, crate::harness::why_not(repo, &st.model)));
     }
     repo.set_failures(id, n);
     repo.unpark(id);
