@@ -18,6 +18,10 @@ on_exhaust = "repeat"                  # repeat: cycle the stages until it lands
                                        # dependencies are the only gate (the queues absorb the rest)
 # merge_label = "automerge"            # the label merge = "pipeline" puts on each PR
 # worker_timeout = 3600                # seconds per model session
+# stall_compactions = 10                # opencode sessions only: abort a session past this many compactions
+                                       # in it -- a read/compaction loop, not the model at work (0 disables)
+# stall_steps = 60                      # opencode sessions only: abort a session past this many tool calls
+                                       # since its last edit/write/patch call (0 disables)
 
 # Escalation, in order. Every send-back to the dev queue — the gate failing twice, a
 # REJECT from review, CI red — is one failure; a stage takes the bead for the next

@@ -28,6 +28,10 @@ pub struct AgentRun {
     /// what the harness said about it, for the hold's reason: its error events' lines,
     /// else — with nothing written at all — the last lines of its stderr
     pub error: String,
+    /// opencode sessions only: the watchdog's reason when it killed the session for
+    /// stalling — "stalled: N compactions, M tool calls without an edit" — so the
+    /// send-back note says why instead of just the exit code
+    pub stalled: Option<String>,
 }
 
 /// What an opencode `--format json` transcript holds. `text` events are the model's
@@ -110,7 +114,7 @@ pub fn run_agent(
 ) -> AgentRun {
     if signals::stopping() {
         // No session starts under a stop: the caller finds the stop (round.rs cut_short).
-        return AgentRun { text: String::new(), full: String::new(), rc: 143, empty: true, error: String::new() };
+        return AgentRun { text: String::new(), full: String::new(), rc: 143, empty: true, error: String::new(), stalled: None };
     }
     let err_path = logf.with_file_name(format!("{}.err", logf.file_name().unwrap().to_string_lossy()));
     let stdout = std::fs::File::create(logf).ok();
@@ -120,6 +124,7 @@ pub fn run_agent(
     let full;
     let mut never_answered = false;
     let mut errors = String::new();
+    let mut stalled = None;
     if let Some(rest) = model.strip_prefix("aider:") {
         // Aider explores nothing: it edits the files it is handed, so the files are the
         // ones the bead's DESCRIPTION names that exist in the worktree. The server is the
@@ -214,7 +219,9 @@ pub fn run_agent(
         }
         c.args(["--format", "json", prompt]);
         c.env("OPENCODE_DISABLE_CLAUDE_CODE_SKILLS", "1");
-        rc = run_to_files(&mut c, stdout, stderr);
+        let watched = run_watched(&mut c, stdout, stderr, repo, dir, logf);
+        rc = watched.0;
+        stalled = watched.1;
         // The client is gone (timeout, a kill); with attach the server would keep working
         // the session for nobody. Its log may still be empty, so ask the server by directory.
         // Under a stop the signal thread decides (a restart keeps the session to rejoin).
@@ -223,7 +230,7 @@ pub fn run_agent(
         if rc >= 128 && !signals::stopping() {
             crate::util::sleep_secs(0.3);
         }
-        if rc != 0 && !signals::stopping() {
+        if rc != 0 && !signals::stopping() && stalled.is_none() {
             abort_sessions(repo, dir);
         }
         let t = parse_transcript(&read_to_string(logf).unwrap_or_default());
@@ -242,7 +249,7 @@ pub fn run_agent(
     } else {
         String::new()
     };
-    AgentRun { text: tail_lines(&full, 20), full, rc, empty, error }
+    AgentRun { text: tail_lines(&full, 20), full, rc, empty, error, stalled }
 }
 
 /// Run with stdout/stderr to files, registering the child so a TERM to the supervisor
@@ -267,6 +274,101 @@ fn run_to_files(c: &mut std::process::Command, out: Option<std::fs::File>, err: 
             127
         }
     }
+}
+
+/// Compactions, and tool calls since the last edit, in an opencode `--format json`
+/// transcript so far: a `text` event with `part.metadata.compaction_continue` is a
+/// compaction; a `tool` part on a `tool_use` event whose `tool` is `write`, `edit` or
+/// `patch` resets the run since the last edit to zero, any other tool call adds one.
+/// (bl-uhl: bl-cyx.20260921T200858.worker.jsonl — 193 reads, 91 compactions, 0 edits,
+/// the whole worker_timeout burned in a loop the model never broke out of.)
+pub fn count_stall(raw: &str) -> (u64, u64) {
+    let mut compactions = 0u64;
+    let mut since_edit = 0u64;
+    for line in raw.lines().filter(|l| !l.trim().is_empty()) {
+        let v: Value = match serde_json::from_str(line) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        match v.get("type").and_then(|t| t.as_str()) {
+            Some("text") => {
+                if v.pointer("/part/metadata/compaction_continue").and_then(|b| b.as_bool()).unwrap_or(false) {
+                    compactions += 1;
+                }
+            }
+            Some("tool_use") => {
+                let tool = v.pointer("/part/tool").and_then(|s| s.as_str()).unwrap_or("");
+                if matches!(tool, "write" | "edit" | "patch") {
+                    since_edit = 0;
+                } else {
+                    since_edit += 1;
+                }
+            }
+            _ => {}
+        }
+    }
+    (compactions, since_edit)
+}
+
+/// Runs the opencode client with a watchdog: while it runs, `count_stall` polls the
+/// transcript every 0.2 s. Past `stall_compactions` compactions or `stall_steps` tool
+/// calls since the last edit (either at 0 disables that check), the watchdog aborts the
+/// session on the attached server and kills the client — the round ends stalled well
+/// under `worker_timeout`, not at its clock. Returns the exit code and, when the
+/// watchdog tripped, its reason.
+fn run_watched(
+    c: &mut std::process::Command,
+    out: Option<std::fs::File>,
+    err: Option<std::fs::File>,
+    repo: &Repo,
+    dir: &Path,
+    logf: &Path,
+) -> (i32, Option<String>) {
+    use std::process::Stdio;
+    c.stdin(Stdio::null());
+    c.stdout(out.map(Stdio::from).unwrap_or_else(Stdio::null));
+    c.stderr(err.map(Stdio::from).unwrap_or_else(Stdio::null));
+    let mut child = match c.spawn() {
+        Ok(child) => child,
+        Err(e) => {
+            log(&format!("cannot start {:?}: {e}", c.get_program()));
+            return (127, None);
+        }
+    };
+    let pid = child.id();
+    signals::child_started(pid);
+    let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let watchdog = if repo.stall_compactions > 0 || repo.stall_steps > 0 {
+        let (compactions_limit, steps_limit) = (repo.stall_compactions, repo.stall_steps);
+        let (logf, dir, attach, slug) = (logf.to_path_buf(), dir.to_path_buf(), repo.attach.clone(), repo.slug.clone());
+        let stop2 = stop.clone();
+        Some(std::thread::spawn(move || {
+            while !stop2.load(std::sync::atomic::Ordering::SeqCst) {
+                crate::util::sleep_secs(0.2);
+                let (compactions, since_edit) = count_stall(&read_to_string(&logf).unwrap_or_default());
+                let tripped = (compactions_limit > 0 && compactions > compactions_limit) || (steps_limit > 0 && since_edit > steps_limit);
+                if tripped {
+                    let reason = format!("stalled: {compactions} compactions, {since_edit} tool calls without an edit");
+                    log(&format!("{slug}: aborting session: {reason}"));
+                    abort_sessions_on(&attach, &slug, &dir);
+                    unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM) };
+                    return Some(reason);
+                }
+            }
+            None
+        }))
+    } else {
+        None
+    };
+    let st = child.wait();
+    stop.store(true, std::sync::atomic::Ordering::SeqCst);
+    signals::child_ended(pid);
+    let rc = match st {
+        Ok(s) => s.code().unwrap_or(128 + s.signal_number()),
+        Err(_) => 1,
+    };
+    let stalled = watchdog.and_then(|h| h.join().ok()).flatten();
+    (rc, stalled)
 }
 
 trait SignalNumber {
@@ -503,7 +605,7 @@ pub fn rejoin_session(repo: &Repo, sid: &str, dir: &Path, logf: &Path, timeout: 
         crate::util::now() - started_ms / 1000,
         if empty { ", no text" } else { "" }
     ));
-    AgentRun { text: tail_lines(&full, 20), full, rc, empty, error: String::new() }
+    AgentRun { text: tail_lines(&full, 20), full, rc, empty, error: String::new(), stalled: None }
 }
 
 // ---- can this model run right now? ------------------------------------------------
@@ -591,6 +693,23 @@ mod tests {
         assert!(real.contains("delegated developer for one bead"), "the worker agent's body is the system prompt");
         let real = agent_body_of(&std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/agents/bead-reviewer.md")).unwrap());
         assert!(real.contains("senior reviewer"));
+    }
+    #[test]
+    fn count_stall_counts_compactions_and_tool_calls_since_the_last_edit() {
+        let text = |compact: bool| {
+            if compact {
+                r#"{"type":"text","part":{"type":"text","metadata":{"compaction_continue":true},"text":"Continue"}}"#.to_string()
+            } else {
+                r#"{"type":"text","part":{"type":"text","text":"hello"}}"#.to_string()
+            }
+        };
+        let tool = |name: &str| format!(r#"{{"type":"tool_use","part":{{"type":"tool","tool":"{name}"}}}}"#);
+        let raw = [text(false), tool("read"), tool("glob"), text(true), tool("read"), tool("bash"), text(true)].join("\n");
+        assert_eq!(count_stall(&raw), (2, 4), "2 compactions; 4 tool calls, none of them an edit");
+        let raw = format!("{raw}\n{}\n{}", tool("edit"), tool("read"));
+        assert_eq!(count_stall(&raw), (2, 1), "edit resets the run; one read since");
+        assert_eq!(count_stall(""), (0, 0));
+        assert_eq!(count_stall("not json\n{}"), (0, 0), "lines this parser does not know are skipped, not counted");
     }
     #[test]
     fn a_transcript_of_errors_alone_is_a_round_the_model_never_answered() {

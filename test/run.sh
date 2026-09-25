@@ -549,6 +549,21 @@ case_timeout_aborts_server_session() {
   assert_match "$(cat "$TEST_CTRL/curl.log")" "http://oc.test:4096/session/ses_hang/abort" "and aborted it"
   assert_match "$(cat "$T/sup.log")" "aborting session ses_hang" "logged"
 }
+case_stalled_session_is_aborted_well_under_worker_timeout() {
+  # A worker stuck reading and compacting, never editing (bl-uhl: 12 devbox rounds burned
+  # the whole worker_timeout this way, one of them ever editing). stall_compactions = 2
+  # trips fast; worker_timeout stays generous (20s here) so a pass proves the watchdog
+  # ended it, not the clock.
+  setup true auto '' "$(echo 'stall_compactions = 2'; echo 'stall_steps = 1000'; stages stub/fast::1:20)"
+  echo stall >"$TEST_CTRL/worker"
+  local stall_t0 stall_elapsed
+  stall_t0=$(date +%s)
+  sup --once tick
+  stall_elapsed=$(( $(date +%s) - stall_t0 ))
+  assert_eq "$(bead .status)" in_progress "sent back, not lost"
+  assert_match "$(bead .notes)" "stalled: [0-9]* compactions, [0-9]* tool calls without an edit" "the note names the limit that tripped"
+  [ "$stall_elapsed" -lt 10 ] && ok || bad "took ${stall_elapsed}s, should end well under the 20s worker_timeout"
+}
 case_sigterm_aborts_server_session() {
   # systemctl stop signals the whole cgroup at once: the client dies with the supervisor.
   # setsid + kill of the process group is the closest a test gets.
