@@ -1758,9 +1758,8 @@ pub fn work(repo: &Repo, opts: &Opts, id: Option<&str>) {
             while repo.review_path(&id).exists() {
                 review_one(repo, opts, Some(&id), None, seat);
                 let n = repo.failures_of(&id);
-                let pending = repo.stage_for(n).is_some_and(|st| {
-                    quorum(&seat_verdicts(repo, &id, &st.seats), &st.approvals) == Quorum::Pending
-                });
+                let pending =
+                    repo.stage_for(n).is_some_and(|st| quorum(&seat_verdicts(repo, &id, &st.seats), &st.approvals) == Quorum::Pending);
                 if !repo.review_path(&id).exists() || !pending {
                     break;
                 }
