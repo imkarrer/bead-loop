@@ -8,6 +8,7 @@ use crate::util::{die, expand_tilde, home};
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 /// One `[[stages]]` table: a stage takes the bead for the next `failures` send-backs.
 #[derive(Clone, Debug, PartialEq)]
@@ -437,7 +438,7 @@ impl Repo {
         r.merge_label = target.merge_label.clone().unwrap_or(r.merge_label);
         r.adopt = target.adopt.unwrap_or(r.adopt);
         r.max_inflight = target.max_inflight.unwrap_or(r.max_inflight);
-        r.open_pr = target.open_pr.clone().or(r.open_pr);
+        r.open_pr = Some(resolve_open_pr(target.open_pr.as_deref(), &r.pr_repo, gh_login().as_deref()));
         r.pr_style = target.pr_style.clone().unwrap_or(r.pr_style);
         Ok(r)
     }
@@ -602,6 +603,34 @@ fn remote_owner_repo(dir: &Path, remote: &str) -> String {
         Ok(o) if o.status.success() => owner_repo(crate::util::stdout_str(&o).trim()).unwrap_or_default(),
         _ => String::new(),
     }
+}
+
+/// This process's `gh api user -q .login`, cached after the first call — a target whose
+/// `open_pr` is unset checks `pr_repo`'s owner against it. `None` on a failed call (no
+/// `gh`, not logged in, no network); the caller treats that as a foreign owner.
+fn gh_login() -> Option<String> {
+    static LOGIN: OnceLock<Option<String>> = OnceLock::new();
+    LOGIN
+        .get_or_init(|| {
+            let o = crate::util::output(crate::util::cmd("gh").args(["api", "user", "-q", ".login"])).ok()?;
+            if !o.status.success() {
+                return None;
+            }
+            let login = crate::util::stdout_str(&o).trim().to_string();
+            (!login.is_empty()).then_some(login)
+        })
+        .clone()
+}
+
+/// A target's resolved `open_pr`: EXPLICIT when the target sets it; otherwise "auto"
+/// when `pr_repo`'s owner is LOGIN, "ask" otherwise — so the loop never opens a PR on
+/// someone else's repo unasked. LOGIN `None` (a failed `gh` lookup) also means "ask".
+fn resolve_open_pr(explicit: Option<&str>, pr_repo: &str, login: Option<&str>) -> String {
+    if let Some(v) = explicit {
+        return v.to_string();
+    }
+    let owner = pr_repo.split('/').next().unwrap_or("");
+    if !owner.is_empty() && login == Some(owner) { "auto" } else { "ask" }.to_string()
 }
 
 /// `owner/repo` out of a git remote url, ssh (`git@host:owner/repo.git`) or https
@@ -939,6 +968,13 @@ mod tests {
         assert_eq!(out.gate, "target gate", "the target's own key wins");
         assert_eq!(out.setup, "repo setup", "an unset target key inherits the repo's");
         let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn open_pr_defaults_to_ask_for_a_foreign_pr_repo_owner() {
+        assert_eq!(resolve_open_pr(None, "stubuser/x", Some("stubuser")), "auto", "pr_repo owner matches the login");
+        assert_eq!(resolve_open_pr(None, "someone/x", Some("stubuser")), "ask", "pr_repo owner differs from the login");
+        assert_eq!(resolve_open_pr(Some("auto"), "someone/x", Some("stubuser")), "auto", "an explicit setting wins");
     }
 
     #[test]

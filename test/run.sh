@@ -83,6 +83,7 @@ setup_target() {  # setup_target [GATE] [MERGE] [REVIEW_MODEL] [EXTRA_TOML]
   git clone -q "file://$T/target.git" "$T/target" 2>/dev/null
   git -C "$T/target" remote add upstream "file://$T/target-upstream.git"
   printf '\n[targets.t]\npath = "%s"\npr_repo = "up/target"\nbase_remote = "upstream"\n' "$T/target" >>"$REPO/.bead-loop.toml"
+  echo up >"$TEST_CTRL/gh-login"   # matches pr_repo's owner, so open_pr's unset default is "auto"
   jq '. + [{id:"t-3", title:"Theirs", description:"Edit work.txt", acceptance_criteria:"work.txt exists", status:"open", priority:2, issue_type:"task", labels:["delegate:local","work:t"]}]' "$BD_STATE/issues.json" >"$BD_STATE/i.tmp" && mv "$BD_STATE/i.tmp" "$BD_STATE/issues.json"
 }
 

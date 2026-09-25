@@ -10,6 +10,11 @@ if [ "$1" = auth ] && [ "$2" = status ]; then
   if [ -e "$TEST_CTRL/gh-signed-out" ]; then echo "not logged in" >&2; exit 1; fi
   echo "✓ Logged in to github.com"; exit 0
 fi
+# api user -q .login: the login the foreign-owner open_pr default checks against.
+if [ "$1" = api ] && [ "$2" = user ]; then
+  if [ -e "$TEST_CTRL/gh-login" ]; then cat "$TEST_CTRL/gh-login"; else echo stubuser; fi
+  exit 0
+fi
 [ "$1" = pr ] || { echo "stub gh: only pr" >&2; exit 2; }
 primary_url() { [ -e "$TEST_CTRL/pr.json" ] && jq -r .url "$TEST_CTRL/pr.json" 2>/dev/null || true; }
 primary_head() { [ -e "$TEST_CTRL/pr.json" ] && jq -r '.head // empty' "$TEST_CTRL/pr.json" 2>/dev/null || true; }
