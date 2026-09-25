@@ -72,25 +72,40 @@ fi
 # refused here too), and GitHub squash-merges the moment the build reports green, a
 # few seconds after this step ends. Any other refusal is a failure, as before.
 title=$(printf '%s' "$pr" | jq -r .title); base=$(printf '%s' "$pr" | jq -r .base.ref)
+#
+# The two can race: the PUT a moment before GitHub counts the last required check says
+# 405 "pending", and by the time auto-merge is asked for, GitHub counts it and refuses
+# auto-merge because the PR is already mergeable ("clean status" / "unstable status",
+# the latter when only an unrequired status such as this build's own is not green:
+# bl-3x2.3's #131, 25 Sep). That refusal means "merge it now": the PUT is tried again.
 body=$(jq -cn --arg sha "$sha" '{merge_method: "squash", sha: $sha}')
-out=$(curl -sS -X PUT "https://api.github.com/repos/$repo/pulls/$number/merge" \
-  -H "authorization: Bearer $token" -H "accept: application/vnd.github+json" -H "x-github-api-version: 2022-11-28" \
-  -H "content-type: application/json" -d "$body" -w '\n%{http_code}')
-code=${out##*$'\n'}; out=${out%$'\n'*}
-if [ "$code" -lt 300 ]; then
-  echo "merged #$number \"$title\" as $(printf '%s' "$out" | jq -r '.sha[0:7]') into $base"
-  exit 0
-fi
-message=$(printf '%s' "$out" | jq -r '.message // "(no message)"')
-case "$code:$message" in
-  405:*"status check"*"pending"*|405:*"status check"*"expected"*) ;;
-  *) fail "PUT /repos/$repo/pulls/$number/merge → $code: $message" ;;
-esac
 node_id=$(printf '%s' "$pr" | jq -r .node_id)
 q='mutation($id: ID!, $sha: GitObjectID!) { enablePullRequestAutoMerge(input: {pullRequestId: $id, mergeMethod: SQUASH, expectedHeadOid: $sha}) { pullRequest { autoMergeRequest { enabledAt } } } }'
-gql=$(curl -sS -X POST https://api.github.com/graphql -H "authorization: Bearer $token" -H "content-type: application/json" \
-  -d "$(jq -cn --arg q "$q" --arg id "$node_id" --arg sha "$sha" '{query: $q, variables: {id: $id, sha: $sha}}')")
-if printf '%s' "$gql" | jq -e '.errors and ([.errors[].message] | join(" ") | test("already"; "i") | not)' >/dev/null 2>&1; then   # "already enabled" (a rerun) is fine
-  fail "auto-merge for #$number refused: $(printf '%s' "$gql" | jq -r '[.errors[].message] | join("; ")')"
-fi
-echo "#$number \"$title\": $message — auto-merge armed for ${sha:0:7}; GitHub squash-merges it into $base when this build reports green"
+for attempt in 1 2 3; do
+  out=$(curl -sS -X PUT "https://api.github.com/repos/$repo/pulls/$number/merge" \
+    -H "authorization: Bearer $token" -H "accept: application/vnd.github+json" -H "x-github-api-version: 2022-11-28" \
+    -H "content-type: application/json" -d "$body" -w '\n%{http_code}')
+  code=${out##*$'\n'}; out=${out%$'\n'*}
+  if [ "$code" -lt 300 ]; then
+    echo "merged #$number \"$title\" as $(printf '%s' "$out" | jq -r '.sha[0:7]') into $base"
+    exit 0
+  fi
+  message=$(printf '%s' "$out" | jq -r '.message // "(no message)"')
+  case "$code:$message" in
+    405:*"status check"*"pending"*|405:*"status check"*"expected"*) ;;
+    *) fail "PUT /repos/$repo/pulls/$number/merge → $code: $message" ;;
+  esac
+  gql=$(curl -sS -X POST https://api.github.com/graphql -H "authorization: Bearer $token" -H "content-type: application/json" \
+    -d "$(jq -cn --arg q "$q" --arg id "$node_id" --arg sha "$sha" '{query: $q, variables: {id: $id, sha: $sha}}')")
+  errors=$(printf '%s' "$gql" | jq -r '[.errors[]?.message] | join("; ")' 2>/dev/null || true)
+  if [ -z "$errors" ] || grep -qi 'already' <<<"$errors"; then   # armed ("already enabled": a rerun)
+    echo "#$number \"$title\": $message — auto-merge armed for ${sha:0:7}; GitHub squash-merges it into $base when this build reports green"
+    exit 0
+  fi
+  if grep -qiE '(clean|unstable) status' <<<"$errors" && [ "$attempt" -lt 3 ]; then
+    echo "#$number: auto-merge refused as already mergeable ($errors); merging directly (attempt $((attempt + 1)))"
+    sleep 3
+    continue
+  fi
+  fail "auto-merge for #$number refused: $errors"
+done
