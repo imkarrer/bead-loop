@@ -117,11 +117,11 @@ function statsNow() {
 const timed = (label, p, into) => { const t0 = Date.now(); return p.finally(() => { into[label] = Date.now() - t0; }); };
 // Whether headless Claude Code can run: a claude/* stage fails on the spot when the
 // login has lapsed, and nothing else on the page would say so. `claude auth status` is
-// local and instant; asked once a minute, and only when a stage names claude/*.
+// local and instant; asked once a minute, and only when a repo has a claude-code provider.
 let claudeAuth = { at: 0, v: null };
 let login = null;  // the claude auth login in progress, if any
 async function claudeStatus(repos) {
-  if (!repos.some((r) => r.stages.some((st) => /^claude\//.test(st.worker) || /^claude\//.test(st.reviewer || '')))) return null;
+  if (!repos.some((r) => Object.values(r.providers || {}).some((p) => p.harness === 'claude-code'))) return null;
   if (Date.now() - claudeAuth.at < 60000) return claudeAuth.v;
   // `claude auth status` exits 1 when signed out, with the JSON on stdout all the same:
   // read the JSON first, and treat a failure without JSON as claude missing.
