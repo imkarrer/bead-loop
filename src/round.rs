@@ -994,17 +994,17 @@ pub fn review_one(repo: &Repo, opts: &Opts, id: Option<&str>, lane: Option<&Lane
     }
 
     // Function to store PR details in the proposed directory for manual publishing
-    fn store_proposed_pr(repo: &Repo, id: &str, title: &str, body: &str, head: &str, base: &str, pr_repo: &str, compare_url: &str) -> Result<(), String> {
+    fn store_proposed_pr(repo: &Repo, id: &str, title: &str, body: &str, head: &str, compare_url: &str) -> Result<(), String> {
         let proposed_path = repo.rs.join("proposed").join(id);
         let pr_details = json!({
             "title": title,
             "body": body,
             "head": head,
-            "base": base,
-            "pr_repo": pr_repo,
+            "base": repo.base,
+            "pr_repo": repo.pr_repo,
             "compare_url": compare_url
         });
-        
+
         write_file(&proposed_path, &pr_details.to_string());
         Ok(())
     }
@@ -1036,31 +1036,26 @@ pub fn review_one(repo: &Repo, opts: &Opts, id: Option<&str>, lane: Option<&Lane
     list_args.extend(repo_args.iter().copied());
     list_args.extend(["--head", &head, "--json", "url", "--jq", ".[0].url // empty"]);
     let existing = crate::shell::gh_stdout_any(repo, &list_args).trim().to_string();
+    if existing.is_empty() && repo.open_pr.as_deref() == Some("ask") {
+        let compare_url = format!("https://github.com/{}/compare/{}...{head}?expand=1", repo.pr_repo, repo.base);
+        if let Err(e) = store_proposed_pr(repo, &id, &title, &body, &head, &compare_url) {
+            write_file(&repo.review_path(&id), &format!("{final_text}\n"));
+            hold(repo, &id, None, &format!("failed to store proposed PR: {e}"));
+            return Pass::Worked;
+        }
+        bd_comment(repo, &id, &format!("bead-loop: ready to publish: {compare_url}"));
+        log(&format!("{}: {id}: pushed to {head}, PR details stored in proposed/", repo.slug));
+        repo.release(&id);
+        repo.lane_clear(lane_name);
+        signals::clear_current(lane_name);
+        repo.wake();
+        return Pass::Worked;
+    }
     let url = if !existing.is_empty() {
         log(&format!("{}: {id}: pushed a new round to {existing}", repo.slug));
         bd_comment(repo, &id, &format!("bead-loop: pushed round {} to {existing}", n + 1));
         existing
-    } else if let Some(open_pr) = &repo.open_pr {
-        // Check if we should ask for manual PR creation
-        if open_pr == "ask" {
-            // Get the compare URL for the PR
-            let compare_url = format!("https://github.com/{}/compare/{}...{}", repo.pr_repo, repo.base, head);
-            // Store the PR details in the proposed directory
-            if let Err(e) = store_proposed_pr(repo, &id, &title, &body, &head, &repo.base, &repo.pr_repo, &compare_url) {
-                write_file(&repo.review_path(&id), &format!("{final_text}\n"));
-                hold(repo, &id, None, &format!("failed to store proposed PR: {e}"));
-                return Pass::Worked;
-            }
-            // Add comment that PR is ready to be published
-            bd_comment(repo, &id, &format!("bead-loop: ready to publish: {compare_url}"));
-            log(&format!("{}: {id}: pushed to {head}, PR details stored in proposed/", repo.slug));
-            // Return early - don't proceed with PR creation
-            return Pass::Worked;
-        }
-    };
-    
-    // Continue with regular PR creation logic if not "ask" or if we had an existing PR
-    let url = if existing.is_empty() {
+    } else {
         let title_line = format!("{id}: {title}");
         let mut create_args = vec!["pr", "create"];
         create_args.extend(repo_args.iter().copied());
@@ -1079,8 +1074,6 @@ pub fn review_one(repo: &Repo, opts: &Opts, id: Option<&str>, lane: Option<&Lane
             }
             Err(e) => die(&format!("gh: {e}")),
         }
-    } else {
-        existing
     };
     write_file(&repo.inflight_path(&id), &format!("{url}\n"));
     for m in ["red", "fixing", "conflict"] {
