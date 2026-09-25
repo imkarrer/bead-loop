@@ -407,6 +407,8 @@ case_aider_stage() {
   assert_eq "$(sed -n 1p "$TEST_CTRL/aider.args")" "base=http://stub.test/v1 key=not-needed" "the provider's server and key from opencode.json"
   assert_match "$(sed -n 2p "$TEST_CTRL/aider.args")" "^--yes-always --no-auto-commits --no-gitignore --model openai/worker " "non-interactive, no commits of its own"
   assert_match "$(sed -n 2p "$TEST_CTRL/aider.args")" " --lint-cmd true " "the gate is aider's lint"
+  assert_match "$(sed -n 2p "$TEST_CTRL/aider.args")" " --edit-format diff --aiderignore <file> " "diff edits; every other file hidden"
+  assert_eq "$(cat "$TEST_CTRL/aider.ignore" | tr "\n" " ")" "* !work.txt " "the ignore file lets only the named file through"
   assert_match "$(sed -n 2p "$TEST_CTRL/aider.args")" " work.txt$" "the file the description names, and only that one"
   assert_match "$(cat "$TEST_CTRL/prompt.1")" "ACCEPTANCE CRITERIA" "the bead is the message"
   assert_branch bead/t-1 "pushed"

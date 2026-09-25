@@ -9,7 +9,7 @@
 //! a round that would die in seconds is never started and never charged.
 use crate::config::{loop_home, Repo};
 use crate::signals;
-use crate::util::{cmd, log, output, read_to_string, stdout_str, tail_lines};
+use crate::util::{cmd, log, output, read_to_string, stdout_str, tail_lines, write_file};
 use serde_json::Value;
 use std::path::Path;
 use std::sync::Mutex;
@@ -135,10 +135,19 @@ pub fn run_agent(
                 repo.slug
             ));
         }
+        // Aider adds any repo file a message names (the gate command names test/run.sh,
+        // install.sh, ...) and --yes-always says yes: a 32k model drowned on 67k tokens
+        // before its first edit. The ignore file hides every other file from aider, so
+        // the named ones are all it can add or map. Diff edits: a whole-file rewrite of a
+        // thousand-line file does not fit the context either.
         let files = files_named(bead_json, dir);
+        let ignore = logf.with_file_name(format!("{}.aiderignore", logf.file_name().unwrap().to_string_lossy()));
+        write_file(&ignore, &aider_ignore(&files));
         let mut c = cmd("timeout");
         c.args(["--foreground", &timeout_s, "aider", "--yes-always", "--no-auto-commits", "--no-gitignore"]);
         c.args(["--model", &format!("openai/{model_name}")]);
+        c.args(["--edit-format", "diff"]);
+        c.arg("--aiderignore").arg(&ignore);
         c.arg("--chat-history-file").arg(format!("{}.chat.md", logf.display()));
         c.arg("--input-history-file").arg(format!("{}.input", logf.display()));
         c.args(["--message", prompt]);
@@ -326,6 +335,16 @@ pub fn opencode_provider_in(path: &Path, provider: &str) -> (String, String) {
     let opts = v.pointer(&format!("/provider/{provider}/options"));
     let get = |k: &str| opts.and_then(|o| o.get(k)).and_then(|s| s.as_str()).unwrap_or("").to_string();
     (get("baseURL"), get("apiKey"))
+}
+
+/// An aiderignore that hides every file but these: `*`, then one `!path` per file. (A
+/// `!*/` would re-include every file under any directory.)
+fn aider_ignore(files: &[String]) -> String {
+    let mut s = String::from("*\n");
+    for f in files {
+        s.push_str(&format!("!{f}\n"));
+    }
+    s
 }
 
 /// The files a bead's DESCRIPTION names: every whitespace-separated token with a slash or
@@ -545,6 +564,11 @@ mod tests {
         );
         assert!(files_named(None, &d).is_empty());
         let _ = std::fs::remove_dir_all(&d);
+    }
+    #[test]
+    fn aider_ignore_hides_all_but_the_named_files() {
+        assert_eq!(aider_ignore(&["src/round.rs".into(), "work.txt".into()]), "*\n!src/round.rs\n!work.txt\n");
+        assert_eq!(aider_ignore(&[]), "*\n", "nothing named: nothing to add");
     }
     #[test]
     fn opencode_provider_from_its_config() {
