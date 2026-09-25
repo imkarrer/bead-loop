@@ -711,6 +711,18 @@ pub fn pr_body(id: &str, title: &str, ac: &str, worker_line: &str, reviewer_line
     )
 }
 
+/// The PR's title: the style, id, and title.
+#[cfg_attr(not(test), allow(dead_code))]
+pub fn pr_title(style: &str, id: &str, title: &str) -> String {
+    format!("{style}: {id} {title}")
+}
+
+/// A plain PR body: the id, description, acceptance criteria, and worker line.
+#[cfg_attr(not(test), allow(dead_code))]
+pub fn pr_body_plain(id: &str, description: &str, ac: &str, worker_line: &str) -> String {
+    format!("Bead `{id}`\n\n{description}\n\n> {ac}\n\nWorker: {worker_line}\n")
+}
+
 /// `dev_one [ID]`
 /// The worker of a conflict (rebase) round: `conflict_worker`, else the last stage's.
 pub fn conflict_model(repo: &Repo) -> Option<String> {
@@ -1677,6 +1689,11 @@ mod tests {
         assert!(b.starts_with("Bead `t-1`: Do the thing\n\n> a\n> b\n\nWorker: DONE: did it\nReviewer (stub/reviewer): APPROVE: checked\n"));
         assert!(b.ends_with("Opened by bead-loop; the bead closes when this merges.\n"));
         assert!(pr_body("t-1", "T", "", "w", "").contains("\n\n> \n\nWorker: w\n\n\n"), "no criteria: an empty quote, no reviewer line");
+    }
+    #[test]
+    fn a_plain_pr_reads_as_a_contribution() {
+        let b = pr_body_plain("t-1", "Do the thing", "a\nb", "DONE: did it");
+        assert_eq!(b, "Bead `t-1`\n\nDo the thing\n\n> a\nb\n\nWorker: DONE: did it\n");
     }
     #[test]
     fn a_round_the_model_never_answered_holds_with_the_harness_words() {
