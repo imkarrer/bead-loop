@@ -39,6 +39,9 @@ pub fn say(key: &str, msg: String) {
 pub const PIPELINE_TIMEOUT: i64 = 30 * 60;
 /// How long CI may stay pending before the bead is held (still polled).
 pub const CI_TIMEOUT: i64 = 2 * 3600;
+/// A PR this new with no checks is one whose CI has not registered yet (the loop looks a
+/// second after labelling it), not one with no CI: pending, not held.
+pub const NOCHECK_GRACE: i64 = 300;
 
 const RED: &[&str] = &["FAILURE", "ERROR", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED", "STARTUP_FAILURE"];
 const GREEN: &[&str] = &["SUCCESS", "NEUTRAL", "SKIPPED"];
@@ -452,9 +455,12 @@ fn reconcile_open(repo: &Repo, id: &str, f: &std::path::Path, url: &str, view: &
             }
         }
         "nocheck" => {
+            let since = mtime(f);
             if repo.merge == "external" {
                 // Their CI is their business: no note, no hold, whatever it reports.
                 say(id, format!("{}: {id}: no checks on {url}, merge is external, awaiting the maintainer", repo.slug));
+            } else if since > 0 && now() - since < NOCHECK_GRACE {
+                say(id, format!("{}: {id}: no checks on {url} yet; CI has {} s to start", repo.slug, NOCHECK_GRACE - (now() - since)));
             } else {
                 if !repo.mark(id, "nocheck").exists() {
                     bd_note(

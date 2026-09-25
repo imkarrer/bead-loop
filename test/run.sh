@@ -1270,7 +1270,7 @@ case_git_refusing_the_worktree_holds() {
   BEAD_LOOP_HOLD_BACKOFF=0 sup --once tick
   assert_eq "$(calls)" "bead-worker bead-reviewer" "the obstacle gone: worked on the next pass"
   assert_file "$BEAD_LOOP_STATE/repo/inflight/t-1" "to a PR"
-  assert_eq "$(grep -c 'cannot make the worktree' "$BEAD_LOOP_STATE/repo/held/t-1" 2>/dev/null || true)" 0 "that hold is gone (the watcher's own, on the stub PR's missing checks, is another)"
+  assert_eq "$(grep -c 'cannot make the worktree' < <(cat "$BEAD_LOOP_STATE/repo/held/t-1" 2>/dev/null) || true)" 0 "that hold is gone"
 }
 
 case_setup_failure_is_held() {
@@ -1290,7 +1290,7 @@ case_setup_failure_is_held() {
   sed -i 's/^setup = .*/setup = "true"/' "$REPO/.bead-loop.toml"
   BEAD_LOOP_HOLD_BACKOFF=0 sup --once tick
   assert_eq "$(calls)" "bead-worker bead-reviewer" "aged and the world fixed: worked"
-  assert_eq "$(grep -c 'setup failed' "$BEAD_LOOP_STATE/repo/held/t-1" 2>/dev/null || true)" 0 "the setup hold is released (the stub PR's no-checks hold may follow)"
+  assert_eq "$(grep -c 'setup failed' < <(cat "$BEAD_LOOP_STATE/repo/held/t-1" 2>/dev/null) || true)" 0 "the setup hold is released"
 }
 case_harness_down_is_held() {
   # The model harness exits with nothing said — its server is down: not the model's
@@ -1416,8 +1416,12 @@ case_merge_queue_holds() {
   assert_match "$(cat "$BEAD_LOOP_STATE/repo/held/t-1")" "GitHub refuses the merge (CLEAN)" "held"
   assert_eq "$(bead .status)" in_progress "waits"
   rm "$TEST_CTRL/merge-refused"; sup reconcile "$REPO"; assert_eq "$(bead .status)" closed "protection lifted: merged"
-  # no checks reported: not merged, noted, held (the human list too).
+  # no checks yet on a PR opened a moment ago: CI has not registered; pending, not held.
   setup; sup work "$REPO"; sup reconcile "$REPO"
+  assert_nofile "$BEAD_LOOP_STATE/repo/held/t-1" "fresh PR, no checks yet: not held"
+  ! grep -q "no CI checks" <<<"$(bead .notes)" && ok || bad "fresh PR: no note"
+  # no checks reported five minutes on: not merged, noted, held (the human list too).
+  touch -d "10 minutes ago" "$BEAD_LOOP_STATE/repo/inflight/t-1"; sup reconcile "$REPO"
   assert_eq "$(jq -r .state "$TEST_CTRL/pr.json")" OPEN "no checks: not merged"
   assert_match "$(bead .notes)" "no CI checks" "noted"
   assert_match "$(cat "$BEAD_LOOP_STATE/repo/held/t-1")" "reports no CI checks" "held"
