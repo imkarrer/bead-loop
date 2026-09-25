@@ -19,6 +19,16 @@ pub struct Stage {
     pub timeout: Option<u64>,
 }
 
+/// How many of a stage's seats must approve: every one, any one, or at least N.
+#[cfg_attr(not(test), allow(dead_code))]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub enum Approvals {
+    #[default]
+    All,
+    Any,
+    Count(u64),
+}
+
 /// The two files as JSON objects.
 #[derive(Clone, Debug)]
 pub struct Layers {
