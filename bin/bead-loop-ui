@@ -16,6 +16,7 @@
 'use strict';
 const http = require('node:http');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const { execFile, spawn } = require('node:child_process');
 
@@ -372,6 +373,23 @@ const actions = {
     if (!r.ok) throw new Error(r.stderr.trim() || `bd exited ${r.code}`);
     await run(SUPERVISOR, ['wake']);
     return { reopened: id };
+  },
+  // publish {repo, id, title, body}: the PR a ready-to-publish proposal is waiting on you
+  // to open, with the title and body you edited — `bead-supervisor publish REPO ID --title
+  // T --body-file F`, the body written to a temp file since it can run to paragraphs.
+  async publish({ repo, id, title, body }) {
+    if (!ID.test(String(id || ''))) throw new Error('bad bead id');
+    if (!String(title || '').trim()) throw new Error('write a title first');
+    const repos = await knownRepos();
+    if (!repos.some((r) => r.repo === repo)) throw new Error('unknown repo');
+    const f = path.join(os.tmpdir(), `bead-loop-publish-${id}-${Date.now()}.md`);
+    await fs.promises.writeFile(f, String(body || ''));
+    try {
+      await supervisor(['publish', repo, id, '--title', String(title).trim(), '--body-file', f]);
+    } finally {
+      await fs.promises.unlink(f).catch(() => {});
+    }
+    return { published: id };
   },
 };
 async function systemctl(...args) {
