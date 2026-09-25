@@ -273,7 +273,7 @@ pub struct Repo {
     /// `owner/repo` the PR is opened against; default `base_remote`'s GitHub repo
     pub pr_repo: String,
     /// `auto` (the loop opens the PR) or `ask` (the operator publishes it); default `auto`
-    pub open_pr: String,
+    pub open_pr: Option<String>,
     /// `loop` (today's `ID: title` / "Opened by bead-loop" PR) or `plain` (a contribution,
     /// no loop id or line); default `loop`
     pub pr_style: String,
@@ -339,7 +339,7 @@ impl Repo {
             base_remote,
             push_remote: cfg.str("push_remote", "origin"),
             pr_repo,
-            open_pr: cfg.str("open_pr", "auto"),
+            open_pr: cfg.get("open_pr").map(|v| v.as_str().unwrap_or("auto").to_string()),
             pr_style: cfg.str("pr_style", "loop"),
             target: String::new(),
             targets: cfg.targets(),
@@ -437,7 +437,7 @@ impl Repo {
         r.merge_label = target.merge_label.clone().unwrap_or(r.merge_label);
         r.adopt = target.adopt.unwrap_or(r.adopt);
         r.max_inflight = target.max_inflight.unwrap_or(r.max_inflight);
-        r.open_pr = target.open_pr.clone().unwrap_or(r.open_pr);
+        r.open_pr = target.open_pr.clone().or(r.open_pr);
         r.pr_style = target.pr_style.clone().unwrap_or(r.pr_style);
         Ok(r)
     }
@@ -464,7 +464,7 @@ impl Repo {
 /// same counter, file by file (a status run may have made failures/ first), then the
 /// old directory goes.
 pub fn make_state_dirs(rs: &Path) {
-    for d in ["inflight", "logs", "wt", "review", "failures", "held", "parked", "rejoin", "target"] {
+    for d in ["inflight", "logs", "wt", "review", "failures", "held", "parked", "rejoin", "target", "proposed"] {
         let _ = std::fs::create_dir_all(rs.join(d));
     }
     let old = rs.join("attempts");
@@ -527,7 +527,7 @@ pub fn test_repo(root: &Path, stages: &[&str]) -> Repo {
         base_remote: "origin".into(),
         push_remote: "origin".into(),
         pr_repo: String::new(),
-        open_pr: "auto".into(),
+        open_pr: Some("auto".to_string()),
         pr_style: "loop".into(),
         target: String::new(),
         targets: BTreeMap::new(),
