@@ -1484,6 +1484,13 @@ case_harness_error_is_held() {
   assert_eq "$(calls)" "bead-worker bead-reviewer bead-reviewer" "reviewed once the hold aged"
   assert_match "$(sed -n 3p "$TEST_CTRL/calls")" " stub/reviewer " "by the same stage's reviewer, not the next stage's"
   assert_file "$BEAD_LOOP_STATE/repo/inflight/t-1" "and pushed to a PR"
+  # A reviewer that exits 0 without a word (a step started, then nothing) gave no
+  # verdict: held in the review queue, no failure — not a REJECT with an empty note.
+  setup true auto stub/reviewer; printf 'silent\napprove\n' >"$TEST_CTRL/review"; sup work "$REPO"
+  assert_file "$BEAD_LOOP_STATE/repo/review/t-1" "silent reviewer: stays in the review queue"
+  assert_eq "$(cat "$BEAD_LOOP_STATE/repo/failures/t-1" 2>/dev/null || echo 0)" 0 "silent reviewer: no failure"
+  assert_match "$(cat "$BEAD_LOOP_STATE/repo/held/t-1")" "reviewer stub/reviewer gave no verdict" "held, saying why"
+  ! grep -q 'round 1 stopped' "$T/sup.log" && ok || bad "silent reviewer: no round stopped"
   # The gate-fix round too: the first round's commit stays on its branch, in its
   # worktree, and the next round resumes it instead of starting over.
   setup 'false'; printf 'done\nserver-error\n' >"$TEST_CTRL/worker"; sup --once tick

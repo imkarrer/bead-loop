@@ -61,6 +61,7 @@ case $agent in
       hang) say "reading the diff"; sleep 30 ;;   # a stop or the clock ends it
       crash) echo "connection refused" >&2; exit 7 ;;   # the reviewer's server is down
       server-error) server_error ;;   # the server answered an error before the reviewer ran
+      silent) jq -cn '{type:"step_start", part:{type:"step-start"}}' ;;   # a step, then exit 0 with no word (25 Sep: bl-tka.2)
       reject2) say "REJECT: work.txt:2 other, fix it"; say "$(printf "For the worker:\n- What is wrong: work.txt:1 says round 1\n- What to do: append the word fixed\n- How to check: grep -c fixed work.txt prints 1")" ;;
       *) say "REJECT: work.txt:1 wrong, fix it"; say "$(printf "For the worker:\n- What is wrong: work.txt:1 says round 1\n- What to do: append the word fixed\n- How to check: grep -c fixed work.txt prints 1")" ;;
     esac ;;

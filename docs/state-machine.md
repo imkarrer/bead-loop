@@ -156,7 +156,7 @@ Every row is a case in `test/run.sh`.
 | No commit, or the session timed out | note, +1 failure; dev queue | removed |
 | Setup fails | **held**, no failure: the reason on the bead once; retried after the backoff | removed |
 | Git refuses the worktree (the branch checked out elsewhere, a stale registration) | **held**, no failure, with git's words; the lane takes the next bead | not made |
-| Harness exits with nothing from the model — no output, or only its own error (the server down, the model not found on it, a 5xx) | **held**, no failure, with the harness's words; the lane takes the next bead | removed (dev; kept once a round had committed) / kept (review) |
+| Harness exits with nothing from the model — no output, or only its own error (the server down, the model not found on it, a 5xx); or a reviewer exits 0 with no text (no verdict) | **held**, no failure, with the harness's words; the lane takes the next bead | removed (dev; kept once a round had committed) / kept (review) |
 | Gate fails twice (one fix round with its output) | note with the errors, +1 failure; dev queue | removed |
 | Gate passes | in_progress; review queue | kept, in its worktree |
 | Gate passes, pre-check `PASS` (or the pre-check cannot run) | in_progress; review queue | kept, in its worktree |
