@@ -21,6 +21,7 @@ use crate::util::{
 };
 use serde_json::Value;
 use std::path::Path;
+use std::sync::Mutex;
 
 /// The run's flags, what the bash kept in globals.
 #[derive(Clone, Debug, Default)]
@@ -134,6 +135,51 @@ fn hold_expired(repo: &Repo, id: &str) -> bool {
     !repo.held_path(id).exists() || crate::util::now() - repo.held_since(id) >= hold_backoff()
 }
 
+/// The beads a round in this process is on, as `STATE/ID`. A bead stays in its queue
+/// until the round moves it (`bd_claim` a moment after the pick; the review queue's file
+/// until the PR), so two slots of one lane, over the same models, would both pick it:
+/// the pick takes a reservation, and `pick_runnable` passes over reserved beads.
+static RESERVED: Mutex<Vec<String>> = Mutex::new(Vec::new());
+/// Held from the look at the queue to the reservation, so two picks cannot interleave.
+static PICKING: Mutex<()> = Mutex::new(());
+
+/// A bead reserved to one round; dropped when the round returns.
+pub struct Reservation(String);
+
+impl Drop for Reservation {
+    fn drop(&mut self) {
+        RESERVED.lock().unwrap_or_else(|e| e.into_inner()).retain(|k| k != &self.0);
+    }
+}
+
+fn reservation_key(repo: &Repo, id: &str) -> String {
+    format!("{}/{id}", repo.rs.display())
+}
+
+fn reserved(repo: &Repo, id: &str) -> bool {
+    let key = reservation_key(repo, id);
+    RESERVED.lock().unwrap_or_else(|e| e.into_inner()).contains(&key)
+}
+
+/// This bead for this round, or `None` when another round in this process has it.
+pub fn reserve(repo: &Repo, id: &str) -> Option<Reservation> {
+    let key = reservation_key(repo, id);
+    let mut g = RESERVED.lock().unwrap_or_else(|e| e.into_inner());
+    if g.contains(&key) {
+        return None;
+    }
+    g.push(key.clone());
+    Some(Reservation(key))
+}
+
+/// `pick_runnable`, and the bead reserved to the caller before any other slot looks.
+fn pick_and_reserve(repo: &Repo, which: &str, lane: Option<&LaneSpec>) -> Option<(String, Reservation)> {
+    let _g = PICKING.lock().unwrap_or_else(|e| e.into_inner());
+    let id = pick_runnable(repo, which, lane)?;
+    let r = reserve(repo, &id)?;
+    Some((id, r))
+}
+
 /// `pick_runnable dev|review`: the first bead in that queue whose round's model can run
 /// now and whose hold (if any) has aged; the ones skipped are logged once per pass.
 ///
@@ -145,7 +191,7 @@ pub fn pick_runnable(repo: &Repo, which: &str, lane: Option<&LaneSpec>) -> Optio
     let mut skipped_claude = 0;
     let mut pick = None;
     for id in queue {
-        if !hold_expired(repo, &id) {
+        if !hold_expired(repo, &id) || reserved(repo, &id) {
             continue;
         }
         let n = repo.failures_of(&id);
@@ -524,8 +570,11 @@ pub fn conflict_model(repo: &Repo) -> Option<String> {
 }
 
 pub fn dev_one(repo: &Repo, opts: &Opts, id: Option<&str>, last_id: &mut Option<String>, lane: Option<&LaneSpec>) -> Pass {
-    let id = match id {
-        Some(i) => i.to_string(),
+    let (id, _mine) = match id {
+        Some(i) => match reserve(repo, i) {
+            Some(r) => (i.to_string(), r),
+            None => return Pass::Nothing,
+        },
         None => {
             // The two idle lines: every pass in a tick (the bash did), once per change in
             // the resident loop, which passes every heartbeat.
@@ -537,7 +586,7 @@ pub fn dev_one(repo: &Repo, opts: &Opts, id: Option<&str>, last_id: &mut Option<
                 );
                 return Pass::Nothing;
             }
-            match pick_runnable(repo, "dev", lane) {
+            match pick_and_reserve(repo, "dev", lane) {
                 Some(i) => i,
                 None => {
                     crate::merge::say(
@@ -778,10 +827,15 @@ fn last_line_starting(text: &str, prefix: &str) -> Option<String> {
 
 /// `review_one [ID]`
 pub fn review_one(repo: &Repo, opts: &Opts, id: Option<&str>, lane: Option<&LaneSpec>) -> Pass {
-    let id = match id {
-        Some(i) => i.to_string(),
-        None => match pick_runnable(repo, "review", lane) {
-            Some(i) => i,
+    let (id, _mine) = match id {
+        Some(i) => match reserve(repo, i) {
+            Some(r) => (i.to_string(), r),
+            // another slot took its review first (lane_pass hands the worker slot the
+            // review too, and the queue shows it to every slot meanwhile)
+            None => return Pass::Nothing,
+        },
+        None => match pick_and_reserve(repo, "review", lane) {
+            Some(x) => x,
             None => return Pass::Nothing,
         },
     };

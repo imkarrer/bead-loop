@@ -9,7 +9,7 @@ name. Both are read afresh on every round, so an edit takes effect on the next r
 | Key | Default | What |
 | --- | --- | --- |
 | `repos` | `[]` | global only: the repos the lanes walk, `~` allowed |
-| `[[lanes]]` | `dev` + `review` (+ `claude`) | global only: the lanes, one per model server — `name`, `models` (globs: `devbox/*`, `acbox/*`, `claude/*`, `*`), `roles` (`worker`, `reviewer`; both by default), `exclude`. Each takes the rounds whose model it matches. Unset: the pair by role, plus a `claude` lane when a stage names `claude/*` |
+| `[[lanes]]` | `dev` + `review` (+ `claude`) | global only: the lanes, one per model server — `name`, `models` (globs: `devbox/*`, `acbox/*`, `claude/*`, `*`), `roles` (`worker`, `reviewer`; both by default), `exclude`, `parallel` (rounds at once, default 1). Each takes the rounds whose model it matches. Unset: the pair by role, plus a `claude` lane when a stage names `claude/*` |
 | `label` | `"delegate:local"` | `bd ready -l LABEL` picks the work; the loop claims, notes and closes beads as this actor, not as you (`BEADS_ACTOR` in its environment overrides) |
 | `base` | origin's HEAD | branch to fork from and PR into |
 | `setup` | none | runs in a fresh worktree before the worker (`npm ci`); not again on a branch sent back. It failing holds the bead, no failure: setup runs on the base, so it cannot be the bead's fault |
@@ -56,6 +56,12 @@ own panel on the page. The first lane also parks beads whose stages are exhauste
 first reviewing lane also takes rounds with no reviewer. Without `[[lanes]]`, a stage
 naming `claude/*` still gets its own `claude` lane beside `dev` and `review`. With Claude
 signed out its lane waits, saying so, and takes the beads the moment Sign in completes.
+
+`parallel = N` on a lane runs N rounds of its models at once, one bead each, in slots
+named `NAME`, `NAME.2` … `NAME.N`: a marker (`lane.NAME.K`) and a lock each, a row
+each in `status` and a panel each on the page, one `pause NAME` for all of them. Every
+bead has its own worktree, so the slots never share a checkout. It is for a server that
+takes several sessions at once — `claude/*`, say — not for a GPU that serves one.
 
 ## Stages
 

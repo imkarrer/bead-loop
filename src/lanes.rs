@@ -6,6 +6,10 @@
 //! in the global config replaces them with a lane per model server, so that a round on
 //! the CPU box never holds the GPU's queue, and the other way round.
 //!
+//! A lane with `parallel = N` runs N slots, a thread each, `NAME` then `NAME.2` … — its
+//! own lock and marker per slot, one pause flag for the lane. Two slots over one queue
+//! would both see its first bead: round.rs `Reservation` gives each bead to one of them.
+//!
 //! `tick`: reconcile the merge queue, then every lane side by side until the queues are
 //! drained and every lane idle, then reconcile once more, and exit — the oneshot the
 //! timer used to run, kept for hand runs and the test suite.
@@ -34,7 +38,8 @@ pub struct Ctx {
     pub state_dir: PathBuf,
     /// tick semantics: leave when the queues are drained and the other lanes idle
     pub until_idle: bool,
-    /// the lanes this loop runs, in order
+    /// the lanes this loop runs, in order — a slot each (`LaneSpec::slots`): a lane with
+    /// `parallel = 2` is two entries, NAME and NAME.2
     pub lanes: Vec<LaneSpec>,
 }
 
@@ -148,7 +153,7 @@ fn queued_work(ctx: &Ctx) -> bool {
     for r in &ctx.repos {
         let repo = Repo::load(r, ctx.opts.model_flag.as_deref());
         for l in &ctx.lanes {
-            if repo.paused(&l.name) {
+            if repo.paused(&l.lane) {
                 continue;
             }
             if l.reviewer && crate::round::pick_runnable(&repo, "review", Some(l)).is_some() {
@@ -168,7 +173,7 @@ fn queued_work(ctx: &Ctx) -> bool {
 fn world(ctx: &Ctx) -> Vec<i64> {
     let mut v = vec![mtime(&ctx.state_dir.join("wake")), mtime(&ctx.state_dir.join("priority"))];
     for l in &ctx.lanes {
-        v.push(mtime(&ctx.state_dir.join(format!("pause.{}", l.name))));
+        v.push(mtime(&ctx.state_dir.join(format!("pause.{}", l.lane))));
     }
     for r in &ctx.repos {
         let slug = r.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
@@ -218,7 +223,7 @@ fn lane_pass(repo: &Repo, opts: &Opts, spec: &LaneSpec) -> Pass {
                 let reviewer = repo.stage_for(repo.failures_of(&id)).map(|s| s.review).unwrap_or_default();
                 // The reviewer round is a round: under the pause flag it does not start,
                 // and the bead waits in the review queue for the resume.
-                if (reviewer.is_empty() || spec.takes(&reviewer)) && !repo.paused(&spec.name) {
+                if (reviewer.is_empty() || spec.takes(&reviewer)) && !repo.paused(&spec.lane) {
                     review_one(repo, opts, Some(&id), Some(spec));
                 }
             }
@@ -274,7 +279,7 @@ pub fn lane(ctx: &Ctx, spec: &LaneSpec, pass_counter: Arc<AtomicUsize>) {
     let mut said_paused = false;
     loop {
         // Paused by hand (pause NAME, or the UI): start nothing new.
-        if paused(&ctx.state_dir, name) {
+        if paused(&ctx.state_dir, &spec.lane) {
             if ctx.until_idle {
                 log(&format!("{name} lane paused; starting nothing"));
                 return;
@@ -289,7 +294,7 @@ pub fn lane(ctx: &Ctx, spec: &LaneSpec, pass_counter: Arc<AtomicUsize>) {
         said_paused = false;
         let pass = pass_counter.fetch_add(1, Ordering::SeqCst);
         set_passing(name, true);
-        let moved = walk(&ctx.repos, &ctx.state_dir, name, pass, ctx.once, |r| {
+        let moved = walk(&ctx.repos, &ctx.state_dir, &spec.lane, pass, ctx.once, |r| {
             lane_pass(&Repo::load(r, ctx.opts.model_flag.as_deref()), &ctx.opts, spec)
         });
         set_passing(name, false);

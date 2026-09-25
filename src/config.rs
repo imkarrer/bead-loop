@@ -629,7 +629,12 @@ fn owner_repo(url: &str) -> Option<String> {
 /// ```
 #[derive(Clone, Debug, PartialEq)]
 pub struct LaneSpec {
+    /// the slot's name: the lane's for slot 1, `NAME.K` for slot K (`slots`)
     pub name: String,
+    /// the lane's name, whichever slot this is: the pause flag goes by it
+    pub lane: String,
+    /// how many rounds the lane runs at once, each in a slot of its own (`slots`)
+    pub parallel: u64,
     pub models: Vec<String>,
     pub exclude: Vec<String>,
     pub worker: bool,
@@ -655,6 +660,20 @@ impl LaneSpec {
     pub fn takes(&self, model: &str) -> bool {
         self.models.iter().any(|p| glob_match(p, model)) && !self.exclude.iter().any(|p| glob_match(p, model))
     }
+
+    /// The lane's slots, a thread each: slot 1 keeps the lane's name, slot K is `NAME.K`,
+    /// so each has its own lock and marker (`lane.NAME.K`, one bead each). Every bead has
+    /// its own worktree already, so two rounds of one lane never share a checkout.
+    pub fn slots(&self) -> Vec<LaneSpec> {
+        (1..=self.parallel.max(1))
+            .map(|k| LaneSpec { name: if k == 1 { self.name.clone() } else { format!("{}.{k}", self.name) }, ..self.clone() })
+            .collect()
+    }
+}
+
+/// Every lane's slots, in lane order: what the loop runs a thread for.
+pub fn slots_of(lanes: &[LaneSpec]) -> Vec<LaneSpec> {
+    lanes.iter().flat_map(LaneSpec::slots).collect()
 }
 
 impl Layers {
@@ -685,8 +704,11 @@ impl Layers {
                         if models.is_empty() {
                             models.push("*".into());
                         }
+                        let name = l.get("name").and_then(|n| n.as_str()).unwrap_or(&format!("lane{}", i + 1)).to_string();
                         LaneSpec {
-                            name: l.get("name").and_then(|n| n.as_str()).unwrap_or(&format!("lane{}", i + 1)).to_string(),
+                            lane: name.clone(),
+                            name,
+                            parallel: l.get("parallel").and_then(|p| p.as_u64()).unwrap_or(1).max(1),
                             models,
                             exclude: strs("exclude"),
                             worker,
@@ -702,6 +724,8 @@ impl Layers {
         let mut v = vec![
             LaneSpec {
                 name: "dev".into(),
+                lane: "dev".into(),
+                parallel: 1,
                 models: vec!["*".into()],
                 exclude: exclude.clone(),
                 worker: true,
@@ -711,6 +735,8 @@ impl Layers {
             },
             LaneSpec {
                 name: "review".into(),
+                lane: "review".into(),
+                parallel: 1,
                 models: vec!["*".into()],
                 exclude,
                 worker: false,
@@ -722,6 +748,8 @@ impl Layers {
         if has_claude {
             v.push(LaneSpec {
                 name: "claude".into(),
+                lane: "claude".into(),
+                parallel: 1,
                 models: vec!["claude/*".into()],
                 exclude: Vec::new(),
                 worker: true,
@@ -753,6 +781,12 @@ mod tests {
         assert_eq!(v.len(), 2, "[[lanes]] replaces the defaults, claude lane included");
         assert!(v[0].takes("devbox/coder") && !v[0].takes("acbox/coder") && v[0].parks && v[0].reviewer && v[0].fallback);
         assert!(v[1].worker && !v[1].reviewer && !v[1].fallback);
+        let v = layers("[[lanes]]\nname = \"claude\"\nmodels = [\"claude/*\"]\nparallel = 2\n[[lanes]]\nname = \"gpu\"", "").lanes(true);
+        assert_eq!((v[0].parallel, v[1].parallel), (2, 1), "parallel from [[lanes]]; unset, 1");
+        let slots = slots_of(&v);
+        let names: Vec<&str> = slots.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, ["claude", "claude.2", "gpu"], "slot 1 keeps the lane's name");
+        assert!(slots[1].lane == "claude" && slots[1].takes("claude/sonnet"), "a slot is its lane under another name");
         assert!(glob_match("*", "anything") && glob_match("a/*", "a/b") && !glob_match("a/b", "a/c"));
     }
 

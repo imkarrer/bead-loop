@@ -133,7 +133,7 @@ fn main() {
         serial,
         state_dir: state_dir.clone(),
         until_idle: true,
-        lanes: lane_specs.clone(),
+        lanes: config::slots_of(&lane_specs),
     };
     let lane_known = |n: &str| lane_specs.iter().any(|l| l.name == n) || matches!(n, "dev" | "review" | "claude");
     let lane_list = lane_specs.iter().map(|l| l.name.as_str()).collect::<Vec<_>>().join("|");
