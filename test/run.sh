@@ -183,6 +183,33 @@ case_postmortem_unavailable() {
   ! grep -q "Post-mortem" <<<"$(bead .notes)" && ok || bad "no post-mortem line when it errored"
   assert_eq "$(cat "$BEAD_LOOP_STATE/repo/failures/t-1")" 1 "failures still 1, no hold"
 }
+case_precheck_pass() {
+  setup true auto stub/reviewer 'precheck_model = "stub/precheck"'
+  echo pass >"$TEST_CTRL/precheck"; sup work "$REPO"
+  assert_eq "$(calls)" "bead-worker bead-prechecker bead-reviewer" "precheck runs between the worker and the reviewer"
+  assert_eq "$(sed -n 2p "$TEST_CTRL/calls")" "bead-prechecker $BEAD_LOOP_STATE/repo/wt/t-1 stub/precheck none" "on the precheck model, in the worktree"
+  assert_match "$(cat "$T/sup.log")" "t-1: precheck (stub/precheck): PASS" "logged"
+  assert_eq "$(bead .status)" in_progress "reached the review queue and on to the PR"
+}
+case_precheck_sendback() {
+  setup true auto stub/reviewer 'precheck_model = "stub/precheck"'
+  echo sendback >"$TEST_CTRL/precheck"; sup work "$REPO"
+  assert_eq "$(calls)" "bead-worker bead-prechecker" "sent back before the reviewer ever runs"
+  assert_match "$(cat "$T/sup.log")" "t-1 round 1 stopped: precheck (stub/precheck) sent back" "logged"
+  assert_eq "$(cat "$BEAD_LOOP_STATE/repo/failures/t-1")" 1 "one failure"
+  assert_match "$(bead .notes)" "For the worker:" "the work order on the bead"
+  assert_match "$(bead .notes)" "lib/y.ts is not a file the bead names" "the precheck's line kept"
+}
+case_precheck_unavailable() {
+  for mode in server-error crash; do
+    setup true auto stub/reviewer 'precheck_model = "stub/precheck"'
+    echo "$mode" >"$TEST_CTRL/precheck"; sup work "$REPO"
+    assert_eq "$(calls)" "bead-worker bead-prechecker bead-reviewer" "$mode: falls through to the reviewer"
+    assert_match "$(cat "$T/sup.log")" "t-1: precheck (stub/precheck) skipped" "$mode: logged"
+    assert_nofile "$BEAD_LOOP_STATE/repo/failures/t-1" "$mode: no failure charged"
+    assert_eq "$(bead .status)" in_progress "$mode: reached the review queue and on to the PR"
+  done
+}
 case_uncommitted_is_settled() {
   setup; echo uncommitted >"$TEST_CTRL/worker"; sup work "$REPO"
   assert_branch bead/t-1 "supervisor committed the leftovers and pushed"
