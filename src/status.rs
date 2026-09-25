@@ -359,6 +359,12 @@ pub fn status_json_from(repo: &Repo, open: Value, inprog: Value, specs: &[crate:
             probes.insert(p, json!({"ok": ok, "why": why}));
         }
     }
+    let mut providers = Map::new();
+    for p in crate::lanes::providers_named_in(repo) {
+        let provider =
+            repo.providers.iter().find(|provider| provider.name == p).cloned().unwrap_or_else(|| crate::config::Provider::implicit(&p));
+        providers.insert(p, json!({"harness": provider.harness, "cost": provider.cost, "parallel": provider.parallel}));
+    }
     let priority =
         crate::lanes::priority_repo(&repo.state_dir).map(|p| p == repo.repo || p.to_string_lossy() == repo.slug).unwrap_or(false);
     let targets: Vec<Value> = repo
@@ -387,6 +393,7 @@ pub fn status_json_from(repo: &Repo, open: Value, inprog: Value, specs: &[crate:
         "lane_names": lane_names,
         "paused": paused,
         "probes": probes,
+        "providers": providers,
         "priority": priority,
         "queues": {"dev": dev, "review": review, "merge": merge},
         "parked": parked,
@@ -824,6 +831,10 @@ mod tests {
         assert_eq!(j["worktrees"][0]["failures"], 2);
         assert_eq!(j["worktrees"][0]["sessions"], json!([]), "no attach: no server to ask");
         assert!(j["probes"]["claude"]["ok"].is_boolean(), "a claude stage: its provider's probe is reported");
+        // Verify provider info for claude and stub
+        assert_eq!(j["providers"]["claude"]["cost"], "metered");
+        assert_eq!(j["providers"]["claude"]["harness"], "claude-code");
+        assert_eq!(j["providers"]["stub"]["cost"], "local");
         assert_eq!(j["max_inflight"], Value::Null, "unlimited prints as null");
         assert_eq!(j["priority"], false);
         assert_eq!(j["paused"], json!({"dev": false, "review": false, "claude": false}), "one flag per lane the loop runs");
