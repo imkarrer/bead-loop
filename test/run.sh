@@ -1420,32 +1420,35 @@ case_repeated_hold_restarts_backoff() {
   # with the same reason was born already expired and the pick retried at once — a
   # tight loop rung by its own bell (bl-8ol). It must instead restart the backoff clock
   # each time, silently: no second note, no second log line, but the file's age resets.
+  # The clock is the held file's mtime, backdated rather than slept across.
   setup; echo crash >"$TEST_CTRL/worker"
-  BEAD_LOOP_HOLD_BACKOFF=2 sup --once tick
+  BEAD_LOOP_HOLD_BACKOFF=100 sup --once tick
   assert_eq "$(calls)" "bead-worker" "first hold: one worker call"
-  sleep 2.2
-  : >"$TEST_CTRL/calls"; BEAD_LOOP_HOLD_BACKOFF=2 sup --once tick
+  touch -d '-101 seconds' "$BEAD_LOOP_STATE/repo/held/t-1"
+  : >"$TEST_CTRL/calls"; BEAD_LOOP_HOLD_BACKOFF=100 sup --once tick
   assert_eq "$(calls)" "bead-worker" "aged: retried once, held again with the same reason"
-  : >"$TEST_CTRL/calls"; BEAD_LOOP_HOLD_BACKOFF=2 sup --once tick
+  : >"$TEST_CTRL/calls"; BEAD_LOOP_HOLD_BACKOFF=100 sup --once tick
   assert_eq "$(calls)" "" "inside the fresh backoff: no retry"
 }
 case_hold_backs_off_exponentially_then_parks() {
   # The backoff doubles with every hold on the same reason — 5, 10, 20, 40, 60 minutes
-  # from a 5-minute base (BEAD_LOOP_HOLD_BACKOFF=1 here makes that 1, 2 seconds): held
-  # twice, a retry within the doubled backoff is still skipped, one past it is picked.
-  # And a hold nobody has retried in a day is parked with its reason, not held forever.
-  setup; echo crash >"$TEST_CTRL/worker"
-  BEAD_LOOP_HOLD_BACKOFF=1 sup --once tick
+  # from a 5-minute base (BEAD_LOOP_HOLD_BACKOFF=100 here: 100, 200 s): held twice, a
+  # retry within the doubled backoff is still skipped, one past it is picked. The clock is
+  # the held file's mtime, backdated with touch rather than slept across (1-2 s windows
+  # flaked on a loaded CI agent, 25 Sep). And a hold nobody has retried in a day is
+  # parked with its reason, not held forever.
+  setup; echo crash >"$TEST_CTRL/worker"; H=$BEAD_LOOP_STATE/repo/held/t-1
+  BEAD_LOOP_HOLD_BACKOFF=100 sup --once tick
   assert_eq "$(calls)" "bead-worker" "first hold"
-  sleep 1.2
-  : >"$TEST_CTRL/calls"; BEAD_LOOP_HOLD_BACKOFF=1 sup --once tick
+  touch -d '-101 seconds' "$H"
+  : >"$TEST_CTRL/calls"; BEAD_LOOP_HOLD_BACKOFF=100 sup --once tick
   assert_eq "$(calls)" "bead-worker" "aged past the first backoff: held twice now"
-  sleep 1
-  : >"$TEST_CTRL/calls"; BEAD_LOOP_HOLD_BACKOFF=1 sup --once tick
-  assert_eq "$(calls)" "" "held twice: 1s since is inside its doubled, 2s backoff"
-  sleep 1.2
-  : >"$TEST_CTRL/calls"; BEAD_LOOP_HOLD_BACKOFF=1 sup --once tick
-  assert_eq "$(calls)" "bead-worker" "picked at 2s"
+  touch -d '-150 seconds' "$H"
+  : >"$TEST_CTRL/calls"; BEAD_LOOP_HOLD_BACKOFF=100 sup --once tick
+  assert_eq "$(calls)" "" "held twice: 150 s since is inside its doubled, 200 s backoff"
+  touch -d '-201 seconds' "$H"
+  : >"$TEST_CTRL/calls"; BEAD_LOOP_HOLD_BACKOFF=100 sup --once tick
+  assert_eq "$(calls)" "bead-worker" "picked past 200 s"
 
   touch -d '-25 hours' "$BEAD_LOOP_STATE/repo/held/t-1"
   : >"$TEST_CTRL/calls"; sup --once tick
