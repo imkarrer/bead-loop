@@ -536,22 +536,25 @@ function prChips(p, now, r) {
 // The two lanes, side by side: what each is on right now, with the session that is live
 // for it and the lever to stop it. This is the page's answer to "what is being worked".
 function lanePanel(r, name, now, ticking, showRepo) {
+  // A slot of a wide lane (claude.2) is its lane under another name: the lane's role,
+  // the lane's pause flag.
+  const lane = laneOf(name);
   const l = r.lanes[name];
   // The lane's role: the default pair split by role; a configured lane ([[lanes]]) or
   // the claude lane takes both roles for its models.
-  const role = name === 'dev' ? 'worker' : name === 'review' ? 'reviewer' : name === 'claude' ? 'worker or reviewer · Anthropic, waits on no local model' : 'worker or reviewer · its models’ rounds';
+  const role = lane === 'dev' ? 'worker' : lane === 'review' ? 'reviewer' : lane === 'claude' ? 'worker or reviewer · Anthropic, waits on no local model' : 'worker or reviewer · its models’ rounds';
   const paused = r.paused && r.paused[name];
-  const pauseBtn = lever(paused ? 'Resume lane' : 'Pause lane', 'lane', { name, paused: !paused });
+  const pauseBtn = lever(paused ? 'Resume lane' : 'Pause lane', 'lane', { name: lane, paused: !paused });
   if (!l) {
     const capped = r.max_inflight != null && r.queues.merge.filter((p) => !p.adopted).length >= r.max_inflight;
     const heldOnly = (q) => q.length > 0 && q.every((b) => b.held);
     const onClaude = (b) => b.stage && /^claude\//.test(b.stage.worker + ' ' + (b.stage.reviewer || ''));
     const claudeQueued = r.queues.dev.filter(onClaude).length + r.queues.review.filter(onClaude).length;
-    const why = name === 'dev'
+    const why = lane === 'dev'
       ? (r.queues.dev.length === 0 ? 'dev queue empty' : capped ? `waiting on CI (${r.max_inflight} in flight is the limit)` : heldOnly(r.queues.dev) ? 'every bead in the queue is held — see Needs you' : r.queues.dev.every(onClaude) ? 'only Claude-stage beads queued — the Claude lane has them' : ticking ? 'starting…' : 'the loop is down')
-      : name === 'claude'
+      : lane === 'claude'
       ? (claudeQueued === 0 ? 'nothing on the Claude stage' : r.claude_ok === false ? `${claudeQueued} waiting — Claude is signed out (Sign in at the top)` : ticking ? 'starting…' : 'the loop is down')
-      : name !== 'review'
+      : lane !== 'review'
       ? (ticking ? 'nothing queued for its models' : 'the loop is down')
       : (r.queues.review.length === 0 ? 'review queue empty' : heldOnly(r.queues.review) ? 'every bead in the queue is held — see Needs you' : ticking ? 'starting…' : 'the loop is down');
     return `<div class="lane idle ${name}${paused ? ' paused' : ''}" data-key="${esc(name)}"><div class="label">${name} lane ${paused ? '<span class="chip warn">paused</span>' : ''}<span class="act">${pauseBtn}</span></div><div class="what">${paused ? 'paused — starts no new round until resumed' : `idle — ${esc(why)}`}</div></div>`;
@@ -574,20 +577,23 @@ function lanePanel(r, name, now, ticking, showRepo) {
 // repo), so its panel says which bead it is on and which repo that bead belongs to —
 // not a set of panels per repo, most of them idle. Idle panels count what is queued
 // across repos; paused is paused everywhere.
+// The lane a slot belongs to: NAME.K is slot K of NAME (config.rs LaneSpec::slots).
+function laneOf(name) { return name.replace(/\.\d+$/, ''); }
 function lanesPane(s) {
   const ticking = s.service.available && (s.service.active === 'active' || s.service.active === 'activating');
   const names = [...new Set(s.repos.flatMap((r) => r.lane_names || ['dev', 'review']))];
   const panels = names.map((name) => {
     const on = s.repos.find((r) => r.lanes && r.lanes[name]);
     if (on) return lanePanel(on, name, s.now, ticking, true);
+    const lane = laneOf(name);
     const paused = s.repos.some((r) => r.paused && r.paused[name]);
-    const pauseBtn = lever(paused ? 'Resume lane' : 'Pause lane', 'lane', { name, paused: !paused });
+    const pauseBtn = lever(paused ? 'Resume lane' : 'Pause lane', 'lane', { name: lane, paused: !paused });
     const onClaude = (b) => b.stage && /^claude\//.test(b.stage.worker + ' ' + (b.stage.reviewer || ''));
     const count = (pick) => s.repos.reduce((n, r) => n + r.queues.dev.filter(pick).length + r.queues.review.filter(pick).length, 0);
-    const queued = name === 'dev' ? s.repos.reduce((n, r) => n + r.queues.dev.length, 0)
-      : name === 'review' ? s.repos.reduce((n, r) => n + r.queues.review.length, 0)
-      : name === 'claude' ? count(onClaude) : count(() => true);
-    const signedOut = name === 'claude' && s.repos.some((r) => r.claude_ok === false);
+    const queued = lane === 'dev' ? s.repos.reduce((n, r) => n + r.queues.dev.length, 0)
+      : lane === 'review' ? s.repos.reduce((n, r) => n + r.queues.review.length, 0)
+      : lane === 'claude' ? count(onClaude) : count(() => true);
+    const signedOut = lane === 'claude' && s.repos.some((r) => r.claude_ok === false);
     const why = paused ? 'paused — starts no new round until resumed'
       : queued === 0 ? 'idle — nothing queued for it in any repo'
       : signedOut ? `idle — ${queued} waiting; Claude is signed out (Sign in at the top)`

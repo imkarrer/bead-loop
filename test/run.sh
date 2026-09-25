@@ -1450,6 +1450,32 @@ case_lanes_from_toml() {
   kill -TERM -- -"$pid"; wait "$pid" 2>/dev/null || true
 }
 
+case_lane_with_two_slots() {
+  # [[lanes]] parallel = 2: the lane is two slots, stub and stub.2, each on its own bead
+  # at once — its own marker, its own worktree — never both on one; status shows each.
+  # Then both beads run to their PRs; and pause stub stops both slots.
+  twobeads() {
+    printf '[[lanes]]\nname = "stub"\nmodels = ["*"]\nparallel = 2\n' >>"$BEAD_LOOP_CONFIG/config.toml"
+    jq '. + [{id:"t-2", title:"Second", description:"y", status:"open", priority:3, labels:["delegate:local"]}]' "$BD_STATE/issues.json" >"$BD_STATE/i.tmp" && mv "$BD_STATE/i.tmp" "$BD_STATE/issues.json"
+  }
+  setup true auto stub/reviewer 'max_inflight = 3'; echo hang >"$TEST_CTRL/worker"; twobeads
+  setsid "$SUP" tick 2>>"$T/sup.log" & pid=$!
+  for _ in $(seq 100); do [ "$(grep -c '^bead-worker' "$TEST_CTRL/calls" 2>/dev/null)" = 2 ] && break; sleep 0.1; done
+  sleep 0.2
+  assert_eq "$(cat "$BEAD_LOOP_STATE/repo/lane.stub" "$BEAD_LOOP_STATE/repo/lane.stub.2" 2>/dev/null | sort | tr '\n' ' ')" "t-1 t-2 " "one bead per slot, both at once"
+  assert_match "$(grep '^bead-worker' "$TEST_CTRL/calls" | sort | tr '\n' ' ')" "wt/t-1 .*wt/t-2 " "each worker in its bead's worktree"
+  assert_match "$(sup status "$REPO")" "stub.2 lane: *t-" "status: the second slot's row"
+  kill -TERM -- -"$pid"; wait "$pid" 2>/dev/null || true
+  setup true auto stub/reviewer 'max_inflight = 3'; printf 'approve\napprove\n' >"$TEST_CTRL/review"; twobeads
+  LANE_WAIT=0.2 sup tick
+  assert_eq "$(cut -d' ' -f1 "$TEST_CTRL/calls" | sort | uniq -c | awk '{print $2"="$1}' | tr '\n' ' ')" "bead-reviewer=2 bead-worker=2 " "each bead once through each round"
+  assert_file "$BEAD_LOOP_STATE/repo/inflight/t-1" "t-1 in the merge queue"; assert_file "$BEAD_LOOP_STATE/repo/inflight/t-2" "t-2 too"
+  assert_nofile "$BEAD_LOOP_STATE/repo/lane.stub" "slot 1 clear"; assert_nofile "$BEAD_LOOP_STATE/repo/lane.stub.2" "slot 2 clear"
+  setup; twobeads; sup pause stub; sup --serial tick
+  assert_eq "$(calls)" "" "pause stub: neither slot starts a round"
+  assert_eq "$(sup --json status "$REPO" | jq -r '.lane_names | join(" ")') $(sup --json status "$REPO" | jq -r '.paused["stub.2"]')" "stub stub.2 true" "json: a row per slot, both paused"
+}
+
 case_doctor() {
   # Every dependency probed, red or green: bd's version and git are real; gh auth, claude
   # auth, the opencode provider named in the stages (its /models) and the attach server

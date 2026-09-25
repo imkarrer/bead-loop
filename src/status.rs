@@ -149,8 +149,9 @@ fn bead_json(repo: &Repo, byid: &Map<String, Value>, id: &str) -> Map<String, Va
 /// `status_json`: this repo, one JSON object.
 pub fn status_json(repo: &Repo) -> Value {
     // lanes: the configured ones ([[lanes]] in the global file), else dev + review, plus
-    // claude when this repo's stages name it — the same list the loop runs.
-    let specs = crate::config::Layers::load(&crate::config::config_dir().join("config.toml"), None).lanes(has_claude_stage(repo));
+    // claude when this repo's stages name it — the same list the loop runs, a row per slot.
+    let lanes = crate::config::Layers::load(&crate::config::config_dir().join("config.toml"), None).lanes(has_claude_stage(repo));
+    let specs = crate::config::slots_of(&lanes);
     status_json_from(repo, bd_ready_json(repo), bd_in_progress_json(repo), &specs)
 }
 
@@ -215,7 +216,8 @@ pub fn status_json_from(repo: &Repo, open: Value, inprog: Value, specs: &[crate:
             laneids.push(id);
         }
     }
-    let paused: Map<String, Value> = lane_names.iter().map(|n| (n.clone(), json!(repo.paused(n)))).collect();
+    // keyed by slot, read from the lane: `pause NAME` pauses every slot of NAME
+    let paused: Map<String, Value> = specs.iter().map(|l| (l.name.clone(), json!(repo.paused(&l.lane)))).collect();
     let review_ids = review_queue(repo);
     let ready_ids: Vec<String> =
         open.as_array().into_iter().flatten().filter_map(|b| b.get("id").and_then(|i| i.as_str()).map(str::to_string)).collect();
@@ -393,13 +395,10 @@ pub fn status_text(j: &Value) -> String {
         stages.join(" → "),
         if j["priority"].as_bool().unwrap_or(false) { "  [priority]" } else { "" }
     ));
-    let lane_rows: Vec<(String, String)> = j["lane_names"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|n| n.as_str())
-        .map(|n| (n.to_string(), format!("  {:<13}", format!("{n} lane:"))))
-        .collect();
+    let names: Vec<&str> = j["lane_names"].as_array().into_iter().flatten().filter_map(|n| n.as_str()).collect();
+    // the column fits "review lane: ", and a longer name (a slot: claude.2) widens it
+    let w = names.iter().map(|n| n.len() + " lane: ".len()).max().unwrap_or(0).max(13);
+    let lane_rows: Vec<(String, String)> = names.iter().map(|n| (n.to_string(), format!("  {:<w$}", format!("{n} lane:")))).collect();
     for (name, label) in lane_rows {
         let name = name.as_str();
         let l = &j["lanes"][name];
@@ -778,6 +777,23 @@ mod tests {
         let empty =
             status_text(&status_json_from(&crate::config::test_repo(&d.join("e"), &["a"]), json!([]), json!([]), &default_lanes(false)));
         assert!(empty.contains("  dev queue (0):  —\n"), "{empty}");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_wide_lane_is_a_row_per_slot_under_one_pause() {
+        let d = crate::config::scratch("status-slots");
+        let repo = crate::config::test_repo(&d, &["claude/sonnet:claude/sonnet:1"]);
+        let mut claude = default_lanes(true).pop().unwrap();
+        claude.parallel = 2;
+        repo.lane_set("claude.2", "t-1");
+        crate::util::touch(&repo.pause_path("claude"));
+        let j = status_json_from(&repo, json!([]), json!([{"id":"t-1","title":"First"}]), &crate::config::slots_of(&[claude]));
+        assert_eq!(j["lane_names"], json!(["claude", "claude.2"]));
+        assert_eq!(j["lanes"]["claude.2"]["id"], "t-1", "the second slot's bead");
+        assert_eq!(j["paused"], json!({"claude": true, "claude.2": true}), "pause claude pauses both slots");
+        let t = status_text(&j);
+        assert!(t.contains("\n  claude.2 lane: t-1 First ("), "{t}");
         let _ = std::fs::remove_dir_all(&d);
     }
 
