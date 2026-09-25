@@ -505,9 +505,12 @@ window.toggleNote = (id) => { if (!openNote.delete(id)) openNote.add(id); render
 const noteToggle = (b) => ` <button class="hist${openNote.has(b.id) ? ' on' : ''}" onclick="toggleNote(${js(b.id)})" title="a note on the bead; its next round reads it">✎ note</button>`;
 const noteRow = (b, span, r) => !openNote.has(b.id) ? '' : `<tr class="sub" data-key="${esc(b.id)}:note"><td></td><td colspan="${span}"><div class="reply">${box(`note-${b.id}`, 'Context it lacked, a claim that changed — goes on the bead as an operator note; its next round reads it')}<div class="actions">${lever('Add note', 'note', { repo: r.repo, id: b.id }, { cls: 'primary', send: `note-${b.id}` })}<span class="hint">Ctrl+Enter sends</span></div></div></td></tr>`;
 const fold = (k, label, body) => `<div class="fold"><button class="hist${openFold.has(k) ? ' on' : ''}" onclick="toggleFold(${js(k)})">${openFold.has(k) ? '▾' : '▸'} ${esc(label)}</button>${openFold.has(k) ? body : ''}</div>`;
+const providerOf = (m) => (m || '').replace(/^aider:/, '').split('/')[0];
+const probeFails = (r, m) => !!(m && r && r.probes && r.probes[providerOf(m)] && r.probes[providerOf(m)].ok === false);
+// stageChip and claudeBtn below both gate on probeFails, not on the retired claude_ok flag.
 const stageChip = (st, r) => !st ? '<span class="chip bad" title="stages exhausted">exhausted</span>'
   : `<span class="chip ${st.index > 1 ? 'warn' : ''}" title="stage ${st.index}: worker ${esc(st.worker)}${st.reviewer ? ', reviewer ' + esc(st.reviewer) : ''}">${st.index > 1 ? `S${st.index} · ` : ''}${esc(st.worker)}</span>`
-    + ((r && r.claude_ok === false && /^claude\//.test(st.worker + ' ' + (st.reviewer || ''))) ? ' <span class="chip bad" title="a claude/* round cannot run while Claude is signed out; the lane takes other beads meanwhile">waits for Claude sign-in</span>' : '');
+    + ((probeFails(r, st.worker) || probeFails(r, st.reviewer)) ? ' <span class="chip bad" title="a claude/* round cannot run while Claude is signed out; the lane takes other beads meanwhile">waits for Claude sign-in</span>' : '');
 // "Work with Claude": the bead to the last stage and back in the dev queue, now. Shown
 // wherever a bead is not already on that stage.
 const lastStage = (r) => r.stages[r.stages.length - 1];
@@ -515,7 +518,7 @@ const claudeBtn = (r, b) => {
   const st = lastStage(r);
   if (!st || (b.stage && b.stage.index === r.stages.length)) return '';
   const label = `Work with ${esc(st.worker.replace(/^claude\//, 'Claude '))}`;
-  if (r.claude_ok === false && /^claude\//.test(st.worker)) return lever(label, 'escalate', { repo: r.repo, id: b.id }, { off: true, title: 'Claude is signed out on this box — Sign in at the top first' });
+  if (probeFails(r, st.worker)) return lever(label, 'escalate', { repo: r.repo, id: b.id }, { off: true, title: 'Claude is signed out on this box — Sign in at the top first' });
   return lever(label, 'escalate', { repo: r.repo, id: b.id }, { title: `to the last stage (${st.worker}) and back into the dev queue now`, ask: `Work ${b.id} with ${st.worker} now? It goes to the last stage and back into the dev queue, ahead of its failure count.` });
 };
 const abortBtn = (r, sess, label) => lever('Abort', 'abort', { attach: r.attach, session: sess.id }, { cls: 'danger', ask: `Abort ${label}?` });
