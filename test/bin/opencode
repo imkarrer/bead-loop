@@ -24,6 +24,10 @@ done
 n=$(( $(wc -l <"$TEST_CTRL/calls" 2>/dev/null || echo 0) + 1 ))
 printf '%s %s %s %s\n' "$agent" "$dir" "${model:-none}" "${attach:-none}" >>"$TEST_CTRL/calls"
 printf '%s' "$prompt" >"$TEST_CTRL/prompt.$n"
+# The worker's own git status, before it (or the stub's "done") touches anything: proves
+# the house-rules symlinks went into the target's shared exclude, not left dirtying the
+# worktree the worker sees (docs/design-targets.md "House rules travel").
+[ "$agent" = bead-worker ] && git -C "$dir" status --porcelain >"$TEST_CTRL/status.$n"
 [ -e "$TEST_CTRL/slow" ] && sleep "$(cat "$TEST_CTRL/slow")"
 say() { jq -cn --arg t "$1" '{type:"text", part:{text:$t}}'; }
 # What opencode prints when the server errors before the model answers (21 Sep 2026: the

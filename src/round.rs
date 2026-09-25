@@ -17,7 +17,8 @@ use crate::shell::{
 use crate::signals;
 use crate::state::{dev_queue, review_queue, stage_start, StageHit};
 use crate::util::{
-    cut_bytes, date_iminutes, die, first_line, log, read_to_string, stamp, stderr_str, stdout_str, tail_bytes, tail_lines, write_file,
+    cut_bytes, date_iminutes, die, ensure_line, first_line, link_skills, log, read_to_string, stamp, stderr_str, stdout_str, tail_bytes,
+    tail_lines, write_file,
 };
 use serde_json::json;
 use serde_json::Value;
@@ -1094,7 +1095,6 @@ pub fn dev_one(repo: &Repo, opts: &Opts, id: Option<&str>, last_id: &mut Option<
         // research is on, but the researcher is on other work: the worker does not wait
         log(&format!("{}: {id}: no brief yet; the worker goes without rather than wait for {}", repo.slug, repo.research_model));
     }
-    let prompt = dev_prompt(&json, &branch, &repo.base, resumed, &repo.gate, &rebase, &research, &hist, "");
     // A worker session of this bead still running on the server since the last process
     // (recover found it): the round is that session, waited on, not a new one — and the
     // worktree it works in is left alone. Without the worktree there is nothing to rejoin.
@@ -1123,7 +1123,7 @@ pub fn dev_one(repo: &Repo, opts: &Opts, id: Option<&str>, last_id: &mut Option<
             if review_model.is_empty() { "none" } else { &review_model },
             repo.merge
         );
-        println!("{prompt}");
+        println!("{}", dev_prompt(&json, &branch, &repo.base, resumed, &repo.gate, &rebase, &research, &hist, ""));
         return Pass::Nothing;
     }
     *last_id = Some(id.clone());
@@ -1172,6 +1172,25 @@ pub fn dev_one(repo: &Repo, opts: &Opts, id: Option<&str>, last_id: &mut Option<
             }
         }
     }
+
+    // A foreign target's worktree has none of the beads repo's own skills (docs/design-
+    // targets.md "House rules travel"): the default target is the beads repo itself, so
+    // there is nothing to link. `.agents/` goes in the target checkout's shared exclude
+    // file (worktrees share `--git-common-dir`), never committed to its tree.
+    let house = if repo.target.is_empty() {
+        String::new()
+    } else {
+        let linked = link_skills(&repo.beads.join(".agents").join("skills"), &wt);
+        if linked.is_empty() {
+            String::new()
+        } else {
+            let common_dir = git_out(&wt, &["rev-parse", "--path-format=absolute", "--git-common-dir"]).trim().to_string();
+            ensure_line(&std::path::PathBuf::from(common_dir).join("info").join("exclude"), ".agents/");
+            log(&format!("{}: {id}: house rules linked: {}", repo.slug, linked.join(", ")));
+            repo.beads.to_string_lossy().to_string()
+        }
+    };
+    let prompt = dev_prompt(&json, &branch, &repo.base, resumed, &repo.gate, &rebase, &research, &hist, &house);
 
     let title_w = format!("{id} · worker · round {}", n + 1);
     let worker_log = std::path::PathBuf::from(format!("{}.worker.jsonl", logf.display()));

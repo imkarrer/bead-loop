@@ -228,7 +228,6 @@ pub fn sleep_secs(s: f64) {
 
 /// Link skills from a source directory to a worktree, creating symlinks for directories
 /// that don't already exist in the target location. Returns the names of linked skills.
-#[cfg_attr(not(test), allow(dead_code))]
 pub fn link_skills(from: &Path, wt: &Path) -> Vec<String> {
     let mut linked = Vec::new();
 
@@ -263,7 +262,6 @@ pub fn link_skills(from: &Path, wt: &Path) -> Vec<String> {
 
 /// Ensure a line exists in a file, appending it if not present.
 /// Creates the parent directory and file if they don't exist.
-#[cfg_attr(not(test), allow(dead_code))]
 pub fn ensure_line(file: &Path, line: &str) {
     if let Some(parent) = file.parent() {
         let _ = std::fs::create_dir_all(parent);

@@ -1268,6 +1268,33 @@ case_target() {
   assert_nofile "$BEAD_LOOP_STATE/repo/inflight/t-3" "inflight cleared"
   assert_nofile "$BEAD_LOOP_STATE/repo/target/t-3" "target/t-3 removed with inflight/t-3"
 }
+case_target_skills() {
+  # docs/design-targets.md "House rules travel": a target's worktree has none of the
+  # beads repo's own skills, so they are linked in — the target's own skill of the same
+  # name kept, not replaced — .agents/ goes in the target checkout's shared exclude
+  # (once, not once per round), and the worker's prompt says where the skills came from.
+  setup_target
+  mkdir -p "$REPO/.agents/skills/house"
+  echo "fidelity rules" >"$REPO/.agents/skills/house/SKILL.md"
+  tmp=$(mktemp -d)
+  git clone -q "file://$T/target-upstream.git" "$tmp" 2>/dev/null
+  mkdir -p "$tmp/.agents/skills/own"
+  echo "own rules" >"$tmp/.agents/skills/own/SKILL.md"
+  git -C "$tmp" add -A && git -C "$tmp" commit -qm skills && git -C "$tmp" push -q origin main
+  rm -rf "$tmp"
+  printf 'reject\napprove\n' >"$TEST_CTRL/review"
+  sup work "$REPO" t-3
+  assert_eq "$(calls)" "bead-worker bead-reviewer" "round 1: worked, then rejected"
+  assert_match "$(cat "$TEST_CTRL/prompt.1")" "House rules" "the house-rules sentence names where the skills came from"
+  assert_eq "$(cat "$TEST_CTRL/status.1")" "" "git status was clean in the worktree when the worker ran"
+  [ -L "$BEAD_LOOP_STATE/repo/wt/t-3/.agents/skills/house" ] && ok || bad "the beads repo's skill is linked in"
+  [ ! -L "$BEAD_LOOP_STATE/repo/wt/t-3/.agents/skills/own" ] && ok || bad "the target's own skill is not replaced by a link"
+  assert_match "$(cat "$BEAD_LOOP_STATE/repo/wt/t-3/.agents/skills/own/SKILL.md")" "own rules" "the target's own skill is untouched"
+  assert_eq "$(grep -c '^\.agents/$' "$T/target/.git/info/exclude")" 1 "exclude carries .agents/ once after round 1"
+  sup work "$REPO" t-3
+  assert_eq "$(calls)" "bead-worker bead-reviewer bead-worker bead-reviewer" "round 2: fixed and approved"
+  assert_eq "$(grep -c '^\.agents/$' "$T/target/.git/info/exclude")" 1 "exclude still carries .agents/ once across two rounds"
+}
 case_target_external_merge_mode() {
   # The repo merges on green (auto); its target t is merged by the maintainer (external).
   # The merge row carries the PR's own mode, so the page (prChips reads p.merge_mode, not
