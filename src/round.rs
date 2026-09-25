@@ -254,6 +254,7 @@ pub fn needs_research(repo: &Repo, id: &str) -> bool {
 fn pick(repo: &Repo, which: &str, lane: Option<&LaneSpec>) -> Option<(String, bool)> {
     let queue = if which == "dev" { dev_queue(repo) } else { review_queue(repo) };
     let mut skipped_claude = 0;
+    let mut waiting_for = String::new();
     let mut pick = None;
     // a bead with no brief this worker lane may take when it finds nothing better
     let mut unresearched = None;
@@ -269,11 +270,11 @@ fn pick(repo: &Repo, which: &str, lane: Option<&LaneSpec>) -> Option<(String, bo
         if which == "dev" && needs_research(repo, &id) {
             if let Some(st) = repo.stage_for(n) {
                 let rm = &repo.research_model;
-                if lane.map(|l| l.takes(rm)).unwrap_or(true) && runnable(rm) {
+                if lane.map(|l| l.takes(rm)).unwrap_or(true) && runnable(repo, rm) {
                     pick = Some((id, true));
                     break;
                 }
-                if unresearched.is_none() && lane.map(|l| l.takes(&st.model)).unwrap_or(true) && runnable(&st.model) {
+                if unresearched.is_none() && lane.map(|l| l.takes(&st.model)).unwrap_or(true) && runnable(repo, &st.model) {
                     unresearched = Some(id);
                 }
                 continue;
@@ -312,17 +313,15 @@ fn pick(repo: &Repo, which: &str, lane: Option<&LaneSpec>) -> Option<(String, bo
                 continue;
             }
         }
-        if runnable(&model) {
+        if runnable(repo, &model) {
             pick = Some((id, false));
             break;
         }
+        waiting_for = crate::harness::why_not(repo, &model);
         skipped_claude += 1;
     }
     if skipped_claude > 0 {
-        log(&format!(
-            "{}: {which}: {skipped_claude} bead(s) wait for Claude — it is signed out on this box (claude auth login)",
-            repo.slug
-        ));
+        log(&format!("{}: {which}: {skipped_claude} bead(s) wait for {waiting_for}", repo.slug));
     }
     pick.or(unresearched.map(|id| (id, false)))
 }
@@ -886,7 +885,7 @@ pub fn dev_one(repo: &Repo, opts: &Opts, id: Option<&str>, last_id: &mut Option<
     // The reservation holds the bead to this round (research included) until it returns.
     let (id, research, _mine) = match id {
         Some(i) => match reserve(repo, i) {
-            Some(r) => (i.to_string(), needs_research(repo, i) && runnable(&repo.research_model), r),
+            Some(r) => (i.to_string(), needs_research(repo, i) && runnable(repo, &repo.research_model), r),
             None => return Pass::Nothing,
         },
         None => {
@@ -1016,8 +1015,12 @@ pub fn dev_one(repo: &Repo, opts: &Opts, id: Option<&str>, last_id: &mut Option<
             } else if let Some(last) = repo.stage_for(repo.last_stage_start()) {
                 model = opts.model_flag.clone().unwrap_or(last.model);
             }
-            if !runnable(&model) {
-                log(&format!("{}: {id}: conflict round needs {model}, which cannot run now (Claude signed out); waiting", repo.slug));
+            if !runnable(repo, &model) {
+                log(&format!(
+                    "{}: {id}: conflict round needs {model}, which cannot run now ({}); waiting",
+                    repo.slug,
+                    crate::harness::why_not(repo, &model)
+                ));
                 bd_status(repo, &id, "open");
                 return Pass::Nothing;
             }
