@@ -16,6 +16,8 @@
 //!                                         queue now, ahead of its failure count
 //!   bead-supervisor answer REPO ID TEXT   your answer to a bead in the human queue: noted on the bead, back in
 //!                                         the dev queue at the stage it stopped on
+//!   bead-supervisor publish REPO ID [--title T] [--body-file F]   open the PR an open_pr = "ask" round
+//!                                         left in proposed/ID — its title/body, or these instead
 //!   bead-supervisor open REPO ID          an interactive Claude Code session in the bead's worktree, the bead,
 //!                                         its history and the open question in the first prompt
 //!   bead-supervisor reconcile [REPO...]   only the merge queue: merge green, close beads, send red back to dev
@@ -112,8 +114,8 @@ fn main() {
     // One supervisor at a time for anything that runs rounds or the merge queue; the
     // read-only and the one-bead commands are free.
     let _lock = match cmd.as_str() {
-        "status" | "stats" | "log" | "watch" | "lane" | "pause" | "resume" | "escalate" | "answer" | "open" | "priority" | "wake"
-        | "doctor" => None,
+        "status" | "stats" | "log" | "watch" | "lane" | "pause" | "resume" | "escalate" | "answer" | "open" | "publish" | "priority"
+        | "wake" | "doctor" => None,
         _ => match lanes::try_lock(&state_dir.join("lock")) {
             Some(l) => Some(l),
             None => {
@@ -191,6 +193,28 @@ fn main() {
             let repo = repo_at(0);
             let id = rest.get(1).cloned().unwrap_or_else(|| die("open REPO ID"));
             human::open_bead(&repo, &id);
+        }
+        "publish" => {
+            let repo = repo_at(0);
+            let id = rest.get(1).cloned().unwrap_or_else(|| die("publish REPO ID [--title T] [--body-file F]"));
+            let mut title = None;
+            let mut body_file = None;
+            let mut i = 2;
+            while i < rest.len() {
+                match rest[i].as_str() {
+                    "--title" => {
+                        i += 1;
+                        title = Some(rest.get(i).cloned().unwrap_or_else(|| die("--title needs a value")));
+                    }
+                    "--body-file" => {
+                        i += 1;
+                        body_file = Some(rest.get(i).cloned().unwrap_or_else(|| die("--body-file needs a value")));
+                    }
+                    other => die(&format!("publish: unknown flag {other}")),
+                }
+                i += 1;
+            }
+            human::publish(&repo, &id, title, body_file);
         }
         "reconcile" => {
             for r in &repos {
