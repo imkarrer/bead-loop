@@ -6,6 +6,7 @@
 #   review      one line per round: approve | reject | hang | crash | server-error
 #   brief       shape (default: WHAT HAPPENED / WHY / QUESTION) | plain (no shape) | crash
 #   postmortem  plain (three numbered lines, default) | crash | server-error
+#   precheck    one line per round: pass | sendback | crash | server-error
 #   slow        seconds every run takes before it answers: a round in flight while the test pauses its lane
 #   calls       appended: "<agent> <dir> <model> <attach>" per run, prompt saved to prompt.<n>
 set -euo pipefail
@@ -67,5 +68,14 @@ case $agent in
       crash) echo "connection refused" >&2; exit 7 ;;
       server-error) server_error ;;
       *) say "$(printf "1. Tried to edit work.txt.\n2. Stopped without a commit.\n3. Run git status in the worktree first.")" ;;
+    esac ;;
+  bead-prechecker)
+    round=$(grep -c '^bead-prechecker' "$TEST_CTRL/calls")
+    v=$(sed -n "${round}p" "$TEST_CTRL/precheck"); [ -n "$v" ] || v=$(tail -1 "$TEST_CTRL/precheck")
+    case $v in
+      pass) say "PASS: DONE line quotes the gate; files as named" ;;
+      crash) echo "connection refused" >&2; exit 7 ;;
+      server-error) server_error ;;
+      *) say "$(printf "SEND BACK: lib/y.ts is not a file the bead names\nFor the worker:\n- What is wrong: lib/y.ts is not named in DESCRIPTION\n- What to do: revert lib/y.ts, touch only the named files\n- How to check: git diff --stat shows only the named files")" ;;
     esac ;;
 esac

@@ -463,9 +463,6 @@ pub fn reject_block(text: &str) -> String {
 
 /// The pre-checker's prompt: the bead, the worker's report, the diff against the base —
 /// uncut, unlike the reviewer's (the caller cuts it, per bead .2).
-// No caller yet: the round does not send anything to the pre-checker until a later bead
-// wires it in.
-#[allow(dead_code)]
 pub fn precheck_prompt(json: &Value, report: &str, stat: &str, diff: &str) -> String {
     format!(
         "<bead>\n{}\n</bead>\n\n<worker-report>\n{report}\n</worker-report>\n\n<diff>\n{stat}{diff}\n</diff>\n\nEnd with PASS: <what you checked> on one line, or SEND BACK: <one line> followed by the 'For the worker:' block your instructions describe.",
@@ -476,7 +473,6 @@ pub fn precheck_prompt(json: &Value, report: &str, stat: &str, diff: &str) -> St
 /// The pre-checker's verdict: a `PASS:` line passes, a `SEND BACK:` line (and everything
 /// under it, as `reject_block` takes it) sends back; if both appear, SEND BACK wins — the
 /// model changed its mind downward. Neither line is `Unparsed`.
-#[allow(dead_code)]
 #[derive(Clone, Debug, PartialEq)]
 pub enum Precheck {
     Pass,
@@ -484,7 +480,6 @@ pub enum Precheck {
     Unparsed,
 }
 
-#[allow(dead_code)]
 pub fn precheck_verdict(text: &str) -> Precheck {
     if text.lines().any(|l| l.starts_with("SEND BACK:")) {
         let mut out = Vec::new();
@@ -758,6 +753,50 @@ pub fn dev_one(repo: &Repo, opts: &Opts, id: Option<&str>, last_id: &mut Option<
 
     // Into the review queue, with the worker's last words for the reviewer.
     let done = last_line_starting(&final_text, "DONE:").unwrap_or_default();
+    if !repo.precheck_model.is_empty() {
+        // The precheck never blocks a round and never holds a bead: a skip falls through
+        // to the review queue exactly as a bare `precheck_model` would.
+        let range = format!("{}/{}...HEAD", repo.base_remote, repo.base);
+        let stat = git_out(&wt, &["diff", &range, "--stat"]);
+        let diff = git_out(&wt, &["diff", &range]);
+        let diff = cut_bytes(&diff, 24000);
+        let precheck_log = std::path::PathBuf::from(format!("{}.precheck.jsonl", logf.display()));
+        let pc = run_agent(
+            repo,
+            "bead-prechecker",
+            &repo.precheck_model,
+            &wt,
+            &precheck_log,
+            &precheck_prompt(&json, &done, &stat, diff),
+            &format!("{id} · precheck"),
+            180,
+            Some(&json),
+        );
+        cut_short(repo, &id);
+        let pm = &repo.precheck_model;
+        if pc.empty || pc.rc != 0 {
+            let why = if pc.empty { "no answer".to_string() } else { format!("exited {}", pc.rc) };
+            log(&format!("{}: {id}: precheck ({pm}) skipped: {why}", repo.slug));
+        } else {
+            match precheck_verdict(&pc.text) {
+                Precheck::Pass => log(&format!("{}: {id}: precheck ({pm}): PASS", repo.slug)),
+                Precheck::Unparsed => log(&format!("{}: {id}: precheck ({pm}) skipped: no verdict line", repo.slug)),
+                Precheck::SendBack(block) => {
+                    send_back(
+                        repo,
+                        &id,
+                        &wt,
+                        false,
+                        &format!("precheck ({pm}) sent back:\n{}", cut_bytes(&block, 4000)),
+                        &model,
+                        st.last,
+                        Some(&logf),
+                    );
+                    return Pass::Worked;
+                }
+            }
+        }
+    }
     write_file(&repo.review_path(&id), &format!("{done}\n"));
     repo.release(&id);
     repo.lane_clear(lane_name);
