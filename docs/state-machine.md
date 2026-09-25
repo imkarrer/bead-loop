@@ -63,6 +63,7 @@ The loop keeps no state of its own beyond files; a bead's state is a function of
 | `$RS/failures/ID` | the failure count → the stage (`stage_for`); `.rounds.jsonl` the history, one record per send-back |
 | `$RS/review/ID` | in the review queue (holds the worker's last line) |
 | `$RS/inflight/ID` | in the merge queue (holds the PR url); beside it `.ID.adopted`, `.ID.red`, `.ID.nocheck`, `.ID.fixing`, `.ID.conflict` |
+| `$RS/proposed/ID` | ready to publish: the PR's title, body, head, base, pr_repo and compare url, as JSON; counts toward `max_inflight` |
 | `$RS/held/ID` | the bead waits on something outside the loop; the file says what |
 | `$RS/parked/ID` | the loop's record of a parking: the reason, the stage, the question, the brief |
 | `$RS/lane.NAME` | the bead the lane NAME is on (`dev`, `review`, `claude`; or the `[[lanes]]` names) |
@@ -109,6 +110,7 @@ stateDiagram-v2
 | **review** | `review/ID`, `wt/ID`, bd `in_progress` | a lane with the reviewer role whose models match the stage's reviewer |
 | **reviewing** | `review/ID` + `lane.NAME = ID` | that lane: to merge, or back to ready |
 | **merge** | `inflight/ID` + PR OPEN, bd `in_progress` | the merge watcher: closed, back to ready, or human |
+| **ready to publish** | `proposed/ID` (the branch pushed, no PR: the target's `open_pr = "ask"`), bd `in_progress` | you: `bead-supervisor publish REPO ID` or Open PR on the page, which opens the PR and moves it to **merge** |
 | **human** | bd `in_progress`, no marker, no worktree (*parked*; `parked/ID` when the loop did it) — or any queue state with `held/ID` | you: answer, reopen, escalate; or, held, the world changing |
 | **closed** | bd `closed` | terminal |
 
@@ -164,6 +166,7 @@ Every row is a case in `test/run.sh`.
 | Reviewer `REJECT:` (any verdict that is not `APPROVE:`) | note with the rejection, +1 failure; dev queue — the worker fixes in place | kept |
 | The same `REJECT:` twice running (first REJECT line equal, whitespace aside) | note with the rejection and "the same REJECT twice: escalated to <worker>", the failure count jumps to the next stage with a different worker (parked as exhausted if there is none); dev queue | kept |
 | Reviewer `APPROVE:` | in_progress, comment with the url; merge queue | pushed; PR opened, or the existing one updated |
+| Reviewer `APPROVE:` under `open_pr = "ask"` | in_progress, comment with the compare url; ready to publish | pushed; no PR until you publish |
 | Push or `gh pr create` refused | **held** in the review queue with gh's words | pushed / not |
 | CI green, `merge = "auto"` | closed with the PR url | squash-merged by the watcher, branch deleted |
 | CI green, `merge = "pipeline"` | closed once the pipeline has merged; **held** if it has not after 30 min | labelled `automerge` at open; the pipeline merges |
