@@ -5,8 +5,8 @@
 //! parked. `hold`: the round could not happen (the world, not the model) — no failure,
 //! the bead waits in its queue with the reason, the lane moves on.
 //!
-//! The log lines and the notes are the bash's, word for word: the page and the tests
-//! read them.
+//! The log lines and the notes are the bash's, word for word (a note's body now indented
+//! under its first line, shell.rs `note_entry`): the page and the tests read them.
 use crate::config::{LaneSpec, Repo};
 use crate::harness::{abort_sessions, run_agent, runnable, AgentRun};
 use crate::park::{park, record_round, Reason};
@@ -67,8 +67,41 @@ pub fn hold_retry_at(repo: &Repo, id: &str) -> i64 {
     repo.held_since(id) + hold_delay(repo.held_count(id))
 }
 
-/// `render_bead`: the bead as the prompt carries it.
+/// `render_bead`: the bead as a loop prompt carries it, with the notes people wrote
+/// (`people_notes`) — the loop's own record reaches the prompt from the rounds, not here.
 pub fn render_bead(json: &Value) -> String {
+    render_bead_with(json, false)
+}
+
+/// The bead with its notes whole, the loop's lines and all: for `open`, the hand session
+/// whose owner reads the bead's story in it.
+pub fn render_bead_whole(json: &Value) -> String {
+    render_bead_with(json, true)
+}
+
+/// The bead's notes without the loop's own lines. The loop notes each event as one entry:
+/// a `bead-loop` line, any body indented under it (shell.rs `bd_note`). Every other line —
+/// the filer's notes, an operator's answer, a note appended by hand — is people's and
+/// stays, and so does one entry of the loop's: a parking's question, which the answer
+/// under it replies to. (An entry from before the body was indented reads, past its first
+/// line, as people's.)
+pub fn people_notes(notes: &str) -> String {
+    let mut keep = true;
+    let mut out = Vec::new();
+    for l in notes.lines() {
+        if let Some(rest) = l.strip_prefix("bead-loop").filter(|r| r.starts_with([' ', ':'])) {
+            keep = rest.trim_start().split_once(": ").is_some_and(|(_, what)| what.starts_with("parked ("));
+        } else if !(l.is_empty() || l.starts_with([' ', '\t'])) {
+            keep = true;
+        }
+        if keep {
+            out.push(l);
+        }
+    }
+    out.join("\n").trim_matches('\n').to_string()
+}
+
+fn render_bead_with(json: &Value, whole_notes: bool) -> String {
     let b = json.get(0).cloned().unwrap_or(Value::Null);
     let s = |k: &str| b.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
     let prio = match b.get("priority") {
@@ -97,8 +130,9 @@ pub fn render_bead(json: &Value) -> String {
     if !s("design").is_empty() {
         out.push_str(&format!("\n\nDESIGN:\n{}", s("design")));
     }
-    if !s("notes").is_empty() {
-        out.push_str(&format!("\n\nNOTES:\n{}", s("notes")));
+    let notes = if whole_notes { s("notes") } else { people_notes(&s("notes")) };
+    if !notes.is_empty() {
+        out.push_str(&format!("\n\nNOTES:\n{notes}"));
     }
     out
 }
@@ -570,16 +604,23 @@ pub fn rebase_order(base_remote: &str, base: &str) -> String {
 }
 
 /// The researcher's prompt: the bead and the base; after a send-back under `research =
-/// "every"`, the brief the worker had and the note it was sent back with, to refine.
-pub fn research_prompt(json: &Value, base: &str, previous: &str, last_note: &str) -> String {
-    let refine = if previous.is_empty() {
-        String::new()
-    } else {
+/// "every"`, the brief the worker had and the note it was sent back with (`hist`, the
+/// last round), to refine; with no brief to refine but rounds behind the bead (its brief
+/// cleared at a parking), their notes (`hist`, the last three).
+pub fn research_prompt(json: &Value, base: &str, previous: &str, hist: &str) -> String {
+    let refine = if !previous.is_empty() {
         format!(
             "\n\nA worker already tried this bead with the brief under <previous-research> and was sent back with the note under <send-back>. Refine the brief so the next round does not fail the same way; keep what was right, do not start over.\n\n<previous-research>\n{}\n</previous-research>\n\n<send-back>\n{}\n</send-back>",
             previous.trim_end(),
-            last_note.trim_end()
+            hist.trim_end()
         )
+    } else if !hist.is_empty() {
+        format!(
+            "\n\nEarlier rounds on this bead were sent back; their notes follow. Brief the next worker so it does not fail the same way.\n\n<previous-attempts>\n{}\n</previous-attempts>",
+            hist.trim_end()
+        )
+    } else {
+        String::new()
     };
     format!(
         "Research the bead below in this repository, a fresh worktree of {base}, for the smaller model that will implement it next.\n\n<bead>\n{}\n</bead>{refine}\n\nAnswer under the four headings Files / Shape / Check / Pitfalls, in at most sixty lines, every path from the repository root as it is on disk. If a claim in the bead is false and it cannot be done as written, end instead with one line: BLOCKED: <the false claim, with file:line>.",
@@ -676,11 +717,25 @@ fn postmortem(repo: &Repo, id: &str, wt: &Path, json: &Value, worker_text: &str,
     format!("\nPost-mortem ({}):\n{}", repo.precheck_model, cut_bytes(&r.text, 1500))
 }
 
-/// The reviewer's prompt: the bead, the worker's report, the diff against the base.
-pub fn review_prompt(json: &Value, base: &str, report: &str, stat: &str, diff: &str) -> String {
+/// The reviewer's prompt: the bead, the note the last round was sent back with, the
+/// worker's report, the diff against the base.
+pub fn review_prompt(json: &Value, base: &str, last: &str, report: &str, stat: &str, diff: &str) -> String {
     format!(
-        "Review the commit(s) on this branch for the bead below. The diff against {base} is under <diff>; read any file you need for context.\n\n<bead>\n{}\n</bead>\n\n<worker-report>\n{report}\n</worker-report>\n\n<diff>\n{stat}{diff}\n</diff>\n\nEnd with APPROVE: <what you checked> on one line, or REJECT: <file:line, what is wrong> followed by the 'For the worker:' block your instructions describe — the worker acts on that block alone.",
-        render_bead(json)
+        "Review the commit(s) on this branch for the bead below. The diff against {base} is under <diff>; read any file you need for context.\n\n<bead>\n{}\n</bead>{}\n\n<worker-report>\n{report}\n</worker-report>\n\n<diff>\n{stat}{diff}\n</diff>\n\nEnd with APPROVE: <what you checked> on one line, or REJECT: <file:line, what is wrong> followed by the 'For the worker:' block your instructions describe — the worker acts on that block alone.",
+        render_bead(json),
+        last_round_block(last)
+    )
+}
+
+/// The note the last round was sent back with (park.rs `last_round`), for the reviewer
+/// and the pre-checker to hold the diff to beside the bead; nothing on a first round.
+pub fn last_round_block(last: &str) -> String {
+    if last.trim().is_empty() {
+        return String::new();
+    }
+    format!(
+        "\n\nAn earlier round on this branch was sent back; the note it was sent back with follows. Check that the diff does what it asked as well as what the bead asks: a work order's What to do done, its How to check holding, its Leave alone untouched.\n\n<last-round>\n{}\n</last-round>",
+        cut_bytes(last.trim_end(), 4000)
     )
 }
 
@@ -700,12 +755,14 @@ pub fn reject_block(text: &str) -> String {
     out.join("\n")
 }
 
-/// The pre-checker's prompt: the bead, the worker's report, the diff against the base —
-/// uncut, unlike the reviewer's (the caller cuts it, per bead .2).
-pub fn precheck_prompt(json: &Value, report: &str, stat: &str, diff: &str) -> String {
+/// The pre-checker's prompt: the bead, the note the last round was sent back with, the
+/// worker's report, the diff against the base — uncut, unlike the reviewer's (the caller
+/// cuts it, per bead .2).
+pub fn precheck_prompt(json: &Value, last: &str, report: &str, stat: &str, diff: &str) -> String {
     format!(
-        "<bead>\n{}\n</bead>\n\n<worker-report>\n{report}\n</worker-report>\n\n<diff>\n{stat}{diff}\n</diff>\n\nEnd with PASS: <what you checked> on one line, or SEND BACK: <one line> followed by the 'For the worker:' block your instructions describe.",
-        render_bead(json)
+        "<bead>\n{}\n</bead>{}\n\n<worker-report>\n{report}\n</worker-report>\n\n<diff>\n{stat}{diff}\n</diff>\n\nEnd with PASS: <what you checked> on one line, or SEND BACK: <one line> followed by the 'For the worker:' block your instructions describe.",
+        render_bead(json),
+        last_round_block(last)
     )
 }
 
@@ -783,7 +840,7 @@ fn research_leftover(repo: &Repo, branch: &str) -> bool {
 
 /// `research_one ID`: the research round — the bead claimed, a worktree on the base (or
 /// its branch after a send-back), the researcher reads and answers. A brief goes to
-/// `research/ID` and the bead back to the dev queue for its worker; `BLOCKED:` parks it
+/// `beads/ID/brief` and the bead back to the dev queue for its worker; `BLOCKED:` parks it
 /// with the researcher's line as the question; nothing from the model holds it. Research
 /// never counts a failure. A bead labelled `harness:aider` was scoped to its files by whoever
 /// filed it: no round, an empty brief, straight to the worker. True when the worker round
@@ -830,8 +887,9 @@ fn research_one(repo: &Repo, opts: &Opts, id: &str, lane: Option<&LaneSpec>, las
         resumed = false;
     }
     let previous = read_to_string(&repo.research_prev_path(id)).unwrap_or_default();
-    let last_note = if previous.is_empty() { String::new() } else { crate::park::history(repo, id, 1) };
-    let prompt = research_prompt(&json, &repo.base, &previous, &last_note);
+    // the note to refine the brief by; with no brief to refine, the rounds behind the bead
+    let hist = crate::park::history(repo, id, if previous.is_empty() { 3 } else { 1 });
+    let prompt = research_prompt(&json, &repo.base, &previous, &hist);
     // a research round holds a lane the reviewer may share: its own, shorter clock
     let timeout = st.timeout.min(repo.research_timeout);
     log(&format!(
@@ -1294,7 +1352,7 @@ pub fn dev_one(repo: &Repo, opts: &Opts, id: Option<&str>, last_id: &mut Option<
             &repo.precheck_model,
             &wt,
             &precheck_log,
-            &precheck_prompt(&json, &done, &stat, diff),
+            &precheck_prompt(&json, &crate::park::last_round(repo, &id), &done, &stat, diff),
             &format!("{id} · precheck"),
             180,
             Some(&json),
@@ -1424,7 +1482,7 @@ pub fn review_one(repo: &Repo, opts: &Opts, id: Option<&str>, lane: Option<&Lane
                 let stat = git_out(&wt, &["diff", &range, "--stat"]);
                 let diff = git_out(&wt, &["diff", &range]);
                 let diff = cut_bytes(&diff, 60000);
-                let prompt = review_prompt(&json, &repo.base, &final_text, &stat, diff);
+                let prompt = review_prompt(&json, &repo.base, &crate::park::last_round(repo, &id), &final_text, &stat, diff);
                 run_agent(
                     repo,
                     "bead-reviewer",
@@ -1627,6 +1685,47 @@ mod tests {
         assert!(s.contains("\n\nDESIGN:\nlike so"));
         assert!(s.ends_with("\n\nNOTES:\noperator 2026: use the other flag"), "the notes come last, so the next round reads the answer");
         assert!(render_bead(&serde_json::json!([])).starts_with("id: \ntitle: "), "an empty array renders empty fields");
+        let logged: Value = serde_json::json!([{"id":"t-1","title":"T","description":"D",
+            "notes":"\nbead-loop 2026-09-18T17:05+00:00: research (x) wrote the brief (9 lines)"}]);
+        assert!(!render_bead(&logged).contains("NOTES:"), "only the loop's lines: no NOTES at all");
+        assert!(
+            render_bead_whole(&logged).ends_with("NOTES:\n\nbead-loop 2026-09-18T17:05+00:00: research (x) wrote the brief (9 lines)"),
+            "open's is whole"
+        );
+    }
+    #[test]
+    fn people_notes_leave_the_loops_lines_out() {
+        let notes = [
+            "Filed with: the flag is --dry-run",
+            "  (checked in cli.ts)",
+            "bead-loop round 1 (stub/worker) 2026-09-18T17:05+00:00: review (stub/reviewer) rejected:",
+            "  REJECT: x.ts:1 wrong",
+            "  ",
+            "  For the worker:",
+            "  - What to do: y",
+            "bead-loop 2026-09-18T17:06+00:00: round interrupted by a stop; back in the dev queue, no failure charged",
+            "a note appended by hand",
+            "bead-loop: CI red on https://github.com/example/repo/pull/7 (ci); PR left open",
+            "bead-loop 2026-09-18T17:07+00:00: parked (stages exhausted after 3 rounds). Which flag?",
+            "  Or both?",
+            "operator 2026-09-18T18:00+00:00: --dry-run",
+        ]
+        .join("\n");
+        assert_eq!(
+            people_notes(&format!("\n{notes}")),
+            [
+                "Filed with: the flag is --dry-run",
+                "  (checked in cli.ts)",
+                "a note appended by hand",
+                "bead-loop 2026-09-18T17:07+00:00: parked (stages exhausted after 3 rounds). Which flag?",
+                "  Or both?",
+                "operator 2026-09-18T18:00+00:00: --dry-run",
+            ]
+            .join("\n"),
+            "people's lines, and the question the answer replies to"
+        );
+        assert_eq!(people_notes("bead-loop 2026-09-18T17:05+00:00: held, no failure charged: x"), "");
+        assert_eq!(people_notes("bead-loopy is a word here"), "bead-loopy is a word here", "not the loop's prefix");
     }
     #[test]
     fn harness_label_picks_the_worker_harness() {
@@ -1687,6 +1786,11 @@ mod tests {
         assert!(again.contains("<send-back>\nround 1 (stub/worker): worker made no commit\n</send-back>"));
         assert!(again.contains("Refine the brief") && again.contains("do not start over"));
         assert!(again.find("</bead>").unwrap() < again.find("<previous-research>").unwrap(), "the bead first");
+        assert!(!again.contains("<previous-attempts>"), "refining: the one note, under <send-back>");
+        let hist = "round 1 (stub/worker): worker made no commit\nround 2 (stub/worker): REJECT: x";
+        let after_park = research_prompt(&j, "main", "", hist);
+        assert!(after_park.contains(&format!("<previous-attempts>\n{hist}\n</previous-attempts>")), "no brief to refine: the rounds");
+        assert!(!after_park.contains("<previous-research>"));
     }
     #[test]
     fn dev_prompt_carries_the_research_before_the_history() {
@@ -1727,11 +1831,17 @@ mod tests {
     #[test]
     fn review_prompt_carries_report_and_diff() {
         let j: Value = serde_json::json!([{"id":"t-1","title":"T","description":"D"}]);
-        let p = review_prompt(&j, "main", "DONE: did it", " work.txt | 1 +\n", "diff --git a/work.txt");
+        let p = review_prompt(&j, "main", "", "DONE: did it", " work.txt | 1 +\n", "diff --git a/work.txt");
         assert!(p.contains("The diff against main is under <diff>"));
         assert!(p.contains("<worker-report>\nDONE: did it\n</worker-report>"));
         assert!(p.contains("<diff>\n work.txt | 1 +\ndiff --git a/work.txt\n</diff>"), "stat, then the diff");
         assert!(p.ends_with("the worker acts on that block alone."));
+        assert!(!p.contains("<last-round>"), "a first round: no earlier note");
+        let last = "round 1 (stub/worker):\nreview (stub/reviewer) rejected:\nREJECT: x.ts:1 wrong\n\nFor the worker:\n- How to check: grep -c fixed x.ts";
+        let again = review_prompt(&j, "main", last, "DONE: did it", "", "diff");
+        assert!(again.contains(&format!("<last-round>\n{last}\n</last-round>")), "the note whole, newlines kept");
+        assert!(again.find("</bead>").unwrap() < again.find("<last-round>").unwrap(), "after the bead");
+        assert!(again.find("</last-round>").unwrap() < again.find("<worker-report>").unwrap(), "before the report");
     }
     #[test]
     fn the_whole_rejection_travels() {
@@ -1745,8 +1855,11 @@ mod tests {
     #[test]
     fn precheck_prompt_carries_bead_report_and_diff() {
         let j: Value = serde_json::json!([{"id":"t-1","title":"T","description":"D"}]);
-        let p = precheck_prompt(&j, "DONE: did it", " work.txt | 1 +\n", "diff --git a/work.txt");
+        let p = precheck_prompt(&j, "", "DONE: did it", " work.txt | 1 +\n", "diff --git a/work.txt");
         assert!(p.contains("<bead>\nid: t-1"));
+        assert!(!p.contains("<last-round>"));
+        assert!(precheck_prompt(&j, "round 1 (x):\nCI red on u: ci", "", "", "")
+            .contains("<last-round>\nround 1 (x):\nCI red on u: ci\n</last-round>"));
         assert!(p.contains("<worker-report>\nDONE: did it\n</worker-report>"));
         assert!(p.contains("<diff>\n work.txt | 1 +\ndiff --git a/work.txt\n</diff>"), "stat, then the diff");
         assert!(p.ends_with("the 'For the worker:' block your instructions describe."));

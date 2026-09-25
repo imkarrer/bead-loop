@@ -3,7 +3,7 @@
 use crate::config::Repo;
 use crate::harness::runnable;
 use crate::merge::hand_to_pipeline;
-use crate::round::{create_pr, render_bead};
+use crate::round::{create_pr, render_bead_whole};
 use crate::shell::{bd_note, bd_show, bd_status, branch_exists, git, git_must, local_branch_exists};
 use crate::util::{date_iminutes, die, log, read_to_string, write_file};
 
@@ -169,7 +169,7 @@ pub fn open_bead(repo: &Repo, id: &str) -> ! {
     log(&format!("{}: {id}: opening Claude Code in {} on {branch}", repo.slug, wt.display()));
     let prompt = format!(
         "You are working the bead below with its owner, in this worktree, on branch {branch}.{stopped} Read the bead and the notes, then ask what you need to know; commit on this branch when it is done and say so.\n\n<bead>\n{}\n</bead>",
-        render_bead(&json)
+        render_bead_whole(&json)
     );
     use std::os::unix::process::CommandExt;
     let err = crate::util::cmd("claude").arg(&prompt).current_dir(&wt).exec();
