@@ -1177,7 +1177,7 @@ case_claude_signed_out_beads_wait() {
   assert_eq "$(calls)" "" "t-1 left in the queue, no round run"
   assert_match "$(cat "$T/sup.log")" "dev: 1 bead(s) wait for Claude — it is signed out" "said so"
   assert_eq "$(cat "$BEAD_LOOP_STATE/repo/failures/t-1")" 1 "t-1 not charged a failure"
-  assert_eq "$(sup --json status "$REPO" | jq -r '.claude_ok, (.queues.dev | map(.id) | join(" "))' | tr '\n' ' ')" "false t-1 " "status: claude_ok false; t-1 still queued"
+  assert_eq "$(sup --json status "$REPO" | jq -r '.probes.claude.ok, (.queues.dev | map(.id) | join(" "))' | tr '\n' ' ')" "false t-1 " "status: probes.claude.ok false; t-1 still queued"
   # Another bead can still be worked meanwhile.
   jq '. + [{id:"t-2", title:"Second", description:"y", status:"open", priority:3, labels:["delegate:local"]}]' "$BD_STATE/issues.json" >"$BD_STATE/i.tmp" && mv "$BD_STATE/i.tmp" "$BD_STATE/issues.json"
   echo "done" >"$TEST_CTRL/worker"; : >"$TEST_CTRL/calls"; sup --once tick

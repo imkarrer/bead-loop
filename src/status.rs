@@ -3,7 +3,7 @@
 //! worktree with what the attached opencode server has under it. `status` renders it as
 //! text; `--json status` prints it for the web UI. The JSON is the bash's, key for key.
 use crate::config::Repo;
-use crate::harness::claude_ok;
+use crate::harness::probe_of;
 use crate::shell::{bd_in_progress_json, bd_ready_json, curl_get};
 use crate::state::review_queue;
 use crate::util::{base64url, cmd, mtime, now, output, read_to_string, stdout_str};
@@ -353,7 +353,12 @@ pub fn status_json_from(repo: &Repo, open: Value, inprog: Value, specs: &[crate:
         .unwrap_or_default();
     let stages: Vec<Value> =
         repo.stages.iter().map(|s| json!({"worker": s.worker, "reviewer": s.reviewer, "failures": s.failures})).collect();
-    let has_claude = repo.stages.iter().any(|s| s.worker.starts_with("claude/") || s.reviewer.starts_with("claude/"));
+    let mut probes = Map::new();
+    for p in crate::lanes::providers_named_in(repo) {
+        if let Some((ok, why)) = probe_of(repo, &p) {
+            probes.insert(p, json!({"ok": ok, "why": why}));
+        }
+    }
     let priority =
         crate::lanes::priority_repo(&repo.state_dir).map(|p| p == repo.repo || p.to_string_lossy() == repo.slug).unwrap_or(false);
     let targets: Vec<Value> = repo
@@ -370,7 +375,7 @@ pub fn status_json_from(repo: &Repo, open: Value, inprog: Value, specs: &[crate:
         "lanes": lanes,
         "lane_names": lane_names,
         "paused": paused,
-        "claude_ok": if has_claude { json!(claude_ok()) } else { Value::Null },
+        "probes": probes,
         "priority": priority,
         "queues": {"dev": dev, "review": review, "merge": merge},
         "parked": parked,
@@ -806,7 +811,7 @@ mod tests {
         assert_eq!(j["worktrees"][0]["id"], "t-1");
         assert_eq!(j["worktrees"][0]["failures"], 2);
         assert_eq!(j["worktrees"][0]["sessions"], json!([]), "no attach: no server to ask");
-        assert_eq!(j["claude_ok"].is_boolean(), true, "a claude stage: the probe is reported");
+        assert!(j["probes"]["claude"]["ok"].is_boolean(), "a claude stage: its provider's probe is reported");
         assert_eq!(j["max_inflight"], Value::Null, "unlimited prints as null");
         assert_eq!(j["priority"], false);
         assert_eq!(j["paused"], json!({"dev": false, "review": false, "claude": false}), "one flag per lane the loop runs");
