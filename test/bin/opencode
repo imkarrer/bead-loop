@@ -4,7 +4,7 @@
 #               hang | crash | server-error | stall   (what the implementor leaves behind; stall loops
 #               tool_use/compaction events forever, no edit, until the watchdog or a stop kills it)
 #   abort-delay seconds the server takes for the next abort, once (curl stub): the stop's race
-#   review      one line per round: approve | reject | hang | crash | server-error
+#   review      one line per round: approve | reject | reject2 | hang | crash | server-error
 #   brief       shape (default: WHAT HAPPENED / WHY / QUESTION) | plain (no shape) | crash
 #   postmortem  plain (three numbered lines, default) | crash | server-error
 #   precheck    one line per round: pass | sendback | crash | server-error
@@ -60,6 +60,7 @@ case $agent in
       hang) say "reading the diff"; sleep 30 ;;   # a stop or the clock ends it
       crash) echo "connection refused" >&2; exit 7 ;;   # the reviewer's server is down
       server-error) server_error ;;   # the server answered an error before the reviewer ran
+      reject2) say "REJECT: work.txt:2 other, fix it"; say "$(printf "For the worker:\n- What is wrong: work.txt:1 says round 1\n- What to do: append the word fixed\n- How to check: grep -c fixed work.txt prints 1")" ;;
       *) say "REJECT: work.txt:1 wrong, fix it"; say "$(printf "For the worker:\n- What is wrong: work.txt:1 says round 1\n- What to do: append the word fixed\n- How to check: grep -c fixed work.txt prints 1")" ;;
     esac ;;
   bead-briefer)

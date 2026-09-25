@@ -326,7 +326,6 @@ pub fn make_worktree(repo: &Repo, branch: &str, wt: &Path, resumed: bool) -> Res
 
 /// Two round notes are the same REJECT: both start with "review (" and their first
 /// lines starting with "REJECT:", whitespace collapsed, are equal.
-#[cfg_attr(not(test), allow(dead_code))]
 pub fn same_reject(prev: &str, this: &str) -> bool {
     // Check if both notes start with "review ("
     if !prev.starts_with("review (") || !this.starts_with("review (") {
@@ -355,9 +354,22 @@ pub fn same_reject(prev: &str, this: &str) -> bool {
 #[allow(clippy::too_many_arguments)]
 pub fn send_back(repo: &Repo, id: &str, wt: &Path, keep: bool, note: &str, model: &str, last: bool, stem: Option<&Path>) {
     let n = repo.failures_of(id) + 1;
-    log(&format!("{}: {id} round {n} stopped: {}", repo.slug, first_line(note)));
-    bd_note(repo, id, &format!("bead-loop round {n} ({model}) {}: {note}", date_iminutes()));
+    let prev_note = crate::park::rounds(repo, id).last().and_then(|r| r.get("note")).and_then(|v| v.as_str()).map(str::to_string);
+    // The same REJECT twice: skip ahead past whatever's left of the current stage to the
+    // first later stage with a different worker, instead of giving it another try.
+    let escalated = prev_note.filter(|p| same_reject(p, note)).and_then(|_| {
+        let cur = repo.stage_for(n - 1).map(|s| s.model);
+        let steps: u64 = repo.stages.iter().map(|s| s.failures).sum();
+        (0..steps).find_map(|step| {
+            let m = n + step;
+            repo.stage_for(m).filter(|hit| Some(hit.model.clone()) != cur).map(|hit| (m, hit.model))
+        })
+    });
+    let suffix = escalated.as_ref().map(|(_, w)| format!(", the same REJECT twice: escalated to {w}")).unwrap_or_default();
+    log(&format!("{}: {id} round {n} stopped: {}{suffix}", repo.slug, first_line(note)));
+    bd_note(repo, id, &format!("bead-loop round {n} ({model}) {}: {note}{suffix}", date_iminutes()));
     record_round(repo, id, n, model, note, stem);
+    let n = escalated.map(|(m, _)| m).unwrap_or(n);
     repo.set_failures(id, n);
     // Parked: BLOCKED at the last stage (whatever on_exhaust says), or the stages are
     // spent. The brief runs before the worktree goes, so it can see what was tried.
