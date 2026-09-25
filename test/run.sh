@@ -47,6 +47,10 @@ setup() {  # setup [GATE] [MERGE] [REVIEW_MODEL] [EXTRA_TOML]
   git -C "$REPO" add -A && git -C "$REPO" commit -qm base && git -C "$REPO" branch -qM main && git -C "$REPO" push -q -u origin main
   printf 'label = "delegate:local"\nbase = "main"\ngate = \047%s\047\nmerge = "%s"\nreview_model = "%s"\n%s\n' "${1:-true}" "${2:-auto}" "${3-stub/reviewer}" "${4-}" >"$REPO/.bead-loop.toml"
   printf 'model = "stub/worker"\nrepos = ["%s"]\nworker_timeout = 60\n' "$REPO" >"$BEAD_LOOP_CONFIG/config.toml"
+  # The lanes every case was written for — dev (worker rounds), review (reviewer rounds),
+  # claude — spelled out, since without [[lanes]] the loop derives one lane per provider.
+  # A case that brings its own [[lanes]], or is about the derived ones, sets NO_DEFAULT_LANES.
+  [ -n "${NO_DEFAULT_LANES:-}" ] || printf '[[lanes]]\nname = "dev"\nmodels = ["*"]\nexclude = ["claude/*"]\nroles = ["worker"]\n[[lanes]]\nname = "review"\nmodels = ["*"]\nexclude = ["claude/*"]\nroles = ["reviewer"]\n[[lanes]]\nname = "claude"\nmodels = ["claude/*"]\n' >>"$BEAD_LOOP_CONFIG/config.toml"
   jq -n '[{id:"t-1", title:"Do the thing", description:"Edit work.txt", acceptance_criteria:"work.txt exists", status:"open", priority:2, issue_type:"task", labels:["delegate:local"]}]' >"$BD_STATE/issues.json"
   echo "done" >"$TEST_CTRL/worker"; echo approve >"$TEST_CTRL/review"; : >"$TEST_CTRL/calls"
 }
@@ -1037,7 +1041,7 @@ case_pause_mid_round() {
   # A lane that reviews its own worker rounds ([[lanes]] with both roles): paused during
   # the worker round, it does not go on to the bead's reviewer round; the bead waits in
   # the review queue, and the resumed lane reviews it.
-  setup; printf '[[lanes]]\nname = "all"\nmodels = ["*"]\n' >>"$BEAD_LOOP_CONFIG/config.toml"; echo 1 >"$TEST_CTRL/slow"
+  NO_DEFAULT_LANES=1 setup; printf '[[lanes]]\nname = "all"\nmodels = ["*"]\n' >>"$BEAD_LOOP_CONFIG/config.toml"; echo 1 >"$TEST_CTRL/slow"
   setsid "$SUP" --serial tick 2>>"$T/sup.log" & pid=$!
   for _ in $(seq 100); do grep -q '^bead-worker' "$TEST_CTRL/calls" 2>/dev/null && break; sleep 0.1; done
   sup pause all; wait "$pid" || true
@@ -1590,7 +1594,7 @@ case_lanes_from_toml() {
   # [[lanes]] in the global config: a lane per model server, each taking the worker and
   # reviewer rounds of its models. t-1 is on the slow stage (one failure spent), t-2 on
   # the fast one; both lanes work at once and each carries its bead to the PR itself.
-  setup true auto stub/fast "$(stages stub/fast:stub/fast:1 stub/slow:stub/slow:1)"; printf 'approve\napprove\n' >"$TEST_CTRL/review"
+  NO_DEFAULT_LANES=1 setup true auto stub/fast "$(stages stub/fast:stub/fast:1 stub/slow:stub/slow:1)"; printf 'approve\napprove\n' >"$TEST_CTRL/review"
   printf '[[lanes]]\nname = "fast"\nmodels = ["stub/fast"]\n[[lanes]]\nname = "slow"\nmodels = ["stub/slow"]\n' >>"$BEAD_LOOP_CONFIG/config.toml"
   mkdir -p "$BEAD_LOOP_STATE/repo/failures"; echo 1 >"$BEAD_LOOP_STATE/repo/failures/t-1"
   jq '. + [{id:"t-2", title:"Second", description:"y", status:"open", priority:3, labels:["delegate:local"]}]' "$BD_STATE/issues.json" >"$BD_STATE/i.tmp" && mv "$BD_STATE/i.tmp" "$BD_STATE/issues.json"
@@ -1604,7 +1608,7 @@ case_lanes_from_toml() {
   assert_match "$(sup status "$REPO")" "fast lane: *idle" "status names the configured lanes"
   assert_eq "$(sup --json status "$REPO" | jq -r '.lane_names | join(" ")')" "fast slow" "json lists them"
   # Pause one configured lane: its bead waits, the other lane's bead goes through.
-  setup true auto stub/fast "$(stages stub/fast:stub/fast:1 stub/slow:stub/slow:1)"; printf 'approve\napprove\n' >"$TEST_CTRL/review"
+  NO_DEFAULT_LANES=1 setup true auto stub/fast "$(stages stub/fast:stub/fast:1 stub/slow:stub/slow:1)"; printf 'approve\napprove\n' >"$TEST_CTRL/review"
   printf '[[lanes]]\nname = "fast"\nmodels = ["stub/fast"]\n[[lanes]]\nname = "slow"\nmodels = ["stub/slow"]\n' >>"$BEAD_LOOP_CONFIG/config.toml"
   mkdir -p "$BEAD_LOOP_STATE/repo/failures"; echo 1 >"$BEAD_LOOP_STATE/repo/failures/t-1"
   jq '. + [{id:"t-2", title:"Second", description:"y", status:"open", priority:3, labels:["delegate:local"]}]' "$BD_STATE/issues.json" >"$BD_STATE/i.tmp" && mv "$BD_STATE/i.tmp" "$BD_STATE/issues.json"
@@ -1619,7 +1623,7 @@ case_lanes_from_toml() {
   # lanes busy, and nothing is written under the default pair's names — two rounds in
   # one repo sharing lane.dev left the second to erase the first, and the page reading
   # only the configured names showed every lane idle while both models were working.
-  setup true auto stub/fast "$(stages stub/fast:stub/fast:1 stub/slow:stub/slow:1)"; echo hang >"$TEST_CTRL/worker"
+  NO_DEFAULT_LANES=1 setup true auto stub/fast "$(stages stub/fast:stub/fast:1 stub/slow:stub/slow:1)"; echo hang >"$TEST_CTRL/worker"
   printf '[[lanes]]\nname = "fast"\nmodels = ["stub/fast"]\n[[lanes]]\nname = "slow"\nmodels = ["stub/slow"]\n' >>"$BEAD_LOOP_CONFIG/config.toml"
   mkdir -p "$BEAD_LOOP_STATE/repo/failures"; echo 1 >"$BEAD_LOOP_STATE/repo/failures/t-1"
   jq '. + [{id:"t-2", title:"Second", description:"y", status:"open", priority:3, labels:["delegate:local"]}]' "$BD_STATE/issues.json" >"$BD_STATE/i.tmp" && mv "$BD_STATE/i.tmp" "$BD_STATE/issues.json"
@@ -1644,7 +1648,7 @@ case_lane_with_two_slots() {
     printf '[[lanes]]\nname = "stub"\nmodels = ["*"]\nparallel = 2\n' >>"$BEAD_LOOP_CONFIG/config.toml"
     jq '. + [{id:"t-2", title:"Second", description:"y", status:"open", priority:3, labels:["delegate:local"]}]' "$BD_STATE/issues.json" >"$BD_STATE/i.tmp" && mv "$BD_STATE/i.tmp" "$BD_STATE/issues.json"
   }
-  setup true auto stub/reviewer 'max_inflight = 3'; echo hang >"$TEST_CTRL/worker"; twobeads
+  NO_DEFAULT_LANES=1 setup true auto stub/reviewer 'max_inflight = 3'; echo hang >"$TEST_CTRL/worker"; twobeads
   setsid "$SUP" tick 2>>"$T/sup.log" & pid=$!
   for _ in $(seq 100); do [ "$(grep -c '^bead-worker' "$TEST_CTRL/calls" 2>/dev/null)" = 2 ] && break; sleep 0.1; done
   sleep 0.2
@@ -1652,14 +1656,26 @@ case_lane_with_two_slots() {
   assert_match "$(grep '^bead-worker' "$TEST_CTRL/calls" | sort | tr '\n' ' ')" "wt/t-1 .*wt/t-2 " "each worker in its bead's worktree"
   assert_match "$(sup status "$REPO")" "stub.2 lane: *t-" "status: the second slot's row"
   kill -TERM -- -"$pid"; wait "$pid" 2>/dev/null || true
-  setup true auto stub/reviewer 'max_inflight = 3'; printf 'approve\napprove\n' >"$TEST_CTRL/review"; twobeads
+  NO_DEFAULT_LANES=1 setup true auto stub/reviewer 'max_inflight = 3'; printf 'approve\napprove\n' >"$TEST_CTRL/review"; twobeads
   LANE_WAIT=0.2 sup tick
   assert_eq "$(cut -d' ' -f1 "$TEST_CTRL/calls" | sort | uniq -c | awk '{print $2"="$1}' | tr '\n' ' ')" "bead-reviewer=2 bead-worker=2 " "each bead once through each round"
   assert_file "$BEAD_LOOP_STATE/repo/inflight/t-1" "t-1 in the merge queue"; assert_file "$BEAD_LOOP_STATE/repo/inflight/t-2" "t-2 too"
   assert_nofile "$BEAD_LOOP_STATE/repo/lane.stub" "slot 1 clear"; assert_nofile "$BEAD_LOOP_STATE/repo/lane.stub.2" "slot 2 clear"
-  setup; twobeads; sup pause stub; sup --serial tick
+  NO_DEFAULT_LANES=1 setup; twobeads; sup pause stub; sup --serial tick
   assert_eq "$(calls)" "" "pause stub: neither slot starts a round"
   assert_eq "$(sup --json status "$REPO" | jq -r '.lane_names | join(" ")') $(sup --json status "$REPO" | jq -r '.paused["stub.2"]')" "stub stub.2 true" "json: a row per slot, both paused"
+}
+
+case_lanes_derive_from_providers() {
+  # No [[lanes]]: one lane per provider the config names. Every model here is stub/*, so
+  # the one lane is "stub", with both roles: it does the worker round, then the reviewer
+  # round, and nothing is written under the old pair's names.
+  NO_DEFAULT_LANES=1 setup; sup --serial tick
+  assert_eq "$(calls)" "bead-worker bead-reviewer" "one lane, both rounds"
+  assert_branch bead/t-1 "and pushed"
+  assert_nofile "$BEAD_LOOP_STATE/repo/lane.dev" "nothing under the old dev name"
+  assert_nofile "$BEAD_LOOP_STATE/repo/lane.stub" "the stub lane clear at the end"
+  assert_match "$(sup status "$REPO")" "stub lane" "status names the derived lane"
 }
 
 case_doctor() {

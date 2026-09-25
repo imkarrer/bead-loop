@@ -751,8 +751,8 @@ fn owner_repo(url: &str) -> Option<String> {
 
 /// One lane: it takes the rounds whose model matches `models` (globs: `devbox/*`, or
 /// `*` alone) and none of `exclude`, in the roles it has. `[[lanes]]` in the global
-/// config; without it, the pair the loop always had — `dev` (worker rounds) and `review`
-/// (reviewer rounds) — plus a `claude` lane when a stage names `claude/*`.
+/// config; without it, one lane per provider the stages name (docs/design-providers.md,
+/// "Lanes: derived by default").
 ///
 /// ```toml
 /// [[lanes]]
@@ -796,6 +796,8 @@ pub fn glob_match(pat: &str, s: &str) -> bool {
 
 impl LaneSpec {
     pub fn takes(&self, model: &str) -> bool {
+        // an aider round runs on its provider's server: the same lane as its opencode rounds
+        let model = model.strip_prefix("aider:").unwrap_or(model);
         self.models.iter().any(|p| glob_match(p, model)) && !self.exclude.iter().any(|p| glob_match(p, model))
     }
 
@@ -815,8 +817,10 @@ pub fn slots_of(lanes: &[LaneSpec]) -> Vec<LaneSpec> {
 }
 
 impl Layers {
-    /// The lanes, from `[[lanes]]` in the global file, else the defaults.
-    pub fn lanes(&self, has_claude: bool) -> Vec<LaneSpec> {
+    /// The lanes, from `[[lanes]]` in the global file, else one per provider in
+    /// `providers` (lanes.rs `providers_named`), in that order: `NAME/*`, both roles, the
+    /// first one parking and taking the rounds with no reviewer.
+    pub fn lanes(&self, providers: &[String]) -> Vec<LaneSpec> {
         if let Some(Value::Array(a)) = self.global.get("lanes") {
             if !a.is_empty() {
                 let mut first_reviewer = true;
@@ -858,42 +862,37 @@ impl Layers {
                     .collect();
             }
         }
-        let exclude: Vec<String> = if has_claude { vec!["claude/*".into()] } else { Vec::new() };
-        let mut v = vec![
-            LaneSpec {
+        // a derived lane is as wide as its provider's `parallel`
+        let tables = self.try_providers().unwrap_or_default();
+        let width = |p: &str| tables.iter().find(|t| t.name == p).map(|t| t.parallel).unwrap_or(1);
+        let mut v: Vec<LaneSpec> = providers
+            .iter()
+            .enumerate()
+            .map(|(i, p)| LaneSpec {
+                name: p.clone(),
+                lane: p.clone(),
+                parallel: width(p),
+                // the first also takes a stage with no model (the agent's default)
+                models: if i == 0 { vec![format!("{p}/*"), p.clone(), String::new()] } else { vec![format!("{p}/*"), p.clone()] },
+                exclude: Vec::new(),
+                worker: true,
+                reviewer: true,
+                parks: i == 0,
+                fallback: i == 0,
+            })
+            .collect();
+        if v.is_empty() {
+            // no model named anywhere (every stage on the agent's default): one lane for all
+            v.push(LaneSpec {
                 name: "dev".into(),
                 lane: "dev".into(),
                 parallel: 1,
                 models: vec!["*".into()],
-                exclude: exclude.clone(),
-                worker: true,
-                reviewer: false,
-                parks: true,
-                fallback: false,
-            },
-            LaneSpec {
-                name: "review".into(),
-                lane: "review".into(),
-                parallel: 1,
-                models: vec!["*".into()],
-                exclude,
-                worker: false,
-                reviewer: true,
-                parks: false,
-                fallback: true,
-            },
-        ];
-        if has_claude {
-            v.push(LaneSpec {
-                name: "claude".into(),
-                lane: "claude".into(),
-                parallel: 1,
-                models: vec!["claude/*".into()],
                 exclude: Vec::new(),
                 worker: true,
                 reviewer: true,
-                parks: false,
-                fallback: false,
+                parks: true,
+                fallback: true,
             });
         }
         v
@@ -907,25 +906,44 @@ mod tests {
     #[test]
     fn lanes_default_and_from_toml() {
         let l = layers("", "");
-        let names: Vec<String> = l.lanes(true).into_iter().map(|s| s.name).collect();
-        assert_eq!(names, ["dev", "review", "claude"]);
-        assert_eq!(l.lanes(false).len(), 2);
-        assert!(!l.lanes(true)[0].takes("claude/opus") && l.lanes(true)[0].takes("devbox/coder"));
+        let v = l.lanes(&[]);
+        assert_eq!(v.len(), 1, "no provider named: one lane for everything");
+        assert!(v[0].takes("anything/at-all") && v[0].worker && v[0].reviewer && v[0].parks && v[0].fallback);
         let l = layers(
             "[[lanes]]\nname = \"gpu\"\nmodels = [\"devbox/*\"]\n[[lanes]]\nname = \"cpu\"\nmodels = [\"acbox/*\"]\nroles = [\"worker\"]",
             "",
         );
-        let v = l.lanes(true);
+        let v = l.lanes(&["claude".into()]);
         assert_eq!(v.len(), 2, "[[lanes]] replaces the defaults, claude lane included");
         assert!(v[0].takes("devbox/coder") && !v[0].takes("acbox/coder") && v[0].parks && v[0].reviewer && v[0].fallback);
         assert!(v[1].worker && !v[1].reviewer && !v[1].fallback);
-        let v = layers("[[lanes]]\nname = \"claude\"\nmodels = [\"claude/*\"]\nparallel = 2\n[[lanes]]\nname = \"gpu\"", "").lanes(true);
+        let v = layers("[[lanes]]\nname = \"claude\"\nmodels = [\"claude/*\"]\nparallel = 2\n[[lanes]]\nname = \"gpu\"", "").lanes(&[]);
         assert_eq!((v[0].parallel, v[1].parallel), (2, 1), "parallel from [[lanes]]; unset, 1");
         let slots = slots_of(&v);
         let names: Vec<&str> = slots.iter().map(|s| s.name.as_str()).collect();
         assert_eq!(names, ["claude", "claude.2", "gpu"], "slot 1 keeps the lane's name");
         assert!(slots[1].lane == "claude" && slots[1].takes("claude/sonnet"), "a slot is its lane under another name");
         assert!(glob_match("*", "anything") && glob_match("a/*", "a/b") && !glob_match("a/b", "a/c"));
+    }
+
+    #[test]
+    fn lanes_derive_from_the_providers_named() {
+        let l = layers("", "");
+        let v = l.lanes(&["devbox".into(), "claude".into()]);
+        let names: Vec<&str> = v.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, ["devbox", "claude"], "one lane per provider, in the order given");
+        assert!(v[0].takes("devbox/coder") && !v[0].takes("claude/opus") && v[1].takes("claude/opus"));
+        assert!(v.iter().all(|s| s.worker && s.reviewer), "both roles");
+        assert!(v[0].parks && v[0].fallback && !v[1].parks && !v[1].fallback, "the first parks and takes no-reviewer rounds");
+        assert!(v[0].takes(""), "the first takes a stage with no model, the agent's default");
+        let v = l.lanes(&["stub".into()]);
+        assert!(v[0].takes("aider:stub/x"), "an aider round is on its provider's lane");
+        assert_eq!(v[0].parallel, 1, "one slot by default");
+        let v = layers("[providers.claude]\nparallel = 2", "").lanes(&["devbox".into(), "claude".into()]);
+        assert_eq!((v[0].parallel, v[1].parallel), (1, 2), "as wide as the provider's parallel");
+        let l = layers("[[lanes]]\nname = \"all\"\nmodels = [\"*\"]", "");
+        let names: Vec<String> = l.lanes(&["devbox".into(), "claude".into()]).into_iter().map(|s| s.name).collect();
+        assert_eq!(names, ["all"], "[[lanes]] still replaces the derived ones");
     }
 
     fn layers(global: &str, repo: &str) -> Layers {

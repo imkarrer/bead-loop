@@ -122,10 +122,14 @@ fn main() {
             }
         },
     };
-    // The lanes: [[lanes]] in the global config, else dev + review (+ claude when a stage
-    // names claude/*). Only the commands that run lanes need to know whether one does.
-    let has_claude = matches!(cmd.as_str(), "tick" | "run" | "lane") && lanes::has_claude_stage(&repos, opts.model_flag.as_deref());
-    let lane_specs = global.lanes(has_claude);
+    // The lanes: [[lanes]] in the global config, else one per provider the repos' config
+    // names. Only the commands that run or name lanes need to load the repos to know.
+    let providers = if matches!(cmd.as_str(), "tick" | "run" | "lane" | "pause" | "resume" | "recover") {
+        lanes::providers_named(&repos, opts.model_flag.as_deref())
+    } else {
+        Vec::new()
+    };
+    let lane_specs = global.lanes(&providers);
     let ctx = lanes::Ctx {
         repos: repos.clone(),
         opts: opts.clone(),

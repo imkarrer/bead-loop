@@ -152,17 +152,12 @@ fn bead_json(repo: &Repo, byid: &Map<String, Value>, id: &str) -> Map<String, Va
 
 /// `status_json`: this repo, one JSON object.
 pub fn status_json(repo: &Repo) -> Value {
-    // lanes: the configured ones ([[lanes]] in the global file), else dev + review, plus
-    // claude when this repo's stages name it — the same list the loop runs, a row per slot.
-    let lanes = crate::config::Layers::load(&crate::config::config_dir().join("config.toml"), None).lanes(has_claude_stage(repo));
+    // lanes: the configured ones ([[lanes]] in the global file), else one per provider
+    // this repo names — the same list the loop runs, a row per slot.
+    let lanes =
+        crate::config::Layers::load(&crate::config::config_dir().join("config.toml"), None).lanes(&crate::lanes::providers_named_in(repo));
     let specs = crate::config::slots_of(&lanes);
     status_json_from(repo, bd_ready_json(repo), bd_in_progress_json(repo), &specs)
-}
-
-/// Whether this repo's stages (or its conflict worker) name a claude/* model.
-pub fn has_claude_stage(repo: &Repo) -> bool {
-    repo.stages.iter().any(|s| s.worker.starts_with("claude/") || s.reviewer.starts_with("claude/"))
-        || repo.conflict_worker.starts_with("claude/")
 }
 
 /// The status from what bd said — the ready beads and the in_progress ones — and the
@@ -665,10 +660,19 @@ mod tests {
         let _ = std::fs::remove_dir_all(&d);
     }
 
-    /// The lanes the loop runs without [[lanes]] in the global file: dev and review, and
-    /// claude when a stage names it. The live global config is not read here.
+    /// The lanes these cases were written for, spelled as [[lanes]]: dev (worker rounds)
+    /// and review (reviewer rounds), and claude when a stage names it. The live global
+    /// config is not read here.
     fn default_lanes(claude: bool) -> Vec<crate::config::LaneSpec> {
-        crate::config::Layers { global: json!({}), repo: json!({}) }.lanes(claude)
+        let ex = if claude { json!(["claude/*"]) } else { json!([]) };
+        let mut lanes = vec![
+            json!({"name": "dev", "models": ["*"], "exclude": ex, "roles": ["worker"]}),
+            json!({"name": "review", "models": ["*"], "exclude": ex, "roles": ["reviewer"]}),
+        ];
+        if claude {
+            lanes.push(json!({"name": "claude", "models": ["claude/*"]}));
+        }
+        crate::config::Layers { global: json!({"lanes": lanes}), repo: json!({}) }.lanes(&[])
     }
 
     /// Three queues and two lanes, laid out by hand: t-1 in the merge queue (red), t-2,
