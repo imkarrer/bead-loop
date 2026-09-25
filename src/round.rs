@@ -1620,6 +1620,7 @@ pub fn review_one(repo: &Repo, opts: &Opts, id: Option<&str>, lane: Option<&Lane
     list_args.extend(repo_args.iter().copied());
     list_args.extend(["--head", &head, "--json", "url", "--jq", ".[0].url // empty"]);
     let existing = crate::shell::gh_stdout_any(repo, &list_args).trim().to_string();
+    let updated = !existing.is_empty();
     if existing.is_empty() && repo.open_pr.as_deref() == Some("ask") {
         let compare_url = format!("https://github.com/{}/compare/{}...{head}?expand=1", repo.pr_repo, repo.base);
         if let Err(e) = store_proposed_pr(repo, &id, &title_line, &body, &head, &compare_url) {
@@ -1659,7 +1660,18 @@ pub fn review_one(repo: &Repo, opts: &Opts, id: Option<&str>, lane: Option<&Lane
     }
     repo.release(&id);
     if repo.merge == "pipeline" {
-        crate::merge::hand_to_pipeline(repo, &id, &url);
+        // A fix round with no new commit pushes nothing (the force-with-lease of the same
+        // sha is a no-op, no synchronize event) and hand_to_pipeline's label is already on
+        // the PR, so re-adding it fires no labeled event either: CI never re-runs on its
+        // own. If that sha is the one CI was last red on, take the label off and back on
+        // instead — that does fire a labeled event (#132 on 25 Sep, build 296).
+        let tip = git_out(&wt, &["rev-parse", "HEAD"]).trim().to_string();
+        if updated && crate::merge::red_head(repo, &id).as_deref() == Some(tip.as_str()) {
+            let sha7: String = tip.chars().take(7).collect();
+            crate::merge::rerun_ci(repo, &id, &url, &format!("round {} made no new commit: {sha7} is the commit CI was red on", n + 1));
+        } else {
+            crate::merge::hand_to_pipeline(repo, &id, &url);
+        }
     }
     let _ = git(&repo.repo, &["worktree", "remove", "--force", &wt.to_string_lossy()]);
     repo.lane_clear(lane_name);

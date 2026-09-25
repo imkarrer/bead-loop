@@ -6,7 +6,7 @@
 //!   the worker prompt, and `brief.prev` the one a send-back cleared under
 //!   `research = "every"`, for the next research round to refine
 //! - `review/ID`   the review queue: the worker's last line, for the reviewer's prompt
-//! - `inflight/ID` the merge queue: the PR url; `.ID.red|nocheck|adopted|fixing|conflict`
+//! - `inflight/ID` the merge queue: the PR url; `.ID.red|nocheck|adopted|fixing|conflict|lastred`
 //!   beside it
 //! - `held/ID`     the bead is in its queue and waits on something outside the loop; the
 //!   file says what. Shown in the human queue, polled, cleared when the reason goes.
@@ -17,6 +17,7 @@
 //!   watcher, `open`, `answer` and `escalate` act on the same checkout; goes with
 //!   `inflight/ID` at close and at park (docs/design-targets.md)
 //! - `.ID.conflict` in the inflight marker list
+//! - `.ID.lastred` the red CI run last charged: the head sha and its builds
 //! - `lane.<name>` the lane names are dev, review, claude, or the [[lanes]] names
 //! - `wt/ID` the worktree while a bead is on a lane or waiting for review
 //!

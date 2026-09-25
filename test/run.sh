@@ -332,6 +332,45 @@ case_ci_red() {
   assert_file "$BEAD_LOOP_STATE/repo/inflight/t-1" "back in the merge queue"
   assert_eq "$(git -C "$T/origin.git" rev-list --count main..bead/t-1)" 2 "the fix is on the branch"
 }
+case_ci_red_unchanged_head_reruns() {
+  # bl-iej.8.1, 25 Sep: build 310 timed out on 3f3eca5, round 3 found nothing to change, the
+  # push was a no-op, re-adding automerge fired no labeled event, and the watcher charged
+  # build 310's red twice. Now the label comes off and back on (the labeled event is the
+  # build trigger), and the old run's red, still in the rollup, is not charged again.
+  setup true pipeline; printf 'done\nnocommit\n' >"$TEST_CTRL/worker"; printf 'approve\napprove\n' >"$TEST_CTRL/review"
+  sup work "$REPO"
+  sha=$(git -C "$T/origin.git" rev-parse bead/t-1)
+  jq --arg s "$sha" '.headRefOid=$s' "$TEST_CTRL/pr.json" >"$TEST_CTRL/pr.tmp" && mv "$TEST_CTRL/pr.tmp" "$TEST_CTRL/pr.json"
+  set_checks '[{"context":"ci","state":"FAILURE","targetUrl":"https://ci.example/builds/310"},{"context":"ci/suite","state":"FAILURE","targetUrl":"https://ci.example/builds/310#job"}]'
+  sup reconcile "$REPO"
+  assert_eq "$(cat "$BEAD_LOOP_STATE/repo/beads/t-1/failures")" 1 "build 310's red charged once"
+  : >"$TEST_CTRL/gh.log"; sup work "$REPO"
+  assert_eq "$(git -C "$T/origin.git" rev-parse bead/t-1)" "$sha" "the fix round made no new commit"
+  assert_eq "$(grep -o -e '--remove-label automerge' -e '--add-label automerge' "$TEST_CTRL/gh.log" | tr '\n' ' ')" "--remove-label automerge --add-label automerge " "the label comes off, then back on"
+  assert_eq "$(jq -r '.labels | join(",")' "$TEST_CTRL/pr.json")" automerge "and ends on"
+  assert_match "$(bead .notes)" "made no new commit" "said so on the bead"
+  set_checks '[{"context":"ci","state":"PENDING","targetUrl":"https://ci.example/builds/311"},{"context":"ci/suite","state":"FAILURE","targetUrl":"https://ci.example/builds/310#job"}]'
+  sup reconcile "$REPO"
+  assert_eq "$(cat "$BEAD_LOOP_STATE/repo/beads/t-1/failures")" 1 "build 310's red, still in the rollup, is not charged again"
+  assert_file "$BEAD_LOOP_STATE/repo/inflight/t-1" "waits in the merge queue for the re-run"
+  set_checks '[{"context":"ci","state":"FAILURE","targetUrl":"https://ci.example/builds/311"},{"context":"ci/suite","state":"FAILURE","targetUrl":"https://ci.example/builds/311#job"}]'
+  sup reconcile "$REPO"
+  assert_eq "$(cat "$BEAD_LOOP_STATE/repo/beads/t-1/failures")" 2 "the re-run's own red is charged"
+}
+case_ci_red_unchanged_head_holds() {
+  # The same no-commit fix round under merge = "auto": no label to re-run CI with, so the
+  # old red is not charged twice and the bead is held for you.
+  setup; printf 'done\nnocommit\n' >"$TEST_CTRL/worker"; printf 'approve\napprove\n' >"$TEST_CTRL/review"
+  sup work "$REPO"
+  sha=$(git -C "$T/origin.git" rev-parse bead/t-1)
+  jq --arg s "$sha" '.headRefOid=$s' "$TEST_CTRL/pr.json" >"$TEST_CTRL/pr.tmp" && mv "$TEST_CTRL/pr.tmp" "$TEST_CTRL/pr.json"
+  set_checks '[{"context":"ci","state":"FAILURE","targetUrl":"https://ci.example/runs/5"}]'; sup reconcile "$REPO"
+  : >"$TEST_CTRL/gh.log"; sup work "$REPO"
+  ! grep -q -- '--remove-label' "$TEST_CTRL/gh.log" && ok || bad "no label to take off under auto"
+  sup reconcile "$REPO"
+  assert_eq "$(cat "$BEAD_LOOP_STATE/repo/beads/t-1/failures")" 1 "the same red is not charged twice"
+  assert_match "$(cat "$BEAD_LOOP_STATE/repo/held/t-1")" "no new commit" "held, saying why"
+}
 case_external_green() {
   # merge = "external": someone else merges. Green sits in the queue, polled, never
   # held and never merged by the loop — the maintainer's call, on their own time.

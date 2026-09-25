@@ -52,15 +52,19 @@ case $2 in
       | jq -r "$filter"
     ;;
   view)
-    if is_primary "$3"; then jq '{state, mergedAt: null, mergeable: (.mergeable // "MERGEABLE"), mergeStateStatus, statusCheckRollup, url}' "$TEST_CTRL/pr.json"
-    else jq --arg u "$3" --argjson n "${3##*/}" '.[] | select(.url==$u or .number==$n) | {state, mergedAt: null, mergeStateStatus: "CLEAN", statusCheckRollup: .checks, url}' "$TEST_CTRL/extra-prs.json"; fi ;;
+    if is_primary "$3"; then jq '{state, mergedAt: null, mergeable: (.mergeable // "MERGEABLE"), mergeStateStatus, statusCheckRollup, url, headRefOid: (.headRefOid // "")}' "$TEST_CTRL/pr.json"
+    else jq --arg u "$3" --argjson n "${3##*/}" '.[] | select(.url==$u or .number==$n) | {state, mergedAt: null, mergeStateStatus: "CLEAN", statusCheckRollup: .checks, url, headRefOid: (.headRefOid // "")}' "$TEST_CTRL/extra-prs.json"; fi ;;
   edit)
-    # --add-label L: labels land in pr.json (or labels-extra for planted PRs). A test plants
-    # $TEST_CTRL/label-missing to have GitHub refuse, as it does for a label the repo lacks.
-    id=$3 l=; while [ $# -gt 0 ]; do [ "$1" = --add-label ] && l=$2; shift; done
-    [ -e "$TEST_CTRL/label-missing" ] && { echo "'$l' not found" >&2; exit 1; }
-    if is_primary "$id"; then jq --arg l "$l" '.labels += [$l]' "$TEST_CTRL/pr.json" >"$TEST_CTRL/pr.json.tmp" && mv "$TEST_CTRL/pr.json.tmp" "$TEST_CTRL/pr.json"
-    else echo "$id $l" >>"$TEST_CTRL/labels-extra"; fi ;;
+    # --add-label L takes on a label, --remove-label L takes one off; both land in pr.json
+    # (or labels-extra for planted PRs). A test plants $TEST_CTRL/label-missing to have
+    # GitHub refuse, as it does for a label the repo lacks — an add only; taking a label off
+    # never fails that way.
+    id=$3 l='' r=''
+    while [ $# -gt 0 ]; do case $1 in --add-label) l=$2;; --remove-label) r=$2;; esac; shift; done
+    [ -n "$l" ] && [ -e "$TEST_CTRL/label-missing" ] && { echo "'$l' not found" >&2; exit 1; }
+    if is_primary "$id"; then
+      jq --arg l "$l" --arg r "$r" '.labels = (((.labels // []) - (if $r == "" then [] else [$r] end)) + (if $l == "" then [] else [$l] end))' "$TEST_CTRL/pr.json" >"$TEST_CTRL/pr.json.tmp" && mv "$TEST_CTRL/pr.json.tmp" "$TEST_CTRL/pr.json"
+    else echo "$id $l$r" >>"$TEST_CTRL/labels-extra"; fi ;;
   merge)
     # A test plants $TEST_CTRL/merge-refused to have GitHub refuse (branch protection).
     [ -e "$TEST_CTRL/merge-refused" ] && { echo "Pull request is not mergeable: protected branch" >&2; exit 1; }
