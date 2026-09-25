@@ -451,6 +451,19 @@ case_escalation_stages() {
   assert_eq "$(jq -r '.reason + " " + (.failures|tostring) + " " + (.stage.index|tostring) + " " + .brief_model' "$BEAD_LOOP_STATE/repo/parked/t-1")" "exhausted 3 2 stub/slow" "the record: why, the count, the stage it stopped on, who briefed"
   : >"$TEST_CTRL/calls"; sup --once tick; assert_eq "$(calls)" "" "parked bead is not retried"
 }
+case_same_reject_twice_escalates() {
+  setup true auto '' "$(stages stub/fast:stub/rev:3 stub/slow:stub/rev:1)"; echo "done" >"$TEST_CTRL/worker"
+  printf 'reject\nreject\n' >"$TEST_CTRL/review"
+  sup work "$REPO"; sup work "$REPO"; sup work "$REPO"
+  assert_eq "$(grep '^bead-worker' "$TEST_CTRL/calls" | cut -d' ' -f3 | sed -n '3p')" "stub/slow" "the same REJECT twice: skips ahead to the next stage"
+  assert_match "$(bead .notes)" "the same REJECT twice: escalated to stub/slow" "the note says why"
+}
+case_different_rejects_do_not_escalate() {
+  setup true auto '' "$(stages stub/fast:stub/rev:3 stub/slow:stub/rev:1)"; echo "done" >"$TEST_CTRL/worker"
+  printf 'reject\nreject2\n' >"$TEST_CTRL/review"
+  sup work "$REPO"; sup work "$REPO"; sup work "$REPO"
+  assert_eq "$(grep '^bead-worker' "$TEST_CTRL/calls" | cut -d' ' -f3 | sed -n '3p')" "stub/fast" "different REJECTs: no escalation"
+}
 case_repeat_cycles() {
   setup true auto '' "$(echo 'on_exhaust = "repeat"'; stages stub/fast::1 stub/slow::1)"; echo nocommit >"$TEST_CTRL/worker"
   sup --once tick; sup --once tick; sup --once tick; sup --once tick
