@@ -506,6 +506,7 @@ case_aider_stage() {
   assert_eq "$(cat "$TEST_CTRL/aider.ignore" | tr "\n" " ")" "* !work.txt " "the ignore file lets only the named file through"
   assert_match "$(sed -n 2p "$TEST_CTRL/aider.args")" " work.txt$" "the file the description names, and only that one"
   assert_match "$(cat "$TEST_CTRL/prompt.1")" "ACCEPTANCE CRITERIA" "the bead is the message"
+  assert_match "$(cat "$TEST_CTRL/prompt.1")" "Reply now with the SEARCH/REPLACE blocks" "told to edit in its one reply, not to look around"
   assert_branch bead/t-1 "pushed"
   assert_match "$(git -C "$T/origin.git" log -1 --format=%s bead/t-1)" "t-1: Do the thing" "settle_worktree committed aider's edit"
   assert_eq "$(git -C "$T/origin.git" diff --name-only main bead/t-1 | tr '\n' ' ')" "work.txt " "aider's scratch files stayed out of the commit"

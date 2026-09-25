@@ -155,7 +155,10 @@ pub fn run_agent(
         c.arg("--aiderignore").arg(&ignore);
         c.arg("--chat-history-file").arg(format!("{}.chat.md", logf.display()));
         c.arg("--input-history-file").arg(format!("{}.input", logf.display()));
-        c.args(["--message", prompt]);
+        // One message, one reply, then aider exits: a reply that only says what it will
+        // look at next is a round spent (bl-e10.3). The prompt is written for an agent
+        // that explores; this one has its files already.
+        c.arg("--message").arg(format!("{prompt}{AIDER_EDIT_NOW}"));
         if !repo.gate.is_empty() {
             c.args(["--lint-cmd", &repo.gate]);
         }
@@ -438,6 +441,9 @@ pub fn opencode_provider_in(path: &Path, provider: &str) -> (String, String) {
     let get = |k: &str| opts.and_then(|o| o.get(k)).and_then(|s| s.as_str()).unwrap_or("").to_string();
     (get("baseURL"), get("apiKey"))
 }
+
+/// What aider's message adds to the worker's prompt.
+const AIDER_EDIT_NOW: &str = "\n\nThe files to change are already in this chat, in full. Reply now with the SEARCH/REPLACE blocks that make the change; there is no second turn to look around in. Keep each SEARCH short: one to three lines copied exactly, character for character, from the file.";
 
 /// An aiderignore that hides every file but these: `*`, then one `!path` per file. (A
 /// `!*/` would re-include every file under any directory.)
