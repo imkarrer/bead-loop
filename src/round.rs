@@ -215,7 +215,7 @@ fn park_stale_hold(repo: &Repo, id: &str) {
     bd_status(repo, id, "in_progress");
     park(repo, id, Reason::HoldExpired(why), None);
     repo.release(id);
-    let _ = std::fs::remove_file(repo.review_path(id));
+    repo.review_clear(id);
 }
 
 /// The beads a round in this process is on, as `STATE/ID`. A bead stays in its queue
@@ -1570,8 +1570,7 @@ pub fn review_one(repo: &Repo, opts: &Opts, id: Option<&str>, lane: Option<&Lane
             return Pass::Worked;
         }
         if r.rc != 0 {
-            let _ = std::fs::remove_file(repo.review_path(&id));
-            let _ = std::fs::remove_dir_all(repo.seat_dir(&id));
+            repo.review_clear(&id);
             let note = r.stalled.clone().unwrap_or_else(|| format!("reviewer exited {}. Log: {}", r.rc, review_log.display()));
             send_back(repo, &id, &wt, true, &note, &model, false, Some(&logf));
             return Pass::Worked;
@@ -1612,8 +1611,7 @@ pub fn review_one(repo: &Repo, opts: &Opts, id: Option<&str>, lane: Option<&Lane
                     note.push_str(&format!("\nseat {k} ({}): {}", s.model, first_line(&v)));
                 }
             }
-            let _ = std::fs::remove_file(repo.review_path(&id));
-            let _ = std::fs::remove_dir_all(repo.seat_dir(&id));
+            repo.review_clear(&id);
             send_back(repo, &id, &wt, true, &note, &model, false, Some(&logf));
             return Pass::Worked;
         }
@@ -1629,11 +1627,10 @@ pub fn review_one(repo: &Repo, opts: &Opts, id: Option<&str>, lane: Option<&Lane
                 })
                 .collect::<Vec<_>>()
                 .join("\n");
-            let _ = std::fs::remove_dir_all(repo.seat_dir(&id));
             reviewer_line
         }
     };
-    let _ = std::fs::remove_file(repo.review_path(&id));
+    repo.review_clear(&id);
 
     if opts.local {
         log(&format!("{}: --local: branch {branch} is ready in {}; nothing pushed", repo.slug, wt.display()));

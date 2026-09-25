@@ -137,6 +137,13 @@ impl Repo {
         std::fs::create_dir_all(&dir).ok();
         write_file(&dir.join(format!("{k}")), &format!("{text}\n"));
     }
+    /// `review/ID` and `review/ID.seats` both go: the bead leaves review, whether pushed,
+    /// sent back, parked, or answered by a human. A seats dir left behind would be read at
+    /// the bead's next review and count a stale verdict in the next quorum.
+    pub fn review_clear(&self, id: &str) {
+        let _ = std::fs::remove_file(self.review_path(id));
+        let _ = std::fs::remove_dir_all(self.seat_dir(id));
+    }
     pub fn inflight_path(&self, id: &str) -> PathBuf {
         self.rs.join("inflight").join(id)
     }
@@ -576,6 +583,17 @@ mod tests {
         repo.seat_set_verdict("t-1", 2, "APPROVE: ok");
         assert!(repo.seat_verdict("t-1", 2).unwrap().contains("APPROVE"));
         assert!(repo.seat_verdict("t-1", 1).is_none());
+        let _ = std::fs::remove_dir_all(&d);
+    }
+    #[test]
+    fn review_clear_takes_the_seats() {
+        let d = crate::config::scratch("review-clear");
+        let repo = crate::config::test_repo(&d, &["a"]);
+        write_file(&repo.review_path("t-1"), "DONE\n");
+        repo.seat_set_verdict("t-1", 1, "APPROVE: ok");
+        repo.review_clear("t-1");
+        assert!(!repo.review_path("t-1").exists());
+        assert!(!repo.seat_dir("t-1").exists());
         let _ = std::fs::remove_dir_all(&d);
     }
     #[test]

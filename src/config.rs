@@ -524,7 +524,7 @@ impl Repo {
             state_dir,
         };
         for s in &r.stages {
-            for m in [&s.worker, &s.reviewer] {
+            for m in std::iter::once(&s.worker).chain(s.seats.iter().map(|x| &x.model)) {
                 match r.resolve(m).harness.as_str() {
                     "claude-code" => need("claude"),
                     "aider" => need("aider"),

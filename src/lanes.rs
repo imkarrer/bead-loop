@@ -66,7 +66,9 @@ pub fn providers_named_in(repo: &Repo) -> Vec<String> {
     let mut models: Vec<&str> = Vec::new();
     for s in &repo.stages {
         models.push(&s.worker);
-        models.push(&s.reviewer);
+        for x in &s.seats {
+            models.push(&x.model);
+        }
     }
     models.extend([repo.conflict_worker.as_str(), repo.brief_model.as_str(), repo.research_model.as_str()]);
     let mut out: Vec<String> = Vec::new();

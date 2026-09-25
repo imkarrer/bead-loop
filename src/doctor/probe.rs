@@ -70,7 +70,7 @@ pub fn claude_probe() -> ProbeResult {
 fn providers_in(stages: &[Stage]) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     for s in stages {
-        for model in [s.worker.as_str(), s.reviewer.as_str()] {
+        for model in std::iter::once(s.worker.as_str()).chain(s.seats.iter().map(|x| x.model.as_str())) {
             if model.is_empty() || model.starts_with("claude/") {
                 continue;
             }
