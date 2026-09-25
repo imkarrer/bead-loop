@@ -170,7 +170,7 @@ mod tests {
     use super::*;
 
     fn stage(worker: &str, reviewer: &str) -> Stage {
-        Stage { worker: worker.into(), reviewer: reviewer.into(), failures: 1, timeout: None }
+        Stage { name: String::new(), worker: worker.into(), reviewer: reviewer.into(), failures: 1, timeout: None }
     }
 
     #[test]

@@ -1844,6 +1844,15 @@ case_research_lane_feeds_the_worker_lane() {
   assert_eq "$(sup --json status "$REPO" | jq -r '.queues.dev | length')" 0 "nothing left queued"
 }
 
+case_stage_label_starts_there() {
+  # stage:NAME (docs/design-providers.md): a bead labelled with a later stage's name
+  # starts there, its failure count floored to that stage's first count.
+  setup true auto '' "$(printf '[[stages]]\nworker = "stub/fast"\nattempts = 2\n\n[[stages]]\nworker = "stub/slow"\nattempts = 1\nname = "senior"\n')"
+  jq '.[0].labels=["delegate:local","stage:senior"]' "$BD_STATE/issues.json" >"$BD_STATE/i.tmp" && mv "$BD_STATE/i.tmp" "$BD_STATE/issues.json"
+  sup work "$REPO"
+  assert_eq "$(cut -d' ' -f3 "$TEST_CTRL/calls" | head -1)" "stub/slow" "the label floors the count past stub/fast"
+  assert_match "$(bead .notes)" "label stage:senior" "noted on the bead"
+}
 case_doctor() {
   # Every dependency probed, red or green: bd's version and git are real; gh auth, claude
   # auth, the opencode provider named in the stages (its /models) and the attach server

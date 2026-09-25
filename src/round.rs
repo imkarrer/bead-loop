@@ -15,7 +15,7 @@ use crate::shell::{
     worktree_remove,
 };
 use crate::signals;
-use crate::state::{dev_queue, review_queue, StageHit};
+use crate::state::{dev_queue, review_queue, stage_start, StageHit};
 use crate::util::{
     cut_bytes, date_iminutes, die, first_line, log, read_to_string, stamp, stderr_str, stdout_str, tail_bytes, tail_lines, write_file,
 };
@@ -511,6 +511,28 @@ fn bead_labels(json: &Value) -> Vec<&str> {
         .unwrap_or_default()
 }
 
+/// The bead's `stage:NAME` label (docs/design-providers.md): floors its failure count to
+/// the named stage's first count, once — the next round's count is already there. A label
+/// naming no stage is logged and ignored (the bead runs from stage 1: a typo must not hold
+/// work).
+fn apply_stage_label(repo: &Repo, id: &str, labels: &[&str]) {
+    let Some(label) = labels.iter().find(|l| l.starts_with("stage:")) else { return };
+    let name = &label["stage:".len()..];
+    match stage_start(&repo.stages, name) {
+        Some(start) if start > repo.failures_of(id) => {
+            repo.set_failures(id, start);
+            let index = if name == "last" { repo.stages.len() } else { repo.stages.iter().position(|s| s.name == name).unwrap() + 1 };
+            bd_note(
+                repo,
+                id,
+                &format!("bead-loop {}: label stage:{name}: starting on stage {name} ({index}), failures set to {start}", date_iminutes()),
+            );
+        }
+        Some(_) => {}
+        None => log(&format!("{}: {id}: label stage:{name} names no stage; ignored", repo.slug)),
+    }
+}
+
 /// The harness label a bead may carry, applied to the stage's worker.
 fn apply_harness_label(repo: &Repo, id: &str, json: &Value, model: &mut String) {
     let labels = bead_labels(json);
@@ -920,6 +942,24 @@ pub fn dev_one(repo: &Repo, opts: &Opts, id: Option<&str>, last_id: &mut Option<
             return Pass::Worked;
         }
     }
+    let json = bd_show(repo, &id);
+    // The bead's work:NAME label (docs/design-targets.md): the checkout this round works
+    // in and the GitHub repo its PR goes to. No such label is the default target; two
+    // labels, or one naming no configured target, is a config mistake — held, no failure,
+    // and the lane moves on (`repo` here is the fresh `Repo::load`, still the default,
+    // which is exactly what `hold` needs: the beads repo's own state dir).
+    let labels = bead_labels(&json);
+    let repo = match repo.for_bead(&labels) {
+        Ok(r) => r,
+        Err(e) => {
+            hold(repo, &id, None, &e);
+            return Pass::Worked;
+        }
+    };
+    let repo = &repo;
+    // The bead's stage:NAME label (docs/design-providers.md): floors the failure count
+    // before the stage is picked, so a bead labelled past stage 1 starts there.
+    apply_stage_label(repo, &id, &labels);
     let n = repo.failures_of(&id);
     let st: StageHit = match repo.stage_for(n) {
         Some(s) => s,
@@ -936,21 +976,6 @@ pub fn dev_one(repo: &Repo, opts: &Opts, id: Option<&str>, last_id: &mut Option<
     let review_model = st.review.clone();
     let timeout = st.timeout;
     let hist = history(repo, &id);
-    let json = bd_show(repo, &id);
-    // The bead's work:NAME label (docs/design-targets.md): the checkout this round works
-    // in and the GitHub repo its PR goes to. No such label is the default target; two
-    // labels, or one naming no configured target, is a config mistake — held, no failure,
-    // and the lane moves on (`repo` here is the fresh `Repo::load`, still the default,
-    // which is exactly what `hold` needs: the beads repo's own state dir).
-    let labels = bead_labels(&json);
-    let repo = match repo.for_bead(&labels) {
-        Ok(r) => r,
-        Err(e) => {
-            hold(repo, &id, None, &e);
-            return Pass::Worked;
-        }
-    };
-    let repo = &repo;
     // Per target, not the whole merge queue: a PR waiting on a foreign repo's CI does not
     // stop this repo's own beads (docs/design-targets.md).
     let name = lane.map(|l| l.name.as_str()).unwrap_or("dev");

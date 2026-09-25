@@ -23,6 +23,7 @@ Aider is handed the files and edits them; it explores nothing. The loop's logs s
 - **The context budget.** Aider hands the model every file the DESCRIPTION names, and the model quotes long SEARCH blocks back. Each named file must be under ~8k tokens (`wc -c` / 4, about 32 KB), and all of them under ~20k together. A ~12k file was a coin flip: ~8k is firm. Four files hit 46k, and `src/round.rs` (21k) with long SEARCH blocks hit 38k, against a 32k model. A bead that edits a bigger file stays in opencode, which reads in line ranges.
 - **no label** (opencode) when the model must find its files, create one, run a test the bead names, or might need to stop with `BLOCKED:` and a reason. Anything with two possible shapes.
 - The Claude stage ignores the label. `harness:opencode` on a bead takes it out of a stage whose worker is `aider:...`.
+- **stage:NAME** starts a bead on a named stage instead of the first, its failure count floored there when it is first claimed — for a bead you already know is beyond the small model (`docs/config.md`).
 
 # An aider bead's description
 
