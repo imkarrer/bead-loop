@@ -507,6 +507,7 @@ const noteRow = (b, span, r) => !openNote.has(b.id) ? '' : `<tr class="sub" data
 const fold = (k, label, body) => `<div class="fold"><button class="hist${openFold.has(k) ? ' on' : ''}" onclick="toggleFold(${js(k)})">${openFold.has(k) ? '▾' : '▸'} ${esc(label)}</button>${openFold.has(k) ? body : ''}</div>`;
 const providerOf = (m) => (m || '').replace(/^aider:/, '').split('/')[0];
 const probeFails = (r, m) => !!(m && r && r.probes && r.probes[providerOf(m)] && r.probes[providerOf(m)].ok === false);
+// stageChip and claudeBtn below both gate on probeFails, not on the retired claude_ok flag.
 const stageChip = (st, r) => !st ? '<span class="chip bad" title="stages exhausted">exhausted</span>'
   : `<span class="chip ${st.index > 1 ? 'warn' : ''}" title="stage ${st.index}: worker ${esc(st.worker)}${st.reviewer ? ', reviewer ' + esc(st.reviewer) : ''}">${st.index > 1 ? `S${st.index} · ` : ''}${esc(st.worker)}</span>`
     + ((probeFails(r, st.worker) || probeFails(r, st.reviewer)) ? ' <span class="chip bad" title="a claude/* round cannot run while Claude is signed out; the lane takes other beads meanwhile">waits for Claude sign-in</span>' : '');
