@@ -66,6 +66,7 @@ The loop keeps no state of its own beyond files; a bead's state is a function of
 | bd | `status` (`open` / `in_progress` / `closed`; `blocked`, `deferred` by hand), the label, blockers (`bd ready` lists only beads with none open), notes (people's, and the loop's own event log: a `bead-loop` line each, its body indented under it — what stats and the page read) |
 | `$RS/beads/ID/failures` | the failure count → the stage (`stage_for`); `rounds.jsonl` beside it the history, one record per send-back, the only history a prompt carries |
 | `$RS/review/ID` | in the review queue (holds the worker's last line) |
+| `$RS/review/ID.seats/K` | seat K's (1-based) verdict, once its round ends (`APPROVE:` or `REJECT:`, whole text); `K.running` while its round is in flight. Removed with `review/ID` once the quorum decides |
 | `$RS/inflight/ID` | in the merge queue (holds the PR url); beside it `.ID.adopted`, `.ID.red`, `.ID.nocheck`, `.ID.fixing`, `.ID.conflict`, `.ID.lastred` (the red CI run last charged: head sha and builds) |
 | `$RS/proposed/ID` | ready to publish: the PR's title, body, head, base, pr_repo and compare url, as JSON; counts toward `max_inflight` |
 | `$RS/held/ID` | the bead waits on something outside the loop; the file says what |

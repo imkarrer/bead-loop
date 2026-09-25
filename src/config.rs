@@ -24,7 +24,6 @@ pub struct Stage {
 
 /// One reviewer seat: a model, and the agent identity it reviews as (`""` is
 /// bead-reviewer).
-#[cfg_attr(not(test), allow(dead_code))]
 #[derive(Clone, Debug, PartialEq)]
 pub struct Seat {
     pub model: String,
@@ -32,7 +31,6 @@ pub struct Seat {
 }
 
 /// How many of a stage's seats must approve: every one, any one, or at least N.
-#[cfg_attr(not(test), allow(dead_code))]
 #[derive(Clone, Debug, Default, PartialEq)]
 pub enum Approvals {
     #[default]

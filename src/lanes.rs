@@ -239,7 +239,7 @@ pub fn wait_for_work(ctx: &Ctx, max: f64) {
 /// too when that is this lane's as well (or there is no reviewer: nothing then waits on
 /// a model), so a bead's rounds stay together and a `--once` tick carries it to its PR.
 fn lane_pass(repo: &Repo, opts: &Opts, spec: &LaneSpec) -> Pass {
-    if spec.reviewer && review_one(repo, opts, None, Some(spec)) == Pass::Worked {
+    if spec.reviewer && review_one(repo, opts, None, Some(spec), 0) == Pass::Worked {
         return Pass::Worked;
     }
     if !spec.worker {
@@ -253,7 +253,7 @@ fn lane_pass(repo: &Repo, opts: &Opts, spec: &LaneSpec) -> Pass {
                 // The reviewer round is a round: under the pause flag it does not start,
                 // and the bead waits in the review queue for the resume.
                 if (reviewer.is_empty() || spec.takes(&reviewer)) && !repo.paused(&spec.lane) {
-                    review_one(repo, opts, Some(&id), Some(spec));
+                    review_one(repo, opts, Some(&id), Some(spec), 1);
                 }
             }
         }
