@@ -669,7 +669,7 @@ pub fn dev_prompt(
         format!(" House rules for this work are the skills under .agents/skills/ (linked from {house}); the repository's own AGENTS.md and CONTRIBUTING.md win on style.")
     };
     format!(
-        "Work the bead below in this repository, following the bead-workflow skill.\n\n<bead>\n{}\n</bead>\n\nYou are on branch {branch}{}.{gate_block}{house_block} Commit your work on this branch and leave .beads/ untouched. End your turn with one line: DONE: <evidence> or BLOCKED: <note>.{rebase}{research_block}{history_block}",
+        "Work the bead below in this repository.\n\n<bead>\n{}\n</bead>\n\nYou are on branch {branch}{}.{gate_block}{house_block} Commit your work on this branch and leave .beads/ untouched. End your turn with one line: DONE: <evidence> or BLOCKED: <note>.{rebase}{research_block}{history_block}",
         render_bead(json),
         if resumed {
             ", which already carries your earlier commit(s) for this bead: fix them in place rather than starting over".to_string()
