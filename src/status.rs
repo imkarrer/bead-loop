@@ -361,6 +361,18 @@ pub fn status_json_from(repo: &Repo, open: Value, inprog: Value, specs: &[crate:
         .values()
         .map(|t| json!({"name": t.name, "path": t.path.to_string_lossy(), "pr_repo": t.pr_repo, "merge": t.merge, "open_pr": t.open_pr}))
         .collect();
+    // ready_to_publish: proposed beads that are waiting to be published
+    let ready_to_publish: Vec<Value> = repo
+        .proposed_ids()
+        .into_iter()
+        .map(|id| {
+            let mut m = bead_json(repo, &byid, &id);
+            // Add the proposal content from proposed_path(id)
+            let proposal_content = read_to_string(&repo.proposed_path(&id)).unwrap_or_default();
+            m.insert("proposal".into(), json!(proposal_content));
+            Value::Object(m)
+        })
+        .collect();
     json!({
         "slug": repo.slug, "repo": repo.repo.to_string_lossy(), "label": repo.label, "base": repo.base,
         "merge": repo.merge, "attach": repo.attach, "logs_dir": repo.rs.join("logs").to_string_lossy(),
@@ -377,6 +389,7 @@ pub fn status_json_from(repo: &Repo, open: Value, inprog: Value, specs: &[crate:
         "held": held,
         "decisions": decisions,
         "worktrees": worktrees,
+        "ready_to_publish": ready_to_publish,
         "targets": targets,
     })
 }
@@ -936,6 +949,30 @@ mod tests {
         let d = crate::config::scratch("sessions");
         let repo = crate::config::test_repo(&d, &["a"]);
         assert_eq!(sessions_json(&repo, &d), json!([]));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn ready_to_publish_lists_proposed_beads() {
+        let d = crate::config::scratch("ready-to-publish");
+        let repo = crate::config::test_repo(&d, &["stub/worker:stub/reviewer:2"]);
+        // Create a proposed bead
+        let proposed_content = r#"{"id":"t-1","title":"Test bead","description":"This is a test bead","acceptance":"cargo test"}"#;
+        crate::util::write_file(&repo.proposed_path("t-1"), proposed_content);
+        let open = json!([]);
+        let inprog = json!([]);
+        let j = status_json_from(&repo, open, inprog, &default_lanes(false));
+
+        // Check that ready_to_publish exists and contains our proposed bead
+        assert!(j.get("ready_to_publish").is_some(), "ready_to_publish should exist");
+        let ready_to_publish = j["ready_to_publish"].as_array().unwrap();
+        assert_eq!(ready_to_publish.len(), 1, "Should have one proposed bead");
+
+        let bead = &ready_to_publish[0];
+        assert_eq!(bead["id"], "t-1", "Should have the correct bead ID");
+        // Check that proposal content is included
+        assert_eq!(bead["proposal"], proposed_content, "Should include the proposal content");
+
         let _ = std::fs::remove_dir_all(&d);
     }
 }
