@@ -12,10 +12,29 @@
   when it is done); and, where the box has a `gpu-mode` command, a **Work / Game** switch
   (`game` stops the loop and the local model server to free the GPU, `work` starts them
   again; run as `sudo -n gpu-mode`, so sudoers must allow it without a password).
-- **The lanes**, one panel each: the bead it is on, its repo, title, failure count and
-  stage, the live session's model, when it last produced output, a link into it, **Abort**
-  — or why it is idle (nothing queued for it; N queued and starting; Claude signed out) —
-  and **Pause / Resume** (the round it is on finishes and it starts no new one; resume is
+- **The flow**: the workflow as one graph, every bead listed at the node it is at. A band
+  per stage — the worker and reviewer its failure count puts a bead on, marked local or
+  metered — with a round's steps left to right: **Ready** (the dev queue's beads for that
+  stage, fewest failures first), **Work** (the worker, then the gate), **Review queue**,
+  **Review**; then **CI · merge**, which every stage shares, and what **Landed** in the
+  last 24h. The dashed rail under a band is every send-back (+1 failure) to that band's
+  Ready; the edge down the left is the failures a stage takes before the next band, and
+  after the last, **Parked**. With a researcher configured, **Research** sits above the
+  first band. A bead on a lane shows the lane and how long; a held one says so, with the
+  reason on hover. Repos with the same stages share one graph (each bead names its repo);
+  it scrolls sideways on a narrow screen.
+- **Press a bead** and it opens in a panel at the corner (× or Escape closes it): where it
+  sits, its title, failures and stage, its rounds behind a toggle (each with its note and
+  logs), **✎ note** (a word to the bead before its next round — context it lacked, a claim
+  that changed — put on the bead as an operator note, which that round reads; nothing
+  else moves), and **Work with Claude** for a queued bead; on a lane, the live session's
+  model, when it last produced output, a link into it, **Abort**, and its last lines; in
+  CI, GitHub's word on the PR (CI running m/n, red with the failing check, green, merged,
+  conflicting); parked, its question and the way to Needs you.
+- **The lanes**, a strip under the graph, one each for the whole loop: the bead it is on
+  and at which step (research, work, review), its session's last lines — or why it is
+  idle (nothing queued for it; N queued and starting; its provider's probe failing) — and
+  **Pause / Resume** (the round it is on finishes and it starts no new one; resume is
   instant).
 - **The scoreboard**, over 24h, 7d, 30d or all of it: **Landed**, **First try** (no
   send-back), **Without Claude** (landed by a local model: the point of the local stack),
@@ -25,14 +44,8 @@
   spent — $0 for a local model) with the **empty rounds** (a session the server never
   answered), and the beads finished, newest first. Read from what the beads and the
   session logs already carry, once a minute (`bead-supervisor --json stats`).
-- **Per repo**, with **★ make priority** on its heading: the three queues in their order
-  — **dev** (#1 is next; each bead's failures and the stage that puts it on), **review**
-  (how long each has waited), **merge** (each PR with GitHub's word on it: CI running
-  m/n, red with the failing check, green, merged, conflicting). Every dev and review row
-  has **✎ note**: a word to the bead before its next round — context it lacked, a claim
-  that changed — put on the bead as an operator note, which that round reads; nothing
-  else moves.
-- **Needs you**, per repo: first each **decision** — a bead of type `decision` (or
+- **Per repo**, with **★ make priority** on its heading and its config (base, merge mode,
+  stages) beside it: **Needs you**. First each **decision** — a bead of type `decision` (or
   labelled `needs-human`) is a question for you, asked by the loop, by an agent planning
   work, or by yourself (`bd create -t decision "the question" -d "the context"`); its
   text in full and an answer box. **Answer & close** puts the answer on the bead as its
@@ -54,7 +67,7 @@
 
 The page is patched in place on every push, never rebuilt: what you have typed into an
 answer or note box, the cursor in it, an open history and how far down a log you are all
-stay as they were, and a bead that moves up its queue takes its open box along. A box
+stay as they were, and a bead that moves along the flow takes its open box along. A box
 also keeps its draft across a reload of the page (in the browser, per box) until it is
 sent. **Ctrl+Enter** in a box presses its button. No browser dialogs: a lever that asks
 first (Stop, Off, Game, Abort, Work with Claude) gives way to its question and a yes in
