@@ -470,14 +470,6 @@ impl Repo {
                 approvals: Approvals::All,
             });
         }
-        for s in &stages {
-            if s.worker.starts_with("claude/") || s.reviewer.starts_with("claude/") {
-                need("claude");
-            }
-            if s.worker.starts_with("aider:") {
-                need("aider");
-            }
-        }
         let base_remote = cfg.str("base_remote", "origin");
         let mut base = cfg.str("base", "");
         if base.is_empty() {
@@ -490,7 +482,7 @@ impl Repo {
         let state_dir = state_dir();
         let rs = state_dir.join(&slug);
         make_state_dirs(&rs);
-        Repo {
+        let r = Repo {
             label: cfg.str("label", "delegate:local"),
             merge: cfg.str("merge", "auto"),
             merge_label: cfg.str("merge_label", "automerge"),
@@ -527,7 +519,17 @@ impl Repo {
             beads,
             rs,
             state_dir,
+        };
+        for s in &r.stages {
+            for m in [&s.worker, &s.reviewer] {
+                match r.resolve(m).harness.as_str() {
+                    "claude-code" => need("claude"),
+                    "aider" => need("aider"),
+                    _ => {}
+                }
+            }
         }
+        r
     }
 
     /// The bead's `work:NAME`-style labels (prefix `target_label`) resolved against this
@@ -644,8 +646,6 @@ impl Repo {
     /// one. `aider:P/M` is aider on P's server (`via` = P): the prefix overrides the
     /// harness, not the provider, so the round stays on P's lane. opencode takes `P/M`
     /// whole; claude-code, aider and a command take the `M` after the slash.
-    // No caller until the harness bead (bl-iej.2) routes run_agent through it.
-    #[cfg_attr(not(test), allow(dead_code))]
     pub fn resolve(&self, model: &str) -> Resolved {
         let name = provider_name(model);
         let provider = self.providers.iter().find(|p| p.name == name).cloned().unwrap_or_else(|| Provider::implicit(name));
