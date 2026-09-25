@@ -38,6 +38,8 @@ pub enum Reason {
     Delivered,
     /// the researcher's `BLOCKED:` line: a claim in the bead is false, found before any edit
     ResearchBlocked(String),
+    /// held on the same reason for a full day (round.rs hold_stale) — the reason, verbatim
+    HoldExpired(String),
 }
 
 impl Reason {
@@ -47,6 +49,7 @@ impl Reason {
             Reason::Exhausted => "exhausted",
             Reason::PrClosed(_) => "pr_closed",
             Reason::Delivered => "delivered",
+            Reason::HoldExpired(_) => "held_too_long",
         }
     }
 }
@@ -182,6 +185,10 @@ pub fn question_for(repo: &Repo, reason: &Reason, rounds: &[Value]) -> String {
         Reason::ResearchBlocked(line) => format!(
             "The researcher stopped before a single edit: {line} — Fix the bead's text if the claim is false, answer what it needs to know, or take it yourself."
         ),
+        Reason::HoldExpired(why) => format!(
+            "Held for over a day on the same reason: {}. Fix whatever it is waiting on, or say what should change.",
+            why.trim()
+        ),
     }
 }
 
@@ -194,6 +201,7 @@ pub fn brief_prompt(repo: &Repo, bead: &Value, reason: &Reason, rounds: &[Value]
         Reason::PrClosed(url) => format!("its pull request {url} was closed on GitHub without merging"),
         Reason::Delivered => format!("its branch has no diff against {}: nothing left to rebase or commit", repo.base),
         Reason::ResearchBlocked(_) => "the researcher found a claim in it false before any round ran".to_string(),
+        Reason::HoldExpired(why) => format!("it has been held for over a day on the same reason: {}", why.trim()),
     };
     let mut r = String::new();
     for x in rounds {
@@ -329,7 +337,8 @@ pub fn park(repo: &Repo, id: &str, reason: Reason, wt: Option<&Path>) {
     }
     // The stage it stopped on: a send-back has just counted (the round ran one failure
     // ago); a closed PR charged nothing, so the bead is still on the stage its count names.
-    let stopped_at = if matches!(reason, Reason::PrClosed(_) | Reason::ResearchBlocked(_)) { n } else { n.saturating_sub(1) };
+    let stopped_at =
+        if matches!(reason, Reason::PrClosed(_) | Reason::ResearchBlocked(_) | Reason::HoldExpired(_)) { n } else { n.saturating_sub(1) };
     let stage = repo.stage_for(stopped_at).map(|s| json!({"index": s.index, "worker": s.model, "reviewer": s.review}));
     let rec = json!({
         "when": date_iminutes(),
@@ -354,6 +363,7 @@ pub fn park(repo: &Repo, id: &str, reason: Reason, wt: Option<&Path>) {
         Reason::PrClosed(url) => format!("{url} was closed without merging"),
         Reason::Delivered => format!("its branch already matches {}", repo.base),
         Reason::ResearchBlocked(_) => "BLOCKED by the researcher".to_string(),
+        Reason::HoldExpired(why) => format!("held over a day: {}", why.trim()),
     };
     bd_note(repo, id, &format!("bead-loop {}: parked ({because}). {}", date_iminutes(), cut_bytes(&question, 2000)));
     log(&format!("{}: {id}: parked ({because}): {}", repo.slug, cut_bytes(first_line(&question), 200)));

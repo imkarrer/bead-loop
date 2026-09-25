@@ -1429,6 +1429,32 @@ case_repeated_hold_restarts_backoff() {
   : >"$TEST_CTRL/calls"; BEAD_LOOP_HOLD_BACKOFF=2 sup --once tick
   assert_eq "$(calls)" "" "inside the fresh backoff: no retry"
 }
+case_hold_backs_off_exponentially_then_parks() {
+  # The backoff doubles with every hold on the same reason — 5, 10, 20, 40, 60 minutes
+  # from a 5-minute base (BEAD_LOOP_HOLD_BACKOFF=1 here makes that 1, 2 seconds): held
+  # twice, a retry within the doubled backoff is still skipped, one past it is picked.
+  # And a hold nobody has retried in a day is parked with its reason, not held forever.
+  setup; echo crash >"$TEST_CTRL/worker"
+  BEAD_LOOP_HOLD_BACKOFF=1 sup --once tick
+  assert_eq "$(calls)" "bead-worker" "first hold"
+  sleep 1.2
+  : >"$TEST_CTRL/calls"; BEAD_LOOP_HOLD_BACKOFF=1 sup --once tick
+  assert_eq "$(calls)" "bead-worker" "aged past the first backoff: held twice now"
+  sleep 1
+  : >"$TEST_CTRL/calls"; BEAD_LOOP_HOLD_BACKOFF=1 sup --once tick
+  assert_eq "$(calls)" "" "held twice: 1s since is inside its doubled, 2s backoff"
+  sleep 1.2
+  : >"$TEST_CTRL/calls"; BEAD_LOOP_HOLD_BACKOFF=1 sup --once tick
+  assert_eq "$(calls)" "bead-worker" "picked at 2s"
+
+  touch -d '-25 hours' "$BEAD_LOOP_STATE/repo/held/t-1"
+  : >"$TEST_CTRL/calls"; sup --once tick
+  assert_eq "$(calls)" "bead-briefer" "parked (with its brief), not retried"
+  assert_file "$BEAD_LOOP_STATE/repo/parked/t-1" "the human queue"
+  assert_eq "$(jq -r .reason "$BEAD_LOOP_STATE/repo/parked/t-1")" "held_too_long"
+  assert_match "$(bead .notes)" "parked (held over a day: worker stub/worker exited 7 before the model answered" "the reason in the note"
+  assert_nofile "$BEAD_LOOP_STATE/repo/held/t-1" "released"
+}
 case_harness_error_is_held() {
   # The harness comes back with a transcript of nothing but its own error event: the
   # server answered an error before the model ran (21 Sep 2026: the reviewer model added

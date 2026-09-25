@@ -40,10 +40,30 @@ pub enum Pass {
     Nothing,
 }
 
-/// A bead held less than this long ago is not tried again yet (seconds;
-/// `BEAD_LOOP_HOLD_BACKOFF` overrides — the tests set it to 0).
+/// The backoff's base (seconds; `BEAD_LOOP_HOLD_BACKOFF` overrides — the tests set it low).
 pub fn hold_backoff() -> i64 {
     std::env::var("BEAD_LOOP_HOLD_BACKOFF").ok().and_then(|s| s.parse().ok()).unwrap_or(300)
+}
+
+/// A hold aged this long on the same reason is not worth another backoff: it goes to the
+/// human queue instead (24h).
+const HOLD_MAX_AGE: i64 = 24 * 3600;
+
+/// The backoff's multiplier for a hold's Nth time in a row on the same reason: 1, 2, 4, 8,
+/// capped at 12 — so a 5-minute base climbs 5, 10, 20, 40, 60 (minutes) and no further.
+fn hold_multiplier(n: u64) -> i64 {
+    let shift = n.max(1).saturating_sub(1).min(4);
+    (1i64 << shift).min(12)
+}
+
+/// How long a bead's Nth hold in a row on one reason is skipped for.
+fn hold_delay(n: u64) -> i64 {
+    hold_backoff() * hold_multiplier(n)
+}
+
+/// When a held bead is next tried, as an absolute time — what status.rs shows.
+pub fn hold_retry_at(repo: &Repo, id: &str) -> i64 {
+    repo.held_since(id) + hold_delay(repo.held_count(id))
 }
 
 /// `render_bead`: the bead as the prompt carries it.
@@ -133,7 +153,22 @@ fn history(repo: &Repo, id: &str) -> String {
 
 /// Whether a held bead's hold is old enough to try again.
 fn hold_expired(repo: &Repo, id: &str) -> bool {
-    !repo.held_path(id).exists() || crate::util::now() - repo.held_since(id) >= hold_backoff()
+    !repo.held_path(id).exists() || crate::util::now() - repo.held_since(id) >= hold_delay(repo.held_count(id))
+}
+
+/// A held bead nobody has retried in a full day: another backoff is not going anywhere —
+/// it joins the parked queue with the reason, for a human.
+fn hold_stale(repo: &Repo, id: &str) -> bool {
+    repo.held_path(id).exists() && crate::util::now() - repo.held_since(id) >= HOLD_MAX_AGE
+}
+
+fn park_stale_hold(repo: &Repo, id: &str) {
+    let why = repo.held_why(id).unwrap_or_default();
+    log(&format!("{}: {id}: held a day on the same reason, parked for you: {}", repo.slug, first_line(&why)));
+    bd_status(repo, id, "in_progress");
+    park(repo, id, Reason::HoldExpired(why), None);
+    repo.release(id);
+    let _ = std::fs::remove_file(repo.review_path(id));
 }
 
 /// The beads a round in this process is on, as `STATE/ID`. A bead stays in its queue
@@ -223,6 +258,10 @@ fn pick(repo: &Repo, which: &str, lane: Option<&LaneSpec>) -> Option<(String, bo
     // a bead with no brief this worker lane may take when it finds nothing better
     let mut unresearched = None;
     for id in queue {
+        if hold_stale(repo, &id) {
+            park_stale_hold(repo, &id);
+            continue;
+        }
         if !hold_expired(repo, &id) || reserved(repo, &id) {
             continue;
         }

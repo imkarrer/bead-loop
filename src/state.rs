@@ -113,6 +113,14 @@ impl Repo {
         let _ = std::fs::remove_file(self.research_path(id));
         let _ = std::fs::remove_file(self.research_prev_path(id));
     }
+    /// `held/ID.n`: how many holds in a row share the current reason — the backoff's
+    /// multiplier (round.rs hold_delay).
+    pub fn held_count_path(&self, id: &str) -> PathBuf {
+        self.rs.join("held").join(format!("{id}.n"))
+    }
+    pub fn held_count(&self, id: &str) -> u64 {
+        read_to_string(&self.held_count_path(id)).and_then(|s| s.trim().parse().ok()).unwrap_or(1)
+    }
     pub fn wt(&self, id: &str) -> PathBuf {
         self.rs.join("wt").join(id)
     }
@@ -197,12 +205,15 @@ impl Repo {
         let old = read_to_string(&p).unwrap_or_default();
         if old.trim() == why.trim() {
             crate::util::touch(&p);
+            write_file(&self.held_count_path(id), &format!("{}\n", self.held_count(id) + 1));
             return false;
         }
         write_file(&p, &format!("{why}\n"));
+        write_file(&self.held_count_path(id), "1\n");
         true
     }
     pub fn release(&self, id: &str) -> bool {
+        let _ = std::fs::remove_file(self.held_count_path(id));
         std::fs::remove_file(self.held_path(id)).is_ok()
     }
     pub fn held_why(&self, id: &str) -> Option<String> {
@@ -448,7 +459,9 @@ mod tests {
         assert_eq!(repo.held_since("t-1"), old, "backdated for the check below");
         assert!(!repo.hold("t-1", "setup failed: false\n"), "the same reason again is silent");
         assert!(repo.held_since("t-1") > old, "a second hold with the same reason still restarts the backoff clock");
+        assert_eq!(repo.held_count("t-1"), 2, "the repeat count went up");
         assert!(repo.hold("t-1", "gh cannot read the PR"), "a new reason is a new hold");
+        assert_eq!(repo.held_count("t-1"), 1, "a new reason resets the count");
         assert_eq!(repo.held_why("t-1").as_deref(), Some("gh cannot read the PR"));
         assert!(repo.held_since("t-1") > 0);
         assert!(repo.release("t-1"));
