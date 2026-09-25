@@ -226,9 +226,69 @@ pub fn sleep_secs(s: f64) {
     }
 }
 
+/// Link skills from a source directory to a worktree, creating symlinks for directories
+/// that don't already exist in the target location. Returns the names of linked skills.
+#[cfg_attr(not(test), allow(dead_code))]
+pub fn link_skills(from: &Path, wt: &Path) -> Vec<String> {
+    let mut linked = Vec::new();
+
+    // If source directory doesn't exist, return empty vec
+    if !from.exists() {
+        return linked;
+    }
+
+    let skills_dir = wt.join(".agents").join("skills");
+    if let Ok(entries) = std::fs::read_dir(from) {
+        for entry in entries.flatten() {
+            if entry.metadata().map(|m| m.is_dir()).unwrap_or(false) {
+                let skill_name = entry.file_name().to_string_lossy().to_string();
+                let target_path = skills_dir.join(&skill_name);
+
+                // Only create symlink if target doesn't exist
+                if std::fs::symlink_metadata(&target_path).is_err() {
+                    if let Some(parent) = target_path.parent() {
+                        let _ = std::fs::create_dir_all(parent);
+                    }
+                    if std::os::unix::fs::symlink(entry.path(), &target_path).is_ok() {
+                        linked.push(skill_name);
+                    }
+                }
+            }
+        }
+    }
+
+    linked.sort();
+    linked
+}
+
+/// Ensure a line exists in a file, appending it if not present.
+/// Creates the parent directory and file if they don't exist.
+#[cfg_attr(not(test), allow(dead_code))]
+pub fn ensure_line(file: &Path, line: &str) {
+    if let Some(parent) = file.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+
+    // Read existing content
+    let content = std::fs::read_to_string(file).unwrap_or_default();
+    let line_with_newline = format!("{}\n", line);
+
+    // Check if line already exists
+    if !content.lines().any(|l| l == line) {
+        // Append the line
+        let mut f = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(file)
+            .unwrap_or_else(|_| panic!("Failed to open file: {}", file.display()));
+        let _ = f.write_all(line_with_newline.as_bytes());
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
     #[test]
     fn base64url_matches_coreutils() {
         // printf '%s' "/tmp/x" | base64 -w0 | tr '+/' '-_' | tr -d '='  ->  L3RtcC94
@@ -266,5 +326,60 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&f).unwrap(), "x", "a bump keeps the content");
         assert!(mtime(&f) > 0);
         let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn link_skills_links_only_what_is_missing() {
+        let temp_dir = std::env::temp_dir().join(format!("bl-link-skills-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&temp_dir);
+
+        let from_dir = temp_dir.join("from");
+        let wt_dir = temp_dir.join("wt");
+
+        // Create source directory with skills
+        let _ = std::fs::create_dir_all(from_dir.join("a"));
+        let _ = std::fs::create_dir_all(from_dir.join("b"));
+
+        // Create worktree with existing skill b
+        let _ = std::fs::create_dir_all(wt_dir.join(".agents").join("skills"));
+        let _ = std::fs::create_dir_all(wt_dir.join(".agents").join("skills").join("b"));
+
+        let linked = link_skills(&from_dir, &wt_dir);
+        assert_eq!(linked, vec!["a"]);
+
+        // Verify that a was linked but b was not
+        assert!(wt_dir.join(".agents").join("skills").join("a").exists());
+        assert!(wt_dir.join(".agents").join("skills").join("b").exists());
+
+        // Test second call returns empty vec
+        let linked2 = link_skills(&from_dir, &wt_dir);
+        assert_eq!(linked2, Vec::<String>::new());
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn ensure_line_appends_once() {
+        let temp_dir = std::env::temp_dir().join(format!("bl-ensure-line-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&temp_dir);
+
+        let file = temp_dir.join("test_file");
+
+        // First call
+        ensure_line(&file, ".agents/");
+        let content = std::fs::read_to_string(&file).unwrap();
+        assert_eq!(content, ".agents/\n");
+
+        // Second call - should not append again
+        ensure_line(&file, ".agents/");
+        let content = std::fs::read_to_string(&file).unwrap();
+        assert_eq!(content, ".agents/\n"); // Still only one line
+
+        // Test with different line
+        ensure_line(&file, "other");
+        let content = std::fs::read_to_string(&file).unwrap();
+        assert_eq!(content, ".agents/\nother\n");
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 }
