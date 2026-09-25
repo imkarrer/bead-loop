@@ -963,6 +963,22 @@ fn last_line_starting(text: &str, prefix: &str) -> Option<String> {
     text.lines().rfind(|l| l.starts_with(prefix)).map(str::to_string)
 }
 
+/// `gh pr create` for `head`: `--repo pr_repo` when it is known, `--base`/`--head` and
+/// the title and body given. Shared with `publish` (human.rs), which opens the PR an
+/// `open_pr = "ask"` round left waiting in proposed/ — the operator's title/body, or the
+/// proposal's own, exactly as this would have opened it from the review lane.
+pub fn create_pr(repo: &Repo, head: &str, title: &str, body: &str) -> Result<String, String> {
+    let repo_args: Vec<&str> = if repo.pr_repo.is_empty() { vec![] } else { vec!["--repo", &repo.pr_repo] };
+    let mut create_args = vec!["pr", "create"];
+    create_args.extend(repo_args.iter().copied());
+    create_args.extend(["--base", &repo.base, "--head", head, "--title", title, "--body", body]);
+    match gh(repo, &create_args) {
+        Ok(o) if o.status.success() => Ok(stdout_str(&o).trim().to_string()),
+        Ok(o) => Err(tail_lines(stderr_str(&o).trim(), 3).to_string()),
+        Err(e) => die(&format!("gh: {e}")),
+    }
+}
+
 /// `review_one [ID]`
 pub fn review_one(repo: &Repo, opts: &Opts, id: Option<&str>, lane: Option<&LaneSpec>) -> Pass {
     let (id, _mine) = match id {
@@ -1145,22 +1161,17 @@ pub fn review_one(repo: &Repo, opts: &Opts, id: Option<&str>, lane: Option<&Lane
         existing
     } else {
         let title_line = format!("{id}: {title}");
-        let mut create_args = vec!["pr", "create"];
-        create_args.extend(repo_args.iter().copied());
-        create_args.extend(["--base", &repo.base, "--head", &head, "--title", &title_line, "--body", &body]);
-        match gh(repo, &create_args) {
-            Ok(o) if o.status.success() => {
-                let url = stdout_str(&o).trim().to_string();
+        match create_pr(repo, &head, &title_line, &body) {
+            Ok(url) => {
                 bd_comment(repo, &id, &format!("bead-loop: opened {url}"));
                 log(&format!("{}: opened {url}", repo.slug));
                 url
             }
-            Ok(o) => {
+            Err(e) => {
                 write_file(&repo.review_path(&id), &format!("{final_text}\n"));
-                hold(repo, &id, None, &format!("gh pr create failed: {}", tail_lines(stderr_str(&o).trim(), 3)));
+                hold(repo, &id, None, &format!("gh pr create failed: {e}"));
                 return Pass::Worked;
             }
-            Err(e) => die(&format!("gh: {e}")),
         }
     };
     write_file(&repo.inflight_path(&id), &format!("{url}\n"));

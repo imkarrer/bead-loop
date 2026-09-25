@@ -1308,6 +1308,23 @@ case_ask_holds_the_pr() {
   assert_match "$(bead3 .comments | tr '\n' ' ')" "ready to publish" "the bead carries the ready-to-publish comment"
   assert_eq "$(bead3 .status)" in_progress "in_progress: the dev queue (status=open only) does not take it again"
 }
+case_publish() {
+  # `publish` opens the PR proposed/ID holds: gh pr create with the proposal's body (a
+  # --title override wins over the proposal's own), inflight/ID takes over from
+  # proposed/ID, and the merge watcher closes the bead once the PR merges, same as any
+  # other round's PR.
+  setup_target
+  echo 'open_pr = "ask"' >>"$REPO/.bead-loop.toml"   # inside [targets.t], the last table
+  sup work "$REPO" t-3
+  sup publish "$REPO" t-3 --title 'Better title'
+  assert_match "$(cat "$TEST_CTRL/gh.log")" "pr create --repo up/target --base main --head .*bead/t-3 --title Better title --body" "gh pr create with the override title"
+  assert_match "$(cat "$TEST_CTRL/gh.log")" 'Bead `t-3`' "the proposed body, unchanged"
+  assert_file "$BEAD_LOOP_STATE/repo/inflight/t-3" "inflight/t-3 written"
+  assert_nofile "$BEAD_LOOP_STATE/repo/proposed/t-3" "proposed/t-3 gone"
+  jq '.state="MERGED"' "$TEST_CTRL/pr.json" >"$TEST_CTRL/pr.tmp" && mv "$TEST_CTRL/pr.tmp" "$TEST_CTRL/pr.json"
+  sup reconcile "$REPO"
+  assert_eq "$(bead3 .status)" closed "the merge watcher closes it once the stub PR is MERGED"
+}
 case_ask_counts_inflight() {
   # A proposed/ID holds a slot in max_inflight, same as a PR waiting on CI: the dev lane
   # will not take a second work:t bead while the first sits waiting to be published.

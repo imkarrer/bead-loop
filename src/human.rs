@@ -2,9 +2,10 @@
 //! bash lacked: a bead in the merge queue is not reopened under its PR.
 use crate::config::Repo;
 use crate::harness::runnable;
-use crate::round::render_bead;
+use crate::merge::hand_to_pipeline;
+use crate::round::{create_pr, render_bead};
 use crate::shell::{bd_note, bd_show, bd_status, branch_exists, git, git_must, local_branch_exists};
-use crate::util::{date_iminutes, die, log};
+use crate::util::{date_iminutes, die, log, read_to_string, write_file};
 
 /// A bead in the merge queue stays there: its PR is what moves it. A bead ready to
 /// publish (`proposed/ID`, `open_pr = "ask"`) stays put too: it is not a failure to
@@ -74,6 +75,37 @@ pub fn answer(repo: &Repo, id: &str, text: &str) {
     repo.release(id);
     bd_status(repo, id, "open");
     log(&format!("{}: {id}: answered; back in the dev queue", repo.slug));
+    repo.wake();
+}
+
+/// `publish ID [--title T] [--body-file F]`: the PR `open_pr = "ask"` left for you in
+/// proposed/ID — `gh pr create` with the proposal's title and body, `--title`/
+/// `--body-file` overriding either, exactly as the review lane would have opened it
+/// (round.rs's `create_pr`, not copied here). Lands in inflight/ID like any other round's
+/// PR, automerge-labelled the same way when `merge = "pipeline"`.
+pub fn publish(repo: &Repo, id: &str, title: Option<String>, body_file: Option<String>) {
+    let repo = &repo.for_id(id);
+    let path = repo.proposed_path(id);
+    let text = read_to_string(&path).unwrap_or_else(|| die(&format!("{}: no proposed/{id} to publish", repo.slug)));
+    let proposal: serde_json::Value =
+        serde_json::from_str(&text).unwrap_or_else(|e| die(&format!("{}: proposed/{id} is not valid JSON: {e}", repo.slug)));
+    let field = |k: &str| proposal.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let head = field("head");
+    let title = title.unwrap_or_else(|| field("title"));
+    let body = match body_file {
+        Some(f) => read_to_string(std::path::Path::new(&f)).unwrap_or_else(|| die(&format!("cannot read {f}"))),
+        None => field("body"),
+    };
+    let url = match create_pr(repo, &head, &title, &body) {
+        Ok(url) => url,
+        Err(e) => die(&format!("{}: gh pr create failed: {e}", repo.slug)),
+    };
+    write_file(&repo.inflight_path(id), &format!("{url}\n"));
+    let _ = std::fs::remove_file(&path);
+    if repo.merge == "pipeline" {
+        hand_to_pipeline(repo, id, &url);
+    }
+    log(&format!("{}: {id}: published {url}", repo.slug));
     repo.wake();
 }
 
