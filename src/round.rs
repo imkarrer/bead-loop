@@ -673,19 +673,53 @@ pub fn dev_one(repo: &Repo, opts: &Opts, id: Option<&str>, last_id: &mut Option<
     let mut conflict = false;
     let mut rebase = String::new();
     if repo.mark(&id, "conflict").exists() {
-        conflict = true;
-        if !repo.conflict_worker.is_empty() {
-            model = repo.conflict_worker.clone();
-        } else if let Some(last) = repo.stage_for(repo.last_stage_start()) {
-            model = opts.model_flag.clone().unwrap_or(last.model);
+        // The PR that earned the mark may since have closed on its own (the work landed
+        // another way, as bl-eoq's did): the same `gh pr view` the merge queue uses in
+        // src/merge.rs, by branch since the closing round dropped the url. Not OPEN means
+        // no rebase — and if the branch already matches the base, there is nothing left
+        // to do at all, so it is parked rather than looping on "no commit" forever.
+        let head = repo.head_ref(&branch);
+        let pr = gh(repo, &["pr", "view", &head, "--json", "state,url"])
+            .ok()
+            .filter(|o| o.status.success())
+            .and_then(|o| serde_json::from_str::<Value>(&stdout_str(&o)).ok());
+        let state = pr.as_ref().and_then(|v| v.get("state")).and_then(|s| s.as_str()).unwrap_or("").to_string();
+        if !state.is_empty() && state != "OPEN" {
+            let _ = std::fs::remove_file(repo.mark(&id, "conflict"));
+            let _ = std::fs::remove_file(repo.mark(&id, "fixing"));
+            // The worktree of the round that opened this PR is long gone (push_pr removes
+            // it): the branch itself, kept as a ref in repo.repo either way (its own or
+            // push_remote's remote-tracking copy), is what there is to check.
+            let _ = git_ok(&repo.repo, &["fetch", "-q", &repo.base_remote, &repo.base]);
+            let branch_ref = if local_branch_exists(repo, &branch) { branch.clone() } else { format!("{}/{branch}", repo.push_remote) };
+            let range = format!("{}/{}...{branch_ref}", repo.base_remote, repo.base);
+            if branch_exists(repo, &branch) && git_ok(&repo.repo, &["diff", "--quiet", &range]) {
+                let url = pr.as_ref().and_then(|v| v.get("url")).and_then(|u| u.as_str()).unwrap_or("").to_string();
+                log(&format!(
+                    "{}: {id}: conflict round: its PR ({url}) is {state}, and the branch already matches {}; parked",
+                    repo.slug, repo.base
+                ));
+                bd_status(repo, &id, "in_progress");
+                park(repo, &id, Reason::PrClosed(url), None);
+                repo.clear_target(&id);
+                return Pass::Worked;
+            }
+            log(&format!("{}: {id}: conflict round: its PR is {state}, not open; back to a plain round", repo.slug));
+        } else {
+            conflict = true;
+            if !repo.conflict_worker.is_empty() {
+                model = repo.conflict_worker.clone();
+            } else if let Some(last) = repo.stage_for(repo.last_stage_start()) {
+                model = opts.model_flag.clone().unwrap_or(last.model);
+            }
+            if !runnable(&model) {
+                log(&format!("{}: {id}: conflict round needs {model}, which cannot run now (Claude signed out); waiting", repo.slug));
+                bd_status(repo, &id, "open");
+                return Pass::Nothing;
+            }
+            rebase = rebase_order(&repo.base_remote, &repo.base);
+            log(&format!("{}: {id}: conflict round: rebase onto {} by {model}", repo.slug, repo.base));
         }
-        if !runnable(&model) {
-            log(&format!("{}: {id}: conflict round needs {model}, which cannot run now (Claude signed out); waiting", repo.slug));
-            bd_status(repo, &id, "open");
-            return Pass::Nothing;
-        }
-        rebase = rebase_order(&repo.base_remote, &repo.base);
-        log(&format!("{}: {id}: conflict round: rebase onto {} by {model}", repo.slug, repo.base));
     }
     // A branch left from an earlier round (sent back by review or CI) is resumed, not
     // restarted: the worker fixes its commit. A dev-side failure deleted the branch.
@@ -789,6 +823,22 @@ pub fn dev_one(repo: &Repo, opts: &Opts, id: Option<&str>, last_id: &mut Option<
         return Pass::Worked;
     }
     if !settle_worktree(repo, &wt, &format!("{id}: {title}")) {
+        // A rebase round that ends DONE with nothing to commit is not a failure to send
+        // back and retry — it is a bl-eoq: the branch already matches the base, so every
+        // retry says the same "no commit" forever. Parked, not looped.
+        if conflict && last_line_starting(&r.text, "DONE:").is_some() {
+            log(&format!("{}: {id}: conflict round: DONE with no diff against {} — parked", repo.slug, repo.base));
+            let _ = std::fs::remove_file(repo.mark(&id, "conflict"));
+            let _ = std::fs::remove_file(repo.mark(&id, "fixing"));
+            bd_status(repo, &id, "in_progress");
+            park(repo, &id, Reason::Delivered, Some(&wt));
+            clear_lane_of(repo, &id);
+            repo.release(&id);
+            repo.clear_target(&id);
+            park_cleanup(repo, &wt);
+            repo.wake();
+            return Pass::Worked;
+        }
         let note = format!("worker made no commit. Last words: {}", tail_lines(&r.text, 3));
         let pm = postmortem(repo, &id, &wt, &json, &r.text, "", &logf);
         send_back(repo, &id, &wt, false, &format!("{note}{pm}"), &model, st.last, Some(&logf));

@@ -1194,6 +1194,34 @@ case_conflicting_pr_rebased_by_the_last_stage() {
   assert_eq "$(cut -d' ' -f3 "$TEST_CTRL/calls" | head -1)" "stub/senior" "conflict_worker does the rebase"
 }
 
+case_conflict_pr_closed_parks() {
+  # bl-eoq, 21 Sep: PR #64 conflicted, got the conflict mark, then closed on its own (the
+  # work had landed on main via PR #63 instead) — and every round after that said "no
+  # commit" and sent it back, once a minute for over an hour, since nothing charges a
+  # conflict round a failure. The PR's state is checked before the worker ever runs: not
+  # open, and the branch already matches main (the same work, arrived another way), parks
+  # the bead once instead of looping.
+  setup true auto stub/reviewer "$(printf 'max_inflight = 3\n%s' "$(stages stub/fast:stub/reviewer:2 claude/sonnet:claude/sonnet:1)")"
+  sup work "$REPO"; assert_file "$BEAD_LOOP_STATE/repo/inflight/t-1" "PR up"
+  jq '.mergeable="CONFLICTING"' "$TEST_CTRL/pr.json" >"$TEST_CTRL/pr.tmp" && mv "$TEST_CTRL/pr.tmp" "$TEST_CTRL/pr.json"
+  sup reconcile "$REPO"
+  assert_file "$BEAD_LOOP_STATE/repo/inflight/.t-1.conflict" "conflict mark set"
+  jq '.state="CLOSED"' "$TEST_CTRL/pr.json" >"$TEST_CTRL/pr.tmp" && mv "$TEST_CTRL/pr.tmp" "$TEST_CTRL/pr.json"
+  # The rebase round's own worktree is long gone (push_pr removed it on success): the
+  # branch is a ref alone now, reset here to stand for "the same change landed on main
+  # another way, so there is nothing left to rebase".
+  git -C "$REPO" branch -f bead/t-1 origin/main
+  : >"$TEST_CTRL/calls"; sup work "$REPO"
+  ! grep -q '^bead-worker ' "$TEST_CTRL/calls" && ok || bad "no worker ran"
+  assert_nofile "$BEAD_LOOP_STATE/repo/inflight/.t-1.conflict" "conflict mark cleared"
+  assert_nofile "$BEAD_LOOP_STATE/repo/inflight/.t-1.fixing" "fixing mark cleared"
+  assert_eq "$(cat "$BEAD_LOOP_STATE/repo/failures/t-1" 2>/dev/null || echo 0)" 0 "no failure charged"
+  assert_eq "$(bead .status)" in_progress "parked"
+  assert_match "$(jq -r .pr "$BEAD_LOOP_STATE/repo/parked/t-1")" "https://github.com/example/repo/pull/7" "parked, naming the closed PR"
+  assert_match "$(bead .notes)" "parked" "noted"
+  assert_match "$(cat "$T/sup.log")" "conflict round: its PR (https://github.com/example/repo/pull/7) is CLOSED" "logged"
+}
+
 # ---- targets (docs/design-targets.md) -----------------------------------------------
 case_target() {
   # A bead labelled work:t claims the [targets.t] checkout: its round works in
