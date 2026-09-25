@@ -17,7 +17,7 @@ name. Both are read afresh on every round, so an edit takes effect on the next r
 | `precheck_model` | none | runs after the gate, before the review queue; SEND BACK is a failure, anything else is not |
 | `model` | none | the worker when no `[[stages]]` table applies. The name picks the harness: `provider/model` runs in opencode, `claude/<alias>` in Claude Code, `aider:provider/model` in aider on that opencode provider's server ([design.md](design.md#harnesses)) |
 | `review_model` | none (no review) | the reviewer when no `[[stages]]` table applies; none: straight to PR |
-| `[[stages]]` | one stage of `model`/`review_model`, `failures = 3` | `worker`, `reviewer`, `failures` (how many send-backs this stage absorbs before the next takes over; `attempts` still reads), `timeout` (`worker_timeout`), in order |
+| `[[stages]]` | one stage of `model`/`review_model`, `failures = 3` | `worker`, `reviewer`, `failures` (how many send-backs this stage absorbs before the next takes over; `attempts` still reads), `timeout` (`worker_timeout`), `name` (default: its 1-based index as a string), in order |
 | `on_exhaust` | `"park"` | after the last stage: `park` for you, or `repeat` the stages |
 | `conflict_worker` | the last stage's worker | who rebases a PR that conflicts with the base; a rebase is judgement, so the strong model by default |
 | `brief_model` | the last stage's worker | who writes the **brief** when a bead is parked for you — what each round tried, why it was sent back, the question you have to answer; `none` for no brief, the loop's own question then |
@@ -98,6 +98,10 @@ lands. So "when does something get evicted to Claude" is one number: the sum of
 `failures` above the Claude stage. A stage may name `claude/<alias>` (`claude/sonnet`,
 `claude/opus`): that round runs in Claude Code instead of opencode — the frontier model
 gets only what the local ones could not land.
+
+A bead labelled `stage:NAME` starts on the stage of that `name` (default its 1-based
+index), its failure count floored to that stage's first count the first time it is
+claimed — the planner's escalate for a bead already known to be beyond the first stage.
 
 ## The merge, per repo
 

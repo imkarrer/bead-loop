@@ -13,6 +13,7 @@ use std::sync::OnceLock;
 /// One `[[stages]]` table: a stage takes the bead for the next `failures` send-backs.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Stage {
+    pub name: String,
     pub worker: String,
     pub reviewer: String,
     pub failures: u64,
@@ -199,7 +200,9 @@ impl Layers {
         };
         table
             .iter()
-            .map(|s| Stage {
+            .enumerate()
+            .map(|(i, s)| Stage {
+                name: s.get("name").map(scalar).unwrap_or_else(|| (i + 1).to_string()),
                 worker: s.get("worker").map(scalar).unwrap_or_default(),
                 reviewer: s.get("reviewer").map(scalar).unwrap_or_default(),
                 failures: s
@@ -410,7 +413,7 @@ impl Repo {
         let review_model = cfg.str("review_model", "");
         let mut stages = cfg.stages();
         if stages.is_empty() {
-            stages.push(Stage { worker: model.clone(), reviewer: review_model.clone(), failures: 3, timeout: None });
+            stages.push(Stage { name: "1".to_string(), worker: model.clone(), reviewer: review_model.clone(), failures: 3, timeout: None });
         }
         for s in &stages {
             if s.worker.starts_with("claude/") || s.reviewer.starts_with("claude/") {
@@ -632,9 +635,11 @@ pub fn test_repo(root: &Path, stages: &[&str]) -> Repo {
     make_state_dirs(&rs);
     let stages: Vec<Stage> = stages
         .iter()
-        .map(|s| {
+        .enumerate()
+        .map(|(i, s)| {
             let mut it = s.split(':');
             Stage {
+                name: (i + 1).to_string(),
                 worker: it.next().unwrap_or("").to_string(),
                 reviewer: it.next().unwrap_or("").to_string(),
                 failures: it.next().and_then(|n| n.parse().ok()).unwrap_or(1),

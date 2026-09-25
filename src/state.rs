@@ -333,6 +333,14 @@ pub fn stage_for(stages: &[Stage], on_exhaust: &str, worker_timeout: u64, n: u64
     None
 }
 
+/// `stage_start(&stages, NAME)`: the failure count at which the named stage begins — the
+/// sum of `failures` of the stages before it. "last" names the last stage. None when no
+/// stage has the name.
+pub fn stage_start(stages: &[Stage], name: &str) -> Option<u64> {
+    let idx = if name == "last" { stages.len().checked_sub(1) } else { stages.iter().position(|s| s.name == name) }?;
+    Some(stages[..idx].iter().map(|s| s.failures).sum())
+}
+
 /// The review queue's order: fewest failures, then oldest first.
 pub fn review_queue(repo: &Repo) -> Vec<String> {
     let mut v: Vec<(u64, i64, String)> = std::fs::read_dir(repo.rs.join("review"))
@@ -374,7 +382,7 @@ pub fn order_dev(repo: &Repo, ready: Vec<String>) -> Vec<String> {
 mod tests {
     use super::*;
     fn st(w: &str, r: &str, f: u64) -> Stage {
-        Stage { worker: w.into(), reviewer: r.into(), failures: f, timeout: None }
+        Stage { name: String::new(), worker: w.into(), reviewer: r.into(), failures: f, timeout: None }
     }
     #[test]
     fn research_file_is_read_and_cleared() {
@@ -436,6 +444,14 @@ mod tests {
         assert_eq!(stage_for(&s, "park", 60, 0).unwrap().timeout, 60);
         s[0].timeout = Some(7);
         assert_eq!(stage_for(&s, "park", 60, 0).unwrap().timeout, 7);
+    }
+    #[test]
+    fn a_stage_label_floors_the_failure_count() {
+        let mut s = vec![st("fast", "rev", 3), st("slow", "senior", 2), st("claude/sonnet", "claude/sonnet", 1)];
+        s[1].name = "senior".into();
+        assert_eq!(stage_start(&s, "senior"), Some(3));
+        assert_eq!(stage_start(&s, "last"), Some(5));
+        assert_eq!(stage_start(&s, "nope"), None);
     }
     #[test]
     fn last_stage_start_is_the_first_count_that_lands_there() {
