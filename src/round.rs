@@ -590,7 +590,17 @@ pub fn research_prompt(json: &Value, base: &str, previous: &str, last_note: &str
 /// of a conflict round, the research brief when one was written, and the notes of the
 /// rounds sent back before (the last three).
 #[allow(clippy::too_many_arguments)]
-pub fn dev_prompt(json: &Value, branch: &str, base: &str, resumed: bool, gate: &str, rebase: &str, research: &str, hist: &str) -> String {
+pub fn dev_prompt(
+    json: &Value,
+    branch: &str,
+    base: &str,
+    resumed: bool,
+    gate: &str,
+    rebase: &str,
+    research: &str,
+    hist: &str,
+    house: &str,
+) -> String {
     let research_block = if research.trim().is_empty() {
         String::new()
     } else {
@@ -611,8 +621,13 @@ pub fn dev_prompt(json: &Value, branch: &str, base: &str, resumed: bool, gate: &
     } else {
         format!(" The gate this branch must pass before review: `{gate}`. Run it before you write DONE:.")
     };
+    let house_block = if house.is_empty() {
+        String::new()
+    } else {
+        format!(" House rules for this work are the skills under .agents/skills/ (linked from {house}); the repository's own AGENTS.md and CONTRIBUTING.md win on style.")
+    };
     format!(
-        "Work the bead below in this repository, following the bead-workflow skill.\n\n<bead>\n{}\n</bead>\n\nYou are on branch {branch}{}.{gate_block} Commit your work on this branch and leave .beads/ untouched. End your turn with one line: DONE: <evidence> or BLOCKED: <note>.{rebase}{research_block}{history_block}",
+        "Work the bead below in this repository, following the bead-workflow skill.\n\n<bead>\n{}\n</bead>\n\nYou are on branch {branch}{}.{gate_block}{house_block} Commit your work on this branch and leave .beads/ untouched. End your turn with one line: DONE: <evidence> or BLOCKED: <note>.{rebase}{research_block}{history_block}",
         render_bead(json),
         if resumed {
             ", which already carries your earlier commit(s) for this bead: fix them in place rather than starting over".to_string()
@@ -1079,7 +1094,7 @@ pub fn dev_one(repo: &Repo, opts: &Opts, id: Option<&str>, last_id: &mut Option<
         // research is on, but the researcher is on other work: the worker does not wait
         log(&format!("{}: {id}: no brief yet; the worker goes without rather than wait for {}", repo.slug, repo.research_model));
     }
-    let prompt = dev_prompt(&json, &branch, &repo.base, resumed, &repo.gate, &rebase, &research, &hist);
+    let prompt = dev_prompt(&json, &branch, &repo.base, resumed, &repo.gate, &rebase, &research, &hist, "");
     // A worker session of this bead still running on the server since the last process
     // (recover found it): the round is that session, waited on, not a new one — and the
     // worktree it works in is left alone. Without the worktree there is nothing to rejoin.
@@ -1609,13 +1624,13 @@ mod tests {
     #[test]
     fn dev_prompt_says_fresh_or_resumed_and_carries_the_history() {
         let j: Value = serde_json::json!([{"id":"t-1","title":"T","description":"D"}]);
-        let fresh = dev_prompt(&j, "bead/t-1", "main", false, "", "", "", "");
+        let fresh = dev_prompt(&j, "bead/t-1", "main", false, "", "", "", "", "");
         assert!(fresh.contains("<bead>\nid: t-1\n"), "the bead rendered into the prompt");
         assert!(fresh.contains("You are on branch bead/t-1, a fresh worktree of main."));
         assert!(!fresh.contains("<previous-attempts>"), "first attempt has no history");
         assert!(!fresh.contains("The gate this branch must pass"), "no gate line when the gate is empty");
         assert!(fresh.ends_with("DONE: <evidence> or BLOCKED: <note>."));
-        let gated = dev_prompt(&j, "bead/t-1", "main", false, "cargo test", "", "", "");
+        let gated = dev_prompt(&j, "bead/t-1", "main", false, "cargo test", "", "", "", "");
         assert!(
             gated.contains("You are on branch bead/t-1, a fresh worktree of main. The gate this branch must pass before review: `cargo test`. Run it before you write DONE:."),
             "the gate line follows the branch sentence"
@@ -1625,14 +1640,14 @@ mod tests {
             "gate line comes before the DONE line"
         );
         let hist = "round 1 (stub/fast): worker made no commit\nround 2 (stub/fast): review (r) rejected: REJECT: work.txt:1 For the worker: - What is wrong: x";
-        let again = dev_prompt(&j, "bead/t-1", "main", true, "", "", "", hist);
+        let again = dev_prompt(&j, "bead/t-1", "main", true, "", "", "", hist, "");
         assert!(
             again.contains("which already carries your earlier commit(s) for this bead: fix them in place rather than starting over"),
             "told to fix, not restart"
         );
         assert!(again.contains("a work order from the senior reviewer"), "told to act on it");
         assert!(again.contains(&format!("<previous-attempts>\n{hist}\n</previous-attempts>")), "the notes verbatim");
-        let rebase = dev_prompt(&j, "bead/t-1", "main", true, "", &rebase_order("origin", "main"), "", "");
+        let rebase = dev_prompt(&j, "bead/t-1", "main", true, "", &rebase_order("origin", "main"), "", "", "");
         assert!(rebase.contains("Your job this round is the rebase, not new work. Run: git fetch origin && git rebase origin/main"));
         assert!(rebase.find("rebase origin/main").unwrap() > rebase.find("</bead>").unwrap(), "the order comes after the bead");
     }
@@ -1654,10 +1669,19 @@ mod tests {
     #[test]
     fn dev_prompt_carries_the_research_before_the_history() {
         let j: Value = serde_json::json!([{"id":"t-1","title":"T","description":"D"}]);
-        let p = dev_prompt(&j, "bead/t-1", "main", false, "", "", "Files:\n- work.txt\n", "round 1 (x): y");
+        let p = dev_prompt(&j, "bead/t-1", "main", false, "", "", "Files:\n- work.txt\n", "round 1 (x): y", "");
         assert!(p.contains("<research>\nFiles:\n- work.txt\n</research>"), "the brief verbatim");
         assert!(p.find("</research>").unwrap() < p.find("<previous-attempts>").unwrap(), "before the history");
-        assert!(!dev_prompt(&j, "bead/t-1", "main", false, "", "", "  \n", "").contains("<research>"), "a blank brief is none");
+        assert!(!dev_prompt(&j, "bead/t-1", "main", false, "", "", "  \n", "", "").contains("<research>"), "a blank brief is none");
+    }
+    #[test]
+    fn dev_prompt_names_house_rules_only_when_linked() {
+        let j: Value = serde_json::json!([{"id":"t-1","title":"T","description":"D"}]);
+        let housed = dev_prompt(&j, "bead/t-1", "main", false, "", "", "", "", "/src/beads");
+        assert!(housed.contains("House rules"), "the house-rules sentence when house is set");
+        assert!(housed.contains("/src/beads"), "the link named in the sentence");
+        let unhoused = dev_prompt(&j, "bead/t-1", "main", false, "", "", "", "", "");
+        assert!(!unhoused.contains("House rules"), "no house-rules sentence when house is empty");
     }
     #[test]
     fn gate_fix_prompt_feeds_the_gate_back() {
