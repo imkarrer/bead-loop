@@ -1746,6 +1746,8 @@ mod tests {
     fn dev_prompt_says_fresh_or_resumed_and_carries_the_history() {
         let j: Value = serde_json::json!([{"id":"t-1","title":"T","description":"D"}]);
         let fresh = dev_prompt(&j, "bead/t-1", "main", false, "", "", "", "", "");
+        assert!(fresh.starts_with("Work the bead below in this repository.\n\n<bead>\n"), "the opening sentence");
+        assert!(!fresh.contains("bead-workflow"), "agents/bead-worker.md says not to load that skill");
         assert!(fresh.contains("<bead>\nid: t-1\n"), "the bead rendered into the prompt");
         assert!(fresh.contains("You are on branch bead/t-1, a fresh worktree of main."));
         assert!(!fresh.contains("<previous-attempts>"), "first attempt has no history");

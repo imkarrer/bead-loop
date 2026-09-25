@@ -8,9 +8,47 @@ tools:
   todoread: false
   task: false
 permission:
-  edit: allow
+  # Last match wins, within a key and across layers: opencode's defaults come first
+  # (external_directory allows its tmp dir, its tool-output dir and every skill dir it
+  # found), then opencode.json, then these lines.
+  #
+  # edit (write, edit, patch) is matched against the path relative to the session's
+  # worktree, so "../*" is every file outside it - but only when opencode resolved the
+  # directory as a git project. A session filed under the global project has worktree
+  # "/", every path is relative to "/", and this rule never fires.
+  edit:
+    "*": allow
+    "../*": deny
+  # bash is not path-checked: a redirect, sed -i, git -C or a script writes wherever
+  # the user can. Only its workdir and the path arguments of cd, rm, cp, mv, mkdir,
+  # touch, chmod, chown and cat go through external_directory.
   bash: allow
-  external_directory: allow
+  # external_directory is asked, as "<parent dir>/*", for any path outside the
+  # session's directory (in both shapes: opencode skips the worktree test when the
+  # worktree is "/"). It has no read/write split, so a deny refuses reads too; it has
+  # no ask here, since an ask ends an `opencode run` session. A denied call is a tool
+  # error the session survives. These two keep the worker out of the user's config
+  # (opencode's own agents and skills among it) and out of every checkout under ~/src,
+  # the repo's main checkout included. The rest of the box stays open to it: /tmp,
+  # ~/.local (the other worktrees among it), the home dir's own files. There only
+  # "../*" above guards writes, and only in a git-project session.
+  # The denies also beat the default allow for a skill dir under those trees: such a
+  # skill still loads, but the files beside its SKILL.md cannot be read. A skill linked
+  # into the worktree's .agents/skills is read by its path in the worktree, which is
+  # inside the session's directory, so a link into ~/src still works - for writes as
+  # well: a write through such a link lands in ~/src.
+  external_directory:
+    "*": allow
+    "~/.config/*": deny
+    "~/src/*": deny
+  # Repo skills stay. The loop's own are for the planner, and workstation is for the
+  # Mac's config. A denied skill is left out of the list the model sees.
+  skill:
+    "*": allow
+    bead-workflow: deny
+    beads: deny
+    delegate: deny
+    workstation: deny
   webfetch: deny
   doom_loop: deny
   task: deny
