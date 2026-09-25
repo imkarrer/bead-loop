@@ -101,7 +101,6 @@ impl Repo {
     }
     /// `$RS/research/ID.prev`: the brief a send-back cleared under `research = "every"`,
     /// handed to the next research round to refine.
-    #[allow(dead_code)] // wired by bl-iej.11
     pub fn research_prev_path(&self, id: &str) -> PathBuf {
         self.rs.join("research").join(format!("{id}.prev"))
     }
@@ -110,7 +109,6 @@ impl Repo {
     }
     /// The brief and any earlier one go: the bead closed, parked, or its research is to
     /// run again from nothing.
-    #[allow(dead_code)] // wired by bl-iej.11
     pub fn research_clear(&self, id: &str) {
         let _ = std::fs::remove_file(self.research_path(id));
         let _ = std::fs::remove_file(self.research_prev_path(id));
@@ -123,6 +121,15 @@ impl Repo {
     }
     pub fn lane_set(&self, name: &str, id: &str) {
         write_file(&self.lane_path(name), &format!("{id}\n"));
+    }
+    /// The marker with the round's role on its second line (`research`), for status to
+    /// show; a worker or reviewer round writes the bead alone.
+    pub fn lane_set_role(&self, name: &str, id: &str, role: &str) {
+        write_file(&self.lane_path(name), &format!("{id}\n{role}\n"));
+    }
+    /// The role on the marker's second line, when the round wrote one.
+    pub fn lane_role(&self, name: &str) -> Option<String> {
+        read_to_string(&self.lane_path(name)).and_then(|s| s.lines().nth(1).map(|l| l.trim().to_string())).filter(|s| !s.is_empty())
     }
     pub fn lane_clear(&self, name: &str) {
         let _ = std::fs::remove_file(self.lane_path(name));
@@ -144,7 +151,7 @@ impl Repo {
         v
     }
     pub fn lane_bead(&self, name: &str) -> Option<String> {
-        read_to_string(&self.lane_path(name)).map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
+        read_to_string(&self.lane_path(name)).and_then(|s| s.lines().next().map(|l| l.trim().to_string())).filter(|s| !s.is_empty())
     }
     /// `$RS/rejoin/ID`: a session of this bead still running on the opencode server after
     /// the loop restarted — `SID worker` or `SID reviewer`. The lane that takes the bead

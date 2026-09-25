@@ -66,7 +66,8 @@ The loop keeps no state of its own beyond files; a bead's state is a function of
 | `$RS/held/ID` | the bead waits on something outside the loop; the file says what |
 | `$RS/parked/ID` | the loop's record of a parking: the reason, the stage, the question, the brief |
 | `$RS/lane.NAME` | the bead the lane NAME is on (`dev`, `review`, `claude`; or the `[[lanes]]` names) |
-| `$RS/rejoin/ID` | `SID worker` or `SID reviewer`: a session still running on the server after a restart, for the lane to wait on instead of starting one |
+| `$RS/rejoin/ID` | `SID worker`, `SID reviewer` or `SID research`: a session still running on the server after a restart, for the lane to wait on instead of starting one |
+| `$RS/research/ID` | the brief the research round wrote (`research_model`), carried by every worker prompt under `<research>`; `.prev` the one a send-back set aside under `research = "every"`. Absent with research on: the next pick is a research round, unless the worker's lane has nothing else, in which case it goes without |
 | `$RS/wt/ID`, branch `bead/ID` (local, origin) | the work |
 | GitHub | the PR: none / OPEN (checks pending, green, red, none; mergeable CONFLICTING; mergeState CLEAN, BEHIND, BLOCKED) / MERGED / CLOSED |
 | the servers | an opencode session running or orphaned; devbox, acbox, claude, gh reachable or not |
@@ -80,6 +81,9 @@ stateDiagram-v2
   [*] --> waiting: labelled, a blocker open
   [*] --> ready: labelled, no blocker open
   waiting --> ready: last blocker closed
+  ready --> research: research_model set, no brief
+  research --> ready: brief written   (no failure)
+  research --> human: the researcher says BLOCKED
   ready --> dev: a lane picks (fewest failures first)
   dev --> review: DONE, commit, gate passed
   dev --> ready: BLOCKED · no commit · gate ×2 · timeout   (+1, branch removed)
@@ -100,6 +104,7 @@ stateDiagram-v2
 | --- | --- | --- |
 | **waiting** | bd `open` + label, a blocker not `closed` | bd, when the blocker closes (a merge, or a human) |
 | **ready** | bd `open` + label, no blocker open; none of the markers below | a lane with the worker role whose models match the stage's worker |
+| **research** | `lane.NAME = ID` with `research` on its second line, bd `in_progress` | that lane: back to ready with `research/ID` written, or human |
 | **dev** | `lane.NAME = ID`, bd `in_progress`, `wt/ID` | that lane: to review, or back to ready |
 | **review** | `review/ID`, `wt/ID`, bd `in_progress` | a lane with the reviewer role whose models match the stage's reviewer |
 | **reviewing** | `review/ID` + `lane.NAME = ID` | that lane: to merge, or back to ready |
@@ -144,6 +149,9 @@ Every row is a case in `test/run.sh`.
 
 | Outcome | Bead | Branch / PR |
 | --- | --- | --- |
+| Researcher writes a brief | `research/ID`, a note with its length; dev queue, **no failure** | a worktree the round made is removed again |
+| Researcher `BLOCKED:` | parked before any edit, the researcher's line as the question, **no failure** | removed |
+| No brief yet, and the worker's lane has nothing else to take | the worker round runs without one (the GPU never waits on the CPU) | as any worker round |
 | Worker `BLOCKED:` | note with the worker's line, +1 failure; dev queue — parked if this was the last stage, with the brief's question | removed (after the brief) |
 | No commit, or the session timed out | note, +1 failure; dev queue | removed |
 | Setup fails | **held**, no failure: the reason on the bead once; retried after the backoff | removed |

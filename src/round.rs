@@ -141,8 +141,6 @@ fn hold_expired(repo: &Repo, id: &str) -> bool {
 /// until the PR), so two slots of one lane, over the same models, would both pick it:
 /// the pick takes a reservation, and `pick_runnable` passes over reserved beads.
 static RESERVED: Mutex<Vec<String>> = Mutex::new(Vec::new());
-/// Held from the look at the queue to the reservation, so two picks cannot interleave.
-static PICKING: Mutex<()> = Mutex::new(());
 
 /// A bead reserved to one round; dropped when the round returns.
 pub struct Reservation(String);
@@ -173,12 +171,30 @@ pub fn reserve(repo: &Repo, id: &str) -> Option<Reservation> {
     Some(Reservation(key))
 }
 
-/// `pick_runnable`, and the bead reserved to the caller before any other slot looks.
+/// `pick_runnable`, and the bead reserved to the caller. No lock across the look at the
+/// queue: it reads bd, and lanes queued on a lock that long look busy to each other for
+/// ever (a tick then never ends). Two slots can pick the same bead; the one whose
+/// reservation fails looks again, and the pick passes over a reserved bead.
 fn pick_and_reserve(repo: &Repo, which: &str, lane: Option<&LaneSpec>) -> Option<(String, Reservation)> {
-    let _g = PICKING.lock().unwrap_or_else(|e| e.into_inner());
-    let id = pick_runnable(repo, which, lane)?;
-    let r = reserve(repo, &id)?;
-    Some((id, r))
+    pick_dev_and_reserve_in(repo, which, lane).map(|(id, _, r)| (id, r))
+}
+
+/// The dev pick, reserved the same way: (id, research round, reservation). A bead with
+/// `research_model` set and no brief is the research lane's before it is the worker's. A
+/// worker lane skips it while it has a bead with a brief to take — and takes it without
+/// one when it has nothing else, so the worker's server never waits on the researcher's.
+fn pick_dev_and_reserve(repo: &Repo, lane: Option<&LaneSpec>) -> Option<(String, bool, Reservation)> {
+    pick_dev_and_reserve_in(repo, "dev", lane)
+}
+
+fn pick_dev_and_reserve_in(repo: &Repo, which: &str, lane: Option<&LaneSpec>) -> Option<(String, bool, Reservation)> {
+    for _ in 0..3 {
+        let (id, research) = pick(repo, which, lane)?;
+        if let Some(r) = reserve(repo, &id) {
+            return Some((id, research, r));
+        }
+    }
+    None
 }
 
 /// `pick_runnable dev|review`: the first bead in that queue whose round's model can run
@@ -188,14 +204,42 @@ fn pick_and_reserve(repo: &Repo, which: &str, lane: Option<&LaneSpec>) -> Option
 /// (config.rs `LaneSpec`); `None` takes any (a hand-run `work`). A bead on the Claude
 /// stage never waits behind the GPU this way, nor a CPU-box round behind the GPU's.
 pub fn pick_runnable(repo: &Repo, which: &str, lane: Option<&LaneSpec>) -> Option<String> {
+    pick(repo, which, lane).map(|(id, _)| id)
+}
+
+/// A research round is due: research is on, the bead has no brief, and the round is not a
+/// rebase or a worker session to rejoin.
+pub fn needs_research(repo: &Repo, id: &str) -> bool {
+    !repo.research_model.is_empty()
+        && !repo.research_path(id).exists()
+        && !repo.mark(id, "conflict").exists()
+        && repo.rejoin_of(id).map(|(_, kind)| kind == "research").unwrap_or(true)
+}
+
+fn pick(repo: &Repo, which: &str, lane: Option<&LaneSpec>) -> Option<(String, bool)> {
     let queue = if which == "dev" { dev_queue(repo) } else { review_queue(repo) };
     let mut skipped_claude = 0;
     let mut pick = None;
+    // a bead with no brief this worker lane may take when it finds nothing better
+    let mut unresearched = None;
     for id in queue {
         if !hold_expired(repo, &id) || reserved(repo, &id) {
             continue;
         }
         let n = repo.failures_of(&id);
+        if which == "dev" && needs_research(repo, &id) {
+            if let Some(st) = repo.stage_for(n) {
+                let rm = &repo.research_model;
+                if lane.map(|l| l.takes(rm)).unwrap_or(true) && runnable(rm) {
+                    pick = Some((id, true));
+                    break;
+                }
+                if unresearched.is_none() && lane.map(|l| l.takes(&st.model)).unwrap_or(true) && runnable(&st.model) {
+                    unresearched = Some(id);
+                }
+                continue;
+            }
+        }
         // The model this round runs on: the stage's worker or reviewer — or, for a bead
         // sent back with a conflict, the rebase worker (conflict_worker, else the last
         // stage's). A bead whose stages are exhausted is the first lane's to park; a
@@ -206,7 +250,7 @@ pub fn pick_runnable(repo: &Repo, which: &str, lane: Option<&LaneSpec>) -> Optio
                 if lane.map(|l| !l.parks).unwrap_or(false) {
                     continue;
                 }
-                pick = Some(id);
+                pick = Some((id, false));
                 break;
             }
             Some(st) => {
@@ -230,7 +274,7 @@ pub fn pick_runnable(repo: &Repo, which: &str, lane: Option<&LaneSpec>) -> Optio
             }
         }
         if runnable(&model) {
-            pick = Some(id);
+            pick = Some((id, false));
             break;
         }
         skipped_claude += 1;
@@ -241,7 +285,7 @@ pub fn pick_runnable(repo: &Repo, which: &str, lane: Option<&LaneSpec>) -> Optio
             repo.slug
         ));
     }
-    pick
+    pick.or(unresearched.map(|id| (id, false)))
 }
 
 /// A worker, gate or reviewer that came back while the loop is stopping came back
@@ -385,6 +429,7 @@ pub fn send_back(repo: &Repo, id: &str, wt: &Path, keep: bool, note: &str, model
     if let Some(reason) = parked.clone() {
         park(repo, id, reason, Some(wt));
         repo.clear_target(id);
+        repo.research_clear(id);
     }
     clear_lane_of(repo, id);
     repo.release(id);
@@ -396,6 +441,11 @@ pub fn send_back(repo: &Repo, id: &str, wt: &Path, keep: bool, note: &str, model
         park_cleanup(repo, wt);
         repo.wake();
         return;
+    }
+    // research = "every": the brief goes to .prev, so the next pick is a research round
+    // that refines it with this round's note
+    if repo.research == "every" && !repo.research_model.is_empty() && repo.research_path(id).exists() {
+        let _ = std::fs::rename(repo.research_path(id), repo.research_prev_path(id));
     }
     if let Some(st) = repo.stage_for(n) {
         bd_status(repo, id, "open");
@@ -460,7 +510,6 @@ pub fn rebase_order(base_remote: &str, base: &str) -> String {
 
 /// The researcher's prompt: the bead and the base; after a send-back under `research =
 /// "every"`, the brief the worker had and the note it was sent back with, to refine.
-#[allow(dead_code)] // wired by bl-iej.11
 pub fn research_prompt(json: &Value, base: &str, previous: &str, last_note: &str) -> String {
     let refine = if previous.is_empty() {
         String::new()
@@ -632,18 +681,159 @@ pub fn conflict_model(repo: &Repo) -> Option<String> {
     repo.stage_for(repo.last_stage_start()).map(|s| s.model)
 }
 
+/// `research_one ID`: the research round — the bead claimed, a worktree on the base (or
+/// its branch after a send-back), the researcher reads and answers. A brief goes to
+/// `research/ID` and the bead back to the dev queue for its worker; `BLOCKED:` parks it
+/// with the researcher's line as the question; nothing from the model holds it. Research
+/// never counts a failure. True when a brief was written.
+fn research_one(repo: &Repo, opts: &Opts, id: &str, lane: Option<&LaneSpec>, last_id: &mut Option<String>) -> bool {
+    let n = repo.failures_of(id);
+    let Some(st) = repo.stage_for(n) else { return false };
+    let model = repo.research_model.clone();
+    let json = bd_show(repo, id);
+    let labels = bead_labels(&json);
+    let repo = match repo.for_bead(&labels) {
+        Ok(r) => r,
+        Err(e) => {
+            hold(repo, id, None, &e);
+            return false;
+        }
+    };
+    let repo = &repo;
+    let title = json.get(0).and_then(|b| b.get("title")).and_then(|t| t.as_str()).unwrap_or("").to_string();
+    let branch = format!("bead/{id}");
+    let wt = repo.wt(id);
+    let logf = repo.rs.join("logs").join(format!("{id}.{}", stamp()));
+    let mut resumed = branch_exists(repo, &branch);
+    // A branch here with nothing on it and never pushed is an earlier research round's
+    // that a stop cut short: gone, so the worker does not take it for work to resume.
+    if !opts.dry_run
+        && resumed
+        && local_branch_exists(repo, &branch)
+        && !git_ok(&repo.repo, &["show-ref", "-q", &format!("refs/remotes/{}/{branch}", repo.push_remote)])
+        && git_out(&repo.repo, &["rev-list", &format!("{}/{}..{branch}", repo.base_remote, repo.base)]).trim().is_empty()
+    {
+        worktree_remove(repo, &wt);
+        let _ = git(&repo.repo, &["branch", "-D", &branch]);
+        resumed = false;
+    }
+    let previous = read_to_string(&repo.research_prev_path(id)).unwrap_or_default();
+    let last_note = if previous.is_empty() { String::new() } else { crate::park::history(repo, id, 1) };
+    let prompt = research_prompt(&json, &repo.base, &previous, &last_note);
+    let rejoin = repo.rejoin_of(id).filter(|(_, kind)| kind == "research").map(|(sid, _)| sid).filter(|_| wt.is_dir());
+    repo.rejoin_clear(id);
+    log(&format!(
+        "{}: research: bead {id} — {title} ({n} failures, researcher {model}{}{})",
+        repo.slug,
+        if previous.is_empty() { "" } else { ", refining the brief" },
+        rejoin.as_deref().map(|s| format!(", rejoining session {s}")).unwrap_or_default()
+    ));
+    if opts.dry_run {
+        println!("--- research  model: {model}  base: {}", repo.base);
+        println!("{prompt}");
+        return false;
+    }
+    let lane_name = lane.map(|l| l.name.as_str()).unwrap_or("dev");
+    repo.lane_set_role(lane_name, id, "research");
+    *last_id = Some(id.to_string());
+    bd_claim(repo, id);
+    repo.set_target(id, &repo.target);
+    repo.unpark(id);
+    if !git_ok(&repo.repo, &["fetch", "-q", &repo.base_remote, &repo.base]) {
+        hold(repo, id, None, &format!("git fetch {} {} failed", repo.base_remote, repo.base));
+        return false;
+    }
+    if rejoin.is_none() {
+        abort_sessions(repo, &wt);
+    }
+    signals::set_current(lane_name, &repo.attach, &repo.slug, Some(wt.clone()), Some(repo.lane_path(lane_name)));
+    // The researcher reads; it needs no setup. A worktree it had to make goes again after
+    // it, so the worker's round makes its own (with setup) as it always has.
+    let made = !wt.is_dir();
+    if made {
+        if let Err(e) = make_worktree(repo, &branch, &wt, resumed) {
+            hold(repo, id, Some(&wt), &format!("cannot make the worktree: {e}"));
+            return false;
+        }
+    }
+    let research_log = std::path::PathBuf::from(format!("{}.research.jsonl", logf.display()));
+    let r = match &rejoin {
+        Some(sid) => crate::harness::rejoin_session(repo, sid, &wt, &research_log, st.timeout),
+        None => run_agent(
+            repo,
+            "bead-researcher",
+            &model,
+            &wt,
+            &research_log,
+            &prompt,
+            &format!("{id} · research · round {}", n + 1),
+            st.timeout,
+            Some(&json),
+        ),
+    };
+    cut_short(repo, id);
+    let tidy = |repo: &Repo| {
+        if made {
+            worktree_remove(repo, &wt);
+            if !resumed {
+                let _ = git(&repo.repo, &["branch", "-D", &branch]);
+            }
+        }
+    };
+    if r.empty && r.rc != 124 {
+        hold(repo, id, Some(&wt), &never_answered("researcher", &model, &r));
+        tidy(repo);
+        return false;
+    }
+    if let Some(b) = last_line_starting(&r.text, "BLOCKED:") {
+        log(&format!("{}: {id}: the researcher found the bead cannot be done as written; parked for you", repo.slug));
+        bd_note(repo, id, &format!("bead-loop {}: research ({model}) {b}", date_iminutes()));
+        park(repo, id, Reason::ResearchBlocked(b), Some(&wt));
+        repo.clear_target(id);
+        repo.research_clear(id);
+        clear_lane_of(repo, id);
+        repo.release(id);
+        park_cleanup(repo, &wt);
+        if !resumed {
+            let _ = git(&repo.repo, &["branch", "-D", &branch]);
+        }
+        repo.wake();
+        return false;
+    }
+    // A brief without the headings is kept as it is: a worse brief is still a brief. A
+    // round the clock ended leaves an empty one — the worker goes without, and research
+    // is not tried again for this bead until a send-back under `every` clears it.
+    let brief = if r.rc == 0 { r.text.trim().to_string() } else { String::new() };
+    write_file(&repo.research_path(id), &format!("{brief}\n"));
+    let _ = std::fs::remove_file(repo.research_prev_path(id));
+    let what = if brief.is_empty() {
+        format!("research ({model}) gave no brief (exited {}); the worker goes without. Log: {}", r.rc, research_log.display())
+    } else {
+        format!("research ({model}) wrote the brief ({} lines)", brief.lines().count())
+    };
+    log(&format!("{}: {id}: {what} → dev queue", repo.slug));
+    bd_note(repo, id, &format!("bead-loop {}: {what}", date_iminutes()));
+    clear_lane_of(repo, id);
+    repo.release(id);
+    tidy(repo);
+    bd_status(repo, id, "open");
+    repo.wake();
+    true
+}
+
 pub fn dev_one(repo: &Repo, opts: &Opts, id: Option<&str>, last_id: &mut Option<String>, lane: Option<&LaneSpec>) -> Pass {
-    let (id, _mine) = match id {
+    // The reservation holds the bead to this round (research included) until it returns.
+    let (id, research, _mine) = match id {
         Some(i) => match reserve(repo, i) {
-            Some(r) => (i.to_string(), r),
+            Some(r) => (i.to_string(), needs_research(repo, i) && runnable(&repo.research_model), r),
             None => return Pass::Nothing,
         },
         None => {
             // The two idle lines: every pass in a tick (the bash did), once per change in
             // the resident loop, which passes every heartbeat.
             let name = lane.map(|l| l.name.as_str()).unwrap_or("dev");
-            match pick_and_reserve(repo, "dev", lane) {
-                Some(i) => i,
+            match pick_dev_and_reserve(repo, lane) {
+                Some(p) => p,
                 None => {
                     crate::merge::say(
                         &format!("{}/{name}-idle", repo.slug),
@@ -658,6 +848,17 @@ pub fn dev_one(repo: &Repo, opts: &Opts, id: Option<&str>, last_id: &mut Option<
             }
         }
     };
+    if research {
+        let brief = research_one(repo, opts, &id, lane, last_id);
+        // A lane goes round again, and the worker's lane takes the bead from the queue; a
+        // hand-run `work` goes straight on to the worker round, the brief in its prompt.
+        if opts.dry_run {
+            return Pass::Nothing;
+        }
+        if lane.is_some() || !brief {
+            return Pass::Worked;
+        }
+    }
     let n = repo.failures_of(&id);
     let st: StageHit = match repo.stage_for(n) {
         Some(s) => s,
@@ -767,6 +968,10 @@ pub fn dev_one(repo: &Repo, opts: &Opts, id: Option<&str>, last_id: &mut Option<
     // restarted: the worker fixes its commit. A dev-side failure deleted the branch.
     let resumed = branch_exists(repo, &branch);
     let research = repo.research_of(&id).unwrap_or_default();
+    if !opts.dry_run && needs_research(repo, &id) {
+        // research is on, but the researcher is on other work: the worker does not wait
+        log(&format!("{}: {id}: no brief yet; the worker goes without rather than wait for {}", repo.slug, repo.research_model));
+    }
     let prompt = dev_prompt(&json, &branch, &repo.base, resumed, &repo.gate, &rebase, &research, &hist);
     // A worker session of this bead still running on the server since the last process
     // (recover found it): the round is that session, waited on, not a new one — and the
@@ -799,6 +1004,10 @@ pub fn dev_one(repo: &Repo, opts: &Opts, id: Option<&str>, last_id: &mut Option<
         crate::config::need("gh");
     }
 
+    // The marker carries the lane's name (gpu, cpu, claude — or dev, the default pair's),
+    // so status shows the lane on it and two lanes in one repo never share a file.
+    let lane_name = lane.map(|l| l.name.as_str()).unwrap_or("dev");
+    repo.lane_set(lane_name, &id);
     bd_claim(repo, &id);
     // The target this bead claimed on, for the review lane, the merge watcher, `open`,
     // `answer` and `escalate` to read back (`Repo::for_id`) — "" (the default) removes
@@ -806,10 +1015,6 @@ pub fn dev_one(repo: &Repo, opts: &Opts, id: Option<&str>, last_id: &mut Option<
     repo.set_target(&id, &repo.target);
     // Reopened by hand: the old question is history.
     repo.unpark(&id);
-    // The marker carries the lane's name (gpu, cpu, claude — or dev, the default pair's),
-    // so status shows the lane on it and two lanes in one repo never share a file.
-    let lane_name = lane.map(|l| l.name.as_str()).unwrap_or("dev");
-    repo.lane_set(lane_name, &id);
     if !git_ok(&repo.repo, &["fetch", "-q", &repo.base_remote, &repo.base]) {
         hold(repo, &id, None, &format!("git fetch {} {} failed", repo.base_remote, repo.base));
         return Pass::Worked;

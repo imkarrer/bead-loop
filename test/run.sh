@@ -1678,6 +1678,71 @@ case_lanes_derive_from_providers() {
   assert_match "$(sup status "$REPO")" "stub lane" "status names the derived lane"
 }
 
+case_research_round_before_the_worker() {
+  # research_model set: a ready bead with no brief is a research round first. The brief
+  # goes to research/ID, the bead back to the queue, and the worker's prompt carries it.
+  setup true auto stub/reviewer 'research_model = "stub/researcher"'
+  sup work "$REPO"
+  assert_eq "$(calls)" "bead-researcher bead-worker bead-reviewer" "researcher, then worker, then reviewer"
+  assert_match "$(sed -n 1p "$TEST_CTRL/calls")" " stub/researcher " "on the research model"
+  assert_match "$(cat "$TEST_CTRL/prompt.1")" "Files / Shape / Check / Pitfalls" "the researcher's ask"
+  assert_file "$BEAD_LOOP_STATE/repo/research/t-1" "the brief on disk"
+  assert_match "$(cat "$BEAD_LOOP_STATE/repo/research/t-1")" "^Files:" "the researcher's words"
+  assert_match "$(cat "$TEST_CTRL/prompt.2")" "<research>" "the worker's prompt carries the brief"
+  assert_match "$(cat "$TEST_CTRL/prompt.2")" "work.txt: append one line" "verbatim"
+  assert_match "$(bead .notes)" "research (stub/researcher) wrote the brief" "noted on the bead"
+  assert_branch bead/t-1 "and the branch pushed"
+  assert_nofile "$BEAD_LOOP_STATE/repo/failures/t-1" "research counts no failure"
+}
+case_research_blocked_parks() {
+  # The researcher's BLOCKED: parks the bead before a single edit, its line the question.
+  setup true auto stub/reviewer 'research_model = "stub/researcher"'; echo blocked >"$TEST_CTRL/research"
+  sup work "$REPO"
+  ! grep -q '^bead-worker' "$TEST_CTRL/calls" && ok || bad "no worker round"
+  assert_eq "$(bead .status)" in_progress "parked"
+  assert_match "$(bead .notes)" "BLOCKED: work.txt" "the researcher's line on the bead"
+  assert_eq "$(jq -r .reason "$BEAD_LOOP_STATE/repo/parked/t-1")" blocked "parked as blocked"
+  assert_nofile "$BEAD_LOOP_STATE/repo/failures/t-1" "no failure charged"
+  assert_nofile "$BEAD_LOOP_STATE/repo/research/t-1" "no brief kept"
+  assert_nofile "$BEAD_LOOP_STATE/repo/wt/t-1" "the worktree gone"
+  assert_nobranch bead/t-1 "nothing pushed"
+}
+case_research_every_refreshes() {
+  # research = "every": a send-back sets the brief aside, and the next research round
+  # refines it with the round's note.
+  setup true auto stub/reviewer "$(printf 'research_model = "stub/researcher"\nresearch = "every"')"; printf 'nocommit\ndone\n' >"$TEST_CTRL/worker"
+  sup work "$REPO"; sup work "$REPO"
+  assert_eq "$(calls)" "bead-researcher bead-worker bead-researcher bead-worker bead-reviewer" "research again after the send-back"
+  assert_match "$(cat "$TEST_CTRL/prompt.3")" "<previous-research>" "the old brief to refine"
+  assert_match "$(cat "$TEST_CTRL/prompt.3")" "<send-back>" "and why the round came back"
+  assert_match "$(cat "$TEST_CTRL/prompt.3")" "worker made no commit" "the note itself"
+  assert_nofile "$BEAD_LOOP_STATE/repo/research/t-1.prev" "the old brief gone once refined"
+  assert_branch bead/t-1 "and it lands"
+}
+case_research_worker_does_not_wait() {
+  # The worker's lane never waits on the researcher's: with nothing researched to take,
+  # it takes the bead without a brief — here the research lane comes second, so the
+  # worker lane gets there first.
+  NO_DEFAULT_LANES=1 setup true auto stub/reviewer 'research_model = "other/researcher"'
+  printf '[[lanes]]\nname = "work"\nmodels = ["stub/*"]\n[[lanes]]\nname = "read"\nmodels = ["other/*"]\n' >>"$BEAD_LOOP_CONFIG/config.toml"
+  sup --serial tick
+  assert_eq "$(calls)" "bead-worker bead-reviewer" "worked and reviewed, no research round"
+  assert_match "$(cat "$T/sup.log")" "no brief yet; the worker goes without" "said so"
+  assert_branch bead/t-1 "and pushed"
+}
+case_research_lane_feeds_the_worker_lane() {
+  # Lanes side by side in order: the research lane briefs both beads, the worker lane
+  # works each with its brief.
+  NO_DEFAULT_LANES=1 setup true auto stub/reviewer "$(printf 'research_model = "other/researcher"\nmax_inflight = 3')"; printf 'approve\napprove\n' >"$TEST_CTRL/review"
+  printf '[[lanes]]\nname = "read"\nmodels = ["other/*"]\n[[lanes]]\nname = "work"\nmodels = ["stub/*"]\n' >>"$BEAD_LOOP_CONFIG/config.toml"
+  jq '. + [{id:"t-2", title:"Second", description:"y", status:"open", priority:3, labels:["delegate:local"]}]' "$BD_STATE/issues.json" >"$BD_STATE/i.tmp" && mv "$BD_STATE/i.tmp" "$BD_STATE/issues.json"
+  sup --serial tick
+  assert_eq "$(calls)" "bead-researcher bead-researcher bead-worker bead-reviewer bead-worker bead-reviewer" "both briefed, then both worked"
+  assert_match "$(cat "$TEST_CTRL/prompt.3")" "<research>" "t-1's worker had its brief"
+  assert_match "$(cat "$TEST_CTRL/prompt.5")" "<research>" "t-2's too"
+  assert_eq "$(sup --json status "$REPO" | jq -r '.queues.dev | length')" 0 "nothing left queued"
+}
+
 case_doctor() {
   # Every dependency probed, red or green: bd's version and git are real; gh auth, claude
   # auth, the opencode provider named in the stages (its /models) and the attach server

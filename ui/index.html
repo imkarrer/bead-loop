@@ -448,6 +448,9 @@ const roleChip = (agent) => `<span class="chip ${/review/.test(agent) ? 'reviewe
 const titleOf = (s, w) => (s.title && !/^[\s?.…]*$/.test(s.title)) ? s.title : `${w.id} · ${(s.agent || '').replace(/^bead-/, '')}`;
 // How often the bead has been sent back to dev, and the stage that count puts it on:
 // stage 1 is the fast local pair; a later stage is a stronger model, the last one Opus.
+// research_model on: the bead waits for its brief ("research"), or has one ("researched")
+const researchChip = (b) => b.research === 'pending' ? ' <span class="chip" title="the researcher writes a brief before the worker round; a free worker lane goes without">research</span>'
+  : b.research === 'done' ? ' <span class="muted" title="the worker prompt carries the researcher\u2019s brief">researched</span>' : '';
 const failChip = (n) => n ? `<span class="chip n" title="sent back to dev ${n} time${n > 1 ? 's' : ''}">${n}×</span>` : '';
 // The bead's round history — what each round left, "round N (model): note" — behind a
 // toggle, closed by default. Which are open lives in a Set by bead id, so the re-render
@@ -569,12 +572,12 @@ function lanePanel(r, name, now, ticking, showRepo) {
   // gets the same open-session link instead of the generic "setup, or the gate" line.
   const live = wt && wt.sessions.find((s) => s.state === 'busy' || s.state === 'rejoin');
   return `<div class="lane ${name}" data-key="${esc(name)}">
-    <div class="label">${name} lane <span class="muted">· ${role} · ${ago(l.since, now)}</span> ${paused ? '<span class="chip warn" title="finishes this round, then starts no new one">pausing</span>' : ''}<span class="act">${pauseBtn}</span></div>
+    <div class="label">${name} lane <span class="muted">· ${l.role === 'research' ? 'research: reading for the brief' : role} · ${ago(l.since, now)}</span> ${paused ? '<span class="chip warn" title="finishes this round, then starts no new one">pausing</span>' : ''}<span class="act">${pauseBtn}</span></div>
     <div class="bead">${esc(l.id)}${showRepo ? ` <span class="muted">· ${esc(r.slug)}</span>` : ''}</div>
     <div class="what">${esc(l.title || '')}</div>
     <div class="stage">${failChip(l.failures)}${histToggle(l)}${stageChip(l.stage, r)}
       ${live ? `${roleChip(live.agent)} <span class="mono">${esc(live.model)}</span> <span>last output ${ago(live.updated, now)} ago</span> <a href="${esc(live.url)}" target="_blank" rel="noopener">open session ↗</a> ${abortBtn(r, live, `${live.agent} on ${l.id}`)}`
-        : `<span>${name === 'dev' ? 'setup, or the gate' : 'pushing the PR'}</span>`}</div>${histList(l, r)}
+        : `<span>${l.role === 'research' ? 'making the worktree' : name === 'dev' ? 'setup, or the gate' : 'pushing the PR'}</span>`}</div>${histList(l, r)}
   </div>`;
 }
 // The lanes, once, at the top: a lane is one thing for the whole loop (it walks every
@@ -631,7 +634,7 @@ function queueCol(name, rows, r, now) {
   let body;
   if (rows.length === 0) body = `<div class="empty">${empty}</div>`;
   else if (name === 'merge') body = `<table>${rows.map((p) => `<tr data-key="${esc(p.id)}"><td class="id">${esc(p.id)}${p.target ? ` <span class="muted">[${esc(p.target)}]</span>` : ''}</td><td class="title"><span class="t"><a href="${esc(p.url)}" target="_blank" rel="noopener">${esc(p.url.replace(/^https?:\/\/github\.com\/[^/]+\//, ''))} ↗</a></span></td></tr><tr class="sub" data-key="${esc(p.id)}:pr"><td></td><td>${prChips(p, now, r)}</td></tr>`).join('')}</table>`;
-  else body = `<table>${rows.map((b, i) => qRow(i, b, (name === 'dev' ? ` ${stageChip(b.stage, r)}` : ` <span class="muted">${ago(b.since, now)}</span>${stageChip(b.stage, r).includes('waits for') ? ' <span class="chip bad">waits for Claude sign-in</span>' : ''}`) + `</td><td class="act">${claudeBtn(r, b)}`, r)).join('')}</table>`;
+  else body = `<table>${rows.map((b, i) => qRow(i, b, (name === 'dev' ? ` ${stageChip(b.stage, r)}${researchChip(b)}` : ` <span class="muted">${ago(b.since, now)}</span>${stageChip(b.stage, r).includes('waits for') ? ' <span class="chip bad">waits for Claude sign-in</span>' : ''}`) + `</td><td class="act">${claudeBtn(r, b)}`, r)).join('')}</table>`;
   return `<div class="q ${name}"><h3>${name} queue<span class="n">${rows.length}</span></h3><div class="sub">${sub}</div>${body}</div>`;
 }
 // The Claude column: every bead whose current stage names a claude/* worker or reviewer,
