@@ -112,6 +112,40 @@ impl Repo {
     pub fn review_path(&self, id: &str) -> PathBuf {
         self.rs.join("review").join(id)
     }
+    /// `review/ID.seats/K` the verdict of seat K (1-based) for bead ID.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn seat_dir(&self, id: &str) -> PathBuf {
+        self.rs.join("review").join(format!("{id}.seats"))
+    }
+    /// `review/ID.seats/K` the verdict of seat K (1-based) for bead ID.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn seat_verdict(&self, id: &str, k: usize) -> Option<String> {
+        read_to_string(&self.seat_dir(id).join(format!("{k}")))
+    }
+    /// `review/ID.seats/K.running` true when seat K (1-based) is running for bead ID.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn seat_running(&self, id: &str, k: usize) -> bool {
+        self.seat_dir(id).join(format!("{k}.running")).exists()
+    }
+    /// `review/ID.seats/K.running` create the marker file for seat K (1-based) running for bead ID.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn seat_set_running(&self, id: &str, k: usize) {
+        let dir = self.seat_dir(id);
+        std::fs::create_dir_all(&dir).ok();
+        touch(&dir.join(format!("{k}.running")));
+    }
+    /// `review/ID.seats/K.running` remove the marker file for seat K (1-based) running for bead ID.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn seat_clear_running(&self, id: &str, k: usize) {
+        let _ = std::fs::remove_file(self.seat_dir(id).join(format!("{k}.running")));
+    }
+    /// `review/ID.seats/K` write the verdict for seat K (1-based) for bead ID.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn seat_set_verdict(&self, id: &str, k: usize, text: &str) {
+        let dir = self.seat_dir(id);
+        std::fs::create_dir_all(&dir).ok();
+        write_file(&dir.join(format!("{k}")), &format!("{text}\n"));
+    }
     pub fn inflight_path(&self, id: &str) -> PathBuf {
         self.rs.join("inflight").join(id)
     }
@@ -361,6 +395,7 @@ pub fn review_queue(repo: &Repo) -> Vec<String> {
     let mut v: Vec<(u64, i64, String)> = std::fs::read_dir(repo.rs.join("review"))
         .map(|rd| {
             rd.flatten()
+                .filter(|e| e.file_type().map(|t| t.is_file()).unwrap_or(false))
                 .filter_map(|e| e.file_name().into_string().ok())
                 .map(|id| (repo.failures_of(&id), mtime(&repo.review_path(&id)), id))
                 .collect()
@@ -534,6 +569,22 @@ mod tests {
         }
         repo.set_failures("t-1", 1);
         assert_eq!(review_queue(&repo), vec!["t-2", "t-3", "t-1"]);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+    #[test]
+    fn seat_files_live_beside_the_review_queue() {
+        let d = crate::config::scratch("seat-files");
+        let repo = crate::config::test_repo(&d, &["a"]);
+        write_file(&repo.review_path("t-1"), "DONE\n");
+        assert_eq!(review_queue(&repo), vec!["t-1"]);
+        repo.seat_set_running("t-1", 1);
+        assert_eq!(review_queue(&repo), vec!["t-1"]);
+        assert!(repo.seat_running("t-1", 1));
+        repo.seat_clear_running("t-1", 1);
+        assert!(!repo.seat_running("t-1", 1));
+        repo.seat_set_verdict("t-1", 2, "APPROVE: ok");
+        assert!(repo.seat_verdict("t-1", 2).unwrap().contains("APPROVE"));
+        assert!(repo.seat_verdict("t-1", 1).is_none());
         let _ = std::fs::remove_dir_all(&d);
     }
     #[test]
