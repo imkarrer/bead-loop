@@ -216,6 +216,7 @@ pub fn status_json_from(repo: &Repo, open: Value, inprog: Value, specs: &[crate:
         })
         .collect();
     let lane_names: Vec<String> = specs.iter().map(|l| l.name.clone()).collect();
+    let review_ids = review_queue(repo);
     let mut lanes = Map::new();
     let mut laneids = Vec::new();
     for name in lane_names.iter().map(String::as_str).chain(repo.lane_files().iter().map(String::as_str)) {
@@ -226,7 +227,16 @@ pub fn status_json_from(repo: &Repo, open: Value, inprog: Value, specs: &[crate:
             let mut m = bead_json(repo, &byid, &id);
             m.insert("since".into(), json!(mtime(&repo.lane_path(name))));
             // the round's role when its marker names one (a research round); else null
-            m.insert("role".into(), repo.lane_role(name).map(Value::String).unwrap_or(Value::Null));
+            let role = repo.lane_role(name);
+            // where in the round the lane is: a research round, the reviewer on a bead in
+            // the review queue, else the worker (and its gate)
+            let step = match role.as_deref() {
+                Some("research") => "research",
+                _ if review_ids.contains(&id) => "review",
+                _ => "work",
+            };
+            m.insert("role".into(), role.map(Value::String).unwrap_or(Value::Null));
+            m.insert("step".into(), json!(step));
             m.insert("tail".into(), json!(session_tail(repo, &id, 5)));
             lanes.insert(name.into(), Value::Object(m));
             laneids.push(id);
@@ -234,7 +244,6 @@ pub fn status_json_from(repo: &Repo, open: Value, inprog: Value, specs: &[crate:
     }
     // keyed by slot, read from the lane: `pause NAME` pauses every slot of NAME
     let paused: Map<String, Value> = specs.iter().map(|l| (l.name.clone(), json!(repo.paused(&l.lane)))).collect();
-    let review_ids = review_queue(repo);
     let ready_ids: Vec<String> =
         open.as_array().into_iter().flatten().filter_map(|b| b.get("id").and_then(|i| i.as_str()).map(str::to_string)).collect();
     let dev: Vec<Value> = crate::state::order_dev(repo, ready_ids)
@@ -389,6 +398,8 @@ pub fn status_json_from(repo: &Repo, open: Value, inprog: Value, specs: &[crate:
         "merge": repo.merge, "attach": repo.attach, "logs_dir": repo.rs.join("logs").to_string_lossy(),
         "max_inflight": if repo.max_inflight == u64::MAX { Value::Null } else { json!(repo.max_inflight) },
         "stages": stages, "on_exhaust": repo.on_exhaust,
+        "research_model": if repo.research_model.is_empty() { Value::Null } else { json!(repo.research_model) },
+        "precheck_model": if repo.precheck_model.is_empty() { Value::Null } else { json!(repo.precheck_model) },
         "conflict_worker": if repo.conflict_worker.is_empty() { Value::Null } else { json!(repo.conflict_worker) },
         "lanes": lanes,
         "lane_names": lane_names,
@@ -809,7 +820,22 @@ mod tests {
         assert_eq!(of("t-3"), "done", "a brief written");
         assert_eq!(j["lanes"]["dev"]["id"], "t-6", "the marker's first line is the bead");
         assert_eq!(j["lanes"]["dev"]["role"], "research", "its second the role");
+        assert_eq!(j["lanes"]["dev"]["step"], "research", "the step the page draws it at");
+        assert_eq!(j["research_model"], "stub/researcher");
         assert!(status_text(&j).contains("dev lane:    [research] t-6 Sixth ("), "the text says so too");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_lane_says_whether_it_works_or_reviews_its_bead() {
+        let (d, repo, j) = laid_out("status-step");
+        assert_eq!(j["lanes"]["dev"]["step"], "work", "t-6: no review marker, the worker's round");
+        assert!(j["precheck_model"].is_null() && j["research_model"].is_null(), "unset: null");
+        repo.lane_set("review", "t-4");
+        let inprog = json!([{"id":"t-4","title":"Fourth"},{"id":"t-6","title":"Sixth"}]);
+        let j = status_json_from(&repo, json!([]), inprog, &default_lanes(true));
+        assert_eq!(j["lanes"]["review"]["step"], "review", "t-4 is in the review queue: the reviewer's round");
+        assert!(j["queues"]["review"].as_array().unwrap().is_empty(), "and off the queue while a lane has it");
         let _ = std::fs::remove_dir_all(&d);
     }
 

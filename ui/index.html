@@ -138,28 +138,85 @@
   td.title .t { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   td.fit { white-space: nowrap; }
 
-  /* the two lanes: what each is on right now, readable from across the room */
-  .lanes { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 14px; }
-  @media (max-width: 800px) { .lanes { grid-template-columns: 1fr; } }
-  .lane { padding: 14px 18px; border-radius: 8px; background: var(--base03); border-left: 4px solid var(--worker); min-height: 96px; transition: border-color .3s; }
-  .lane.review { border-left-color: var(--reviewer); }
-  .lane.idle { border-left-color: var(--base01); }
-  .lane .label { font-size: 11.5px; text-transform: uppercase; letter-spacing: .12em; color: var(--muted); font-weight: 600; }
-  .lane .label .muted { text-transform: none; letter-spacing: 0; font-weight: 400; }
-  .lane .label { display: flex; align-items: center; gap: 8px; } .lane .label .act { margin-left: auto; }
-  .lane.paused { border-left-style: dashed; }
-  .lane .bead { font: 600 26px/1.15 var(--mono); color: var(--accent); margin-top: 6px; }
-  .lane .what { font-size: 15px; color: var(--base2); margin-top: 3px; line-height: 1.4; }
-  .lane.idle .what { color: var(--muted); font-style: italic; margin-top: 10px; }
-  .lane .stage { margin-top: 10px; color: var(--muted); display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-  /* the three queues, in the order the lanes take them, then the Claude column: a view over them */
-  .queues { display: grid; grid-template-columns: 1.3fr 1fr 1fr 1fr; gap: 0 28px; margin-top: 6px; }
-  @media (max-width: 1000px) { .queues { grid-template-columns: 1fr; } }
-  .q h3 { margin-bottom: 2px; } .q .sub { color: var(--muted); font-size: 12px; margin-bottom: 8px; }
-  .q.dev h3 { color: var(--worker); } .q.review h3 { color: var(--reviewer); } .q.merge h3 { color: var(--green); } .q.metered h3 { color: var(--blue); }
-  .q td.pos { color: var(--muted); font: 500 12px var(--mono); width: 22px; padding-right: 6px; text-align: right; }
-  .q tr:first-child td.pos, .q tr:first-child td.id { color: var(--bright); }
-  .q tr.sub td { border-top: 0; padding-top: 0; font-size: 12.5px; }
+  /* the flow: the workflow as one graph — a band per stage, a round's steps left to right,
+     CI and landed shared on the right, parked under the last stage — each node listing the
+     beads at it. The nodes are laid out by the grid; the edges are drawn over them once
+     they are, from where they landed (drawEdges). Wider than a phone: it scrolls sideways. */
+  #flow { min-width: 0; }  /* the graph scrolls inside the card, not the page */
+  .flow-wrap { overflow-x: auto; margin-top: 10px; scrollbar-width: thin; }
+  .flow { position: relative; display: grid; min-width: 1120px; padding: 2px 12px 4px; column-gap: 52px; row-gap: 12px;
+          grid-template-columns: 22px repeat(4, minmax(150px, 1fr)) minmax(180px, 1.15fr) minmax(160px, 1fr); }
+  .band { border-radius: 10px; background: rgba(147, 161, 161, .035); border: 1px solid var(--line); margin: 0 -10px; z-index: 0; }
+  .slabel { writing-mode: vertical-rl; transform: rotate(180deg); align-self: center; justify-self: center; z-index: 2; white-space: nowrap;
+            font-size: 11px; text-transform: uppercase; letter-spacing: .12em; color: var(--muted); font-weight: 600; }
+  .slabel.metered { color: var(--blue); }
+  svg.edges { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 1; overflow: visible; }
+  svg.edges path { fill: none; stroke: var(--base00); stroke-width: 1.5; }
+  svg.edges path.head { fill: var(--base00); stroke: none; }
+  svg.edges text { font: 11px var(--sans); fill: var(--muted); }
+  svg.edges .back path { stroke: var(--orange); stroke-dasharray: 4 4; opacity: .75; } svg.edges .back path.head { fill: var(--orange); stroke: none; stroke-dasharray: none; }
+  svg.edges .back text { fill: var(--orange); }
+  svg.edges .esc path { stroke: var(--yellow); } svg.edges .esc path.head { fill: var(--yellow); } svg.edges .esc text { fill: var(--yellow); }
+  svg.edges .park path { stroke: var(--red); } svg.edges .park path.head { fill: var(--red); } svg.edges .park text { fill: var(--red); }
+  svg.edges .res path { stroke: var(--blue); stroke-dasharray: 4 4; } svg.edges .res path.head { fill: var(--blue); stroke-dasharray: none; } svg.edges .res text { fill: var(--blue); }
+  .node { position: relative; z-index: 2; align-self: start; min-width: 0; margin: 12px 0 48px; padding: 8px 10px; border-radius: 8px;
+          background: var(--base03); border: 1px solid var(--line-strong); }
+  .node.queue { border-style: dashed; }
+  .node.work { border-top: 3px solid var(--worker); } .node.review { border-top: 3px solid var(--reviewer); }
+  .node.research { border-top: 3px solid var(--blue); margin-bottom: 12px; }
+  .node.ci { border-top: 3px solid var(--green); }
+  .node.landed { border-top: 3px solid rgba(133, 153, 0, .45); }
+  /* CI and landed span the bands and take their height from them, not the other way
+     round (contain: size): a long list scrolls inside instead of stretching a band */
+  .node.ci, .node.landed { contain: size; align-self: stretch; min-height: 190px; margin-bottom: 8px; display: flex; flex-direction: column; }
+  .node.ci ul.beads, .node.landed ul.beads { flex: 1 1 0; min-height: 0; max-height: none; }
+  .node.parked { border-top: 3px solid var(--yellow); margin-bottom: 4px; }
+  .node.parked ul.beads { grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); column-gap: 8px; }
+  .node .nh { display: flex; align-items: center; gap: 6px; height: 18px; font-size: 11px; text-transform: uppercase; letter-spacing: .1em; color: var(--muted); font-weight: 600; }
+  .node .nh .c { margin-left: auto; font: 600 12px var(--mono); letter-spacing: 0; color: var(--bright); }
+  .node .nm { font: 500 13px var(--mono); color: var(--base2); margin-top: 2px; overflow-wrap: anywhere; }
+  .node .nm.no { color: var(--muted); font-style: italic; }
+  .node .ns { font-size: 11.5px; color: var(--muted); line-height: 1.35; margin-top: 2px; }
+  .node .chips { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 4px; }
+  .node .none { color: var(--base01); font-size: 12px; margin-top: 8px; font-style: italic; }
+  .node .more { font-size: 12px; margin: 4px 0 0 2px; display: block; }
+  .chip.metered { color: var(--blue); background: rgba(38, 139, 210, .16); }
+  ul.beads { list-style: none; margin: 7px -5px 0; padding: 0; display: grid; grid-template-columns: minmax(0, 1fr); align-content: start; gap: 1px; max-height: 330px; overflow-y: auto; scrollbar-width: thin; }
+  .bead-row { display: block; width: 100%; text-align: left; padding: 3px 5px; border: 1px solid transparent; border-radius: 5px;
+              font: inherit; font-size: 12px; line-height: 1.35; color: var(--ink); background: transparent; }
+  .bead-row:hover { border-color: var(--line-strong); color: var(--ink); background: rgba(147, 161, 161, .05); text-decoration: none; }
+  .bead-row.sel, .bead-row.sel:hover { border-color: var(--accent); background: rgba(38, 139, 210, .13); }
+  .bead-row .l1 { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; }
+  .bead-row .bid { font: 600 12px var(--mono); color: var(--accent); white-space: nowrap; }
+  .bead-row .l1 .chip { font-size: 10.5px; line-height: 16px; padding: 0 5px; vertical-align: 0; }
+  .bead-row .l1 .muted { font-size: 11px; }
+  .bead-row .bt { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--base0); }
+  .bead-row .on { display: flex; align-items: center; gap: 5px; color: var(--busy); font-size: 11.5px; }
+  .bead-row .by { display: block; font: 11px var(--mono); color: var(--muted); }
+  /* the bead you pressed, floating over the page's corner so the graph stays in view: where
+     it is, what it carries, its levers; × or Escape puts it away */
+  .insp { position: fixed; z-index: 4; right: 16px; bottom: 16px; width: min(480px, calc(100vw - 32px)); max-height: min(75vh, calc(100vh - 120px));
+          overflow-y: auto; scrollbar-width: thin; padding: 12px 16px; border-radius: 10px; background: var(--base03); border: 1px solid var(--line-strong);
+          border-left: 4px solid var(--accent); box-shadow: 0 12px 32px rgba(0, 0, 0, .45); animation: rise var(--quick); }
+  .insp .ih { display: flex; align-items: baseline; gap: 4px 10px; flex-wrap: wrap; padding-right: 24px; }
+  .insp .ih .bid { font: 600 20px var(--mono); color: var(--accent); }
+  .insp .ih .where { color: var(--bright); font-size: 13px; }
+  .insp .ih .x { position: absolute; top: 8px; right: 8px; border: 0; font-size: 18px; line-height: 1; padding: 2px 6px; color: var(--muted); }
+  .insp .it { font-size: 15px; color: var(--base2); margin-top: 2px; line-height: 1.4; }
+  .insp .row { margin-top: 8px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; color: var(--muted); }
+  .insp .levers { margin-left: auto; display: flex; gap: 6px; flex-wrap: wrap; }
+  .insp .ask { margin-top: 8px; }
+  /* who runs the rounds: a lane each, the bead it is on and what its session last said */
+  .lanes { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 10px; }
+  .lane { padding: 8px 12px; border-radius: 8px; background: var(--base03); border-left: 3px solid var(--base01); min-width: 0; transition: border-color .3s; }
+  .lane.busy { border-left-color: var(--busy); } .lane.paused { border-left-style: dashed; }
+  .lane .lh { display: flex; align-items: center; gap: 8px; }
+  .lane .lh b { font: 600 13px var(--mono); }
+  .lane .lh .act { margin-left: auto; } .lane .lh button { font-size: 12px; padding: 2px 9px; }
+  .lane .what { font-size: 12.5px; color: var(--muted); margin-top: 3px; line-height: 1.4; }
+  button.bref { border: 0; padding: 0; font: 600 12.5px var(--mono); color: var(--accent); vertical-align: 0; }
+  button.bref:hover { text-decoration: underline; }
+  pre.tail { font: 11px/1.45 var(--mono); margin: 6px 0 0; white-space: pre-wrap; max-height: 7.5em; overflow: hidden; color: var(--muted); }
   tr.sub td.why { border-top: 0; padding-top: 0; padding-bottom: 10px; font-size: 13px; color: var(--ink); white-space: normal; line-height: 1.5; max-width: 900px; }
   tr.sub td.why code { font-size: 12px; }
   h3.human { color: var(--yellow); }
@@ -375,6 +432,7 @@ const renderToasts = () => patch($('toasts'), toasts.map((t) => `<div class="toa
 // Escape puts a waiting button back; Ctrl+Enter (⌘⏎) in a box presses its lever.
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && pending) return unask();
+  if (e.key === 'Escape' && picked && !(e.target && /^(TEXTAREA|INPUT)$/.test(e.target.tagName))) return pick();
   if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && e.target && e.target.tagName === 'TEXTAREA') {
     const b = e.target.closest('.reply') && e.target.closest('.reply').querySelector('button.primary');
     if (b) { e.preventDefault(); b.click(); }
@@ -493,17 +551,16 @@ const logBtns = (r, files) => (files || []).map((f) => { const k = `${r.repo}\n$
 const logViews = (r, files) => (files || []).filter((f) => openLog.has(`${r.repo}\n${f}`)).map((f) => { const t = logText.get(`${r.repo}\n${f}`); return `<pre class="logview" data-key="${esc(f)}">${t == null ? '<span class="t">loading…</span>' : renderLog(t, f)}</pre>`; }).join('');
 const roundBlock = (r, x, i) => `<div class="round" data-key="${x.round != null ? esc(x.round) : `r${i}`}"><div class="head">${x.round != null ? `round ${esc(x.round)}` : ''}${x.model ? ` <span class="chip worker">${esc(x.model)}</span>` : ''}${x.stage ? `<span class="muted">stage ${esc(x.stage)}</span>` : ''}${x.when ? `<span class="muted">${esc(String(x.when).replace('T', ' ').slice(0, 16))}</span>` : ''}</div><pre class="note">${esc(x.note || '')}</pre>${(x.logs || []).length ? `<div class="logs">logs: ${logBtns(r, x.logs)}</div>${logViews(r, x.logs)}` : ''}</div>`;
 const histList = (b, r) => !openHist.has(b.id) ? '' : (b.history || []).length ? `<div class="rounds">${b.history.map((x, i) => roundBlock(r, x, i)).join('')}</div>` : '<pre class="hist">no notes kept for these rounds</pre>';
-const histRow = (b, span, r) => openHist.has(b.id) ? `<tr class="sub" data-key="${esc(b.id)}:hist"><td></td><td colspan="${span}">${histList(b, r)}</td></tr>` : '';
 // Folds: the brief and the bead's notes under a parked bead, closed by default, remembered per bead.
 const openFold = new Set();
 window.toggleFold = (k) => { if (!openFold.delete(k)) openFold.add(k); render(); };
-// A note to a bead in a queue, from its row: the box opens under the row, the text goes
-// on the bead as an operator note, and the next round reads it — the way to hand a
-// bead what it lacked before it fails again, without waiting for it to park.
+// A note to a bead in the flow, from the bead opened under the graph: the box opens under
+// it, the text goes on the bead as an operator note, and the next round reads it — the
+// way to hand a bead what it lacked before it fails again, without waiting for it to park.
 const openNote = new Set();
 window.toggleNote = (id) => { if (!openNote.delete(id)) openNote.add(id); render(); const b = openNote.has(id) && $(`note-${id}`); if (b && b.focus) b.focus(); };
 const noteToggle = (b) => ` <button class="hist${openNote.has(b.id) ? ' on' : ''}" onclick="toggleNote(${js(b.id)})" title="a note on the bead; its next round reads it">✎ note</button>`;
-const noteRow = (b, span, r) => !openNote.has(b.id) ? '' : `<tr class="sub" data-key="${esc(b.id)}:note"><td></td><td colspan="${span}"><div class="reply">${box(`note-${b.id}`, 'Context it lacked, a claim that changed — goes on the bead as an operator note; its next round reads it')}<div class="actions">${lever('Add note', 'note', { repo: r.repo, id: b.id }, { cls: 'primary', send: `note-${b.id}` })}<span class="hint">Ctrl+Enter sends</span></div></div></td></tr>`;
+const noteBox = (b, r) => !openNote.has(b.id) ? '' : `<div class="reply" data-key="note">${box(`note-${b.id}`, 'Context it lacked, a claim that changed — goes on the bead as an operator note; its next round reads it')}<div class="actions">${lever('Add note', 'note', { repo: r.repo, id: b.id }, { cls: 'primary', send: `note-${b.id}` })}<span class="hint">Ctrl+Enter sends</span></div></div>`;
 const fold = (k, label, body) => `<div class="fold"><button class="hist${openFold.has(k) ? ' on' : ''}" onclick="toggleFold(${js(k)})">${openFold.has(k) ? '▾' : '▸'} ${esc(label)}</button>${openFold.has(k) ? body : ''}</div>`;
 const providerOf = (m) => (m || '').replace(/^aider:/, '').split('/')[0];
 const probeFails = (r, m) => !!(m && r && r.probes && r.probes[providerOf(m)] && r.probes[providerOf(m)].ok === false);
@@ -544,62 +601,217 @@ function prChips(p, now, r) {
   return out.join(' ');
 }
 
-// The two lanes, side by side: what each is on right now, with the session that is live
-// for it and the lever to stop it. This is the page's answer to "what is being worked".
-function lanePanel(r, name, now, ticking, showRepo) {
-  // A slot of a wide lane (claude.2) is its lane under another name: the lane's role,
-  // the lane's pause flag.
-  const lane = laneOf(name);
-  const l = r.lanes[name];
-  // The lane's role: the default pair split by role; any other lane takes both roles
-  // for its models.
-  const role = lane === 'dev' ? 'worker' : lane === 'review' ? 'reviewer' : 'worker or reviewer · its models’ rounds';
-  const paused = r.paused && r.paused[name];
-  const pauseBtn = lever(paused ? 'Resume lane' : 'Pause lane', 'lane', { name: lane, paused: !paused });
-  if (!l) {
-    const capped = r.max_inflight != null && r.queues.merge.filter((p) => !p.adopted).length >= r.max_inflight;
-    const heldOnly = (q) => q.length > 0 && q.every((b) => b.held);
-    const otherLanes = (r.lane_names || []).map(laneOf).filter((n) => n !== 'dev' && n !== 'review');
-    const onOtherLane = (b) => b.stage && [b.stage.worker, b.stage.reviewer].some((m) => m && otherLanes.includes(providerOf(m)));
-    const onLane = (b) => b.stage && [b.stage.worker, b.stage.reviewer].some((m) => m && providerOf(m) === lane);
-    const laneQueued = r.queues.dev.filter(onLane).length + r.queues.review.filter(onLane).length;
-    const laneProbe = r.probes && r.probes[lane];
-    const why = lane === 'dev'
-      ? (r.queues.dev.length === 0 ? 'dev queue empty' : capped ? `waiting on CI (${r.max_inflight} in flight is the limit)` : heldOnly(r.queues.dev) ? 'every bead in the queue is held — see Needs you' : r.queues.dev.every(onOtherLane) ? 'only later-stage beads queued — another lane has them' : ticking ? 'starting…' : 'the loop is down')
-      : lane !== 'review'
-      ? (laneQueued === 0 ? 'nothing queued for its models' : laneProbe && laneProbe.ok === false ? `${laneQueued} waiting — ${lane}: probe fails (${laneProbe.why})` : ticking ? 'starting…' : 'the loop is down')
-      : (r.queues.review.length === 0 ? 'review queue empty' : heldOnly(r.queues.review) ? 'every bead in the queue is held — see Needs you' : ticking ? 'starting…' : 'the loop is down');
-    return `<div class="lane idle ${name}${paused ? ' paused' : ''}" data-key="${esc(name)}"><div class="label">${name} lane ${paused ? '<span class="chip warn">paused</span>' : ''}<span class="act">${pauseBtn}</span></div><div class="what">${paused ? 'paused — starts no new round until resumed' : `idle — ${esc(why)}`}</div></div>`;
-  }
-  const wt = r.worktrees.find((x) => x.id === l.id);
-  // 'rejoin' counts as live too: the lane is on this bead and waiting on the session a
-  // restart found running (no client to show as 'busy' — the loop is polling it), so it
-  // gets the same open-session link instead of the generic "setup, or the gate" line.
-  const live = wt && wt.sessions.find((s) => s.state === 'busy' || s.state === 'rejoin');
-  return `<div class="lane ${name}" data-key="${esc(name)}">
-    <div class="label">${name} lane <span class="muted">· ${l.role === 'research' ? 'research: reading for the brief' : role} · ${ago(l.since, now)}</span> ${paused ? '<span class="chip warn" title="finishes this round, then starts no new one">pausing</span>' : ''}<span class="act">${pauseBtn}</span></div>
-    <div class="bead">${esc(l.id)}${showRepo ? ` <span class="muted">· ${esc(r.slug)}</span>` : ''}</div>
-    <div class="what">${esc(l.title || '')}</div>
-    <div class="stage">${failChip(l.failures)}${histToggle(l)}${stageChip(l.stage, r)}
-      ${live ? `${roleChip(live.agent)} <span class="mono">${esc(live.model)}</span> <span>last output ${ago(live.updated, now)} ago</span> <a href="${esc(live.url)}" target="_blank" rel="noopener">open session ↗</a> ${abortBtn(r, live, `${live.agent} on ${l.id}`)}`
-        : `<span>${l.role === 'research' ? 'making the worktree' : name === 'dev' ? 'setup, or the gate' : 'pushing the PR'}</span>`}</div>${histList(l, r)}
-  </div>`;
-}
-// The lanes, once, at the top: a lane is one thing for the whole loop (it walks every
-// repo), so its panel says which bead it is on and which repo that bead belongs to —
-// not a set of panels per repo, most of them idle. Idle panels count what is queued
-// across repos; paused is paused everywhere.
+// ---- the flow ---------------------------------------------------------------------------
+// The workflow as one graph, every bead listed at the node it is at. A band per stage —
+// the worker and reviewer a bead's failure count puts it on — with a round's steps left
+// to right: ready, the worker (then the gate), the review queue, the reviewer; then CI,
+// which every stage shares, and what landed. Under each band, the rail every send-back
+// takes to that band's ready (+1 failure); down the left, the failures a stage takes
+// before the next one, and after the last, parked. Press a bead to open it under the
+// graph: where it is, its rounds, a note to it, its session, its levers. Repos with the
+// same stages share a graph; the lanes — who runs the rounds — are a strip under it.
+const stageOf = (r, b) => (b.stage && b.stage.index) || r.stages.length;
+const costOf = (r, m) => { const p = m && r.providers && r.providers[providerOf(m)]; return p ? p.cost : null; };
+const stepOf = (l) => l.step || (l.role === 'research' ? 'research' : 'work');
 // The lane a slot belongs to: NAME.K is slot K of NAME (config.rs LaneSpec::slots).
 function laneOf(name) { return name.replace(/\.\d+$/, ''); }
-function lanesPane(s) {
+let picked = null;  // {repo, id}: the bead open under the graph; pressed again, closed
+window.pick = (repo, id) => { picked = !repo || (picked && picked.repo === repo && picked.id === id) ? null : { repo, id }; render(); };
+const isPicked = (r, id) => !!picked && picked.repo === r.repo && picked.id === id;
+
+// Where each bead of these repos sits, by node: ready:K, work:K, rq:K (the review queue),
+// review:K, research, ci, parked.
+function flowItems(repos) {
+  const at = {}, put = (k, x) => (at[k] ||= []).push(x);
+  for (const r of repos) {
+    for (const [lane, l] of Object.entries(r.lanes)) put(stepOf(l) === 'research' ? 'research' : `${stepOf(l)}:${stageOf(r, l)}`, { r, b: l, lane });
+    r.queues.dev.forEach((b) => put(`ready:${stageOf(r, b)}`, { r, b }));
+    r.queues.review.forEach((b) => put(`rq:${stageOf(r, b)}`, { r, b, waited: true }));
+    for (const b of r.queues.merge) put('ci', { r, b, pr: true });
+    for (const b of r.ready_to_publish || []) put('ci', { r, b, publish: true });
+    for (const b of r.parked) put('parked', { r, b, parked: true });
+  }
+  return at;
+}
+// A PR's state in a word, for its row in the CI node; opened, prChips says it in full.
+function prWord(p) {
+  const g = p.pr;
+  if (p.held) return ['warn', 'held'];
+  if (g && g.state === 'MERGED') return ['ok', 'merged'];
+  if (g && g.state === 'CLOSED') return ['warn', 'closed'];
+  if (g && g.mergeable === 'CONFLICTING') return ['warn', 'conflicts'];
+  if (!g) return p.red ? ['bad', 'CI red'] : ['', 'waiting'];
+  if (g.checks.some((c) => /FAIL|ERROR|CANCEL/i.test(c.state))) return ['bad', 'CI red'];
+  if (p.merge_mode === 'external') return ['', 'maintainer'];
+  if (g.checks.length === 0) return ['', 'no checks'];
+  if (g.checks.some((c) => /PENDING|IN_PROGRESS|QUEUED|EXPECTED/i.test(c.state))) return ['busy', 'CI running'];
+  return ['ok', 'CI green'];
+}
+const PARKED_WORD = { blocked: ['warn', 'question'], exhausted: ['bad', 'exhausted'], pr_closed: ['warn', 'PR closed'] };
+const word = ([cls, text], title) => `<span class="chip ${cls}"${title ? ` title="${esc(title)}"` : ''}>${esc(text)}</span>`;
+// One bead at its node: id and what marks it on the first line, the title under it, and
+// the lane on it, live, when one is.
+function beadRow(x, now) {
+  const { r, b } = x;
+  const marks = [failChip(b.failures)];
+  if (x.pr) marks.push(word(prWord(b), b.held && b.held.why));
+  else if (x.publish) marks.push(word(['warn', 'Open PR?'], 'approved and pushed; the PR waits for your Open PR under Needs you'));
+  else if (x.parked) marks.push(word(b.parked ? PARKED_WORD[b.parked.reason] || ['', b.parked.reason] : b.question ? ['warn', 'question'] : ['', 'stopped']));
+  else if (b.held) marks.push(word(['warn', 'held'], b.held.why));
+  if (x.lane == null && b.research === 'pending') marks.push(word(['', 'brief first'], 'the researcher writes a brief before the worker round; a free worker lane goes without'));
+  if (x.waited && b.since) marks.push(`<span class="muted">${ago(b.since, now)}</span>`);
+  const pr = x.pr && (b.url.match(/\/pull\/(\d+)/) || [])[1];
+  return `<li data-key="${esc(r.repo)}#${esc(b.id)}"><button class="bead-row${isPicked(r, b.id) ? ' sel' : ''}" onclick="pick(${js(r.repo)},${js(b.id)})" title="${esc(`${b.id} · ${r.slug}${b.title ? `\n${b.title}` : ''}`)}"><span class="l1"><span class="bid">${esc(b.id)}</span>${pr ? `<span class="muted">#${esc(pr)}</span>` : ''}${marks.filter(Boolean).join('')}</span><span class="bt">${esc(b.title || '')}</span>${x.lane != null ? `<span class="on"><span class="dot busy"></span>${esc(x.lane)} lane · ${ago(b.since, now)}</span>` : ''}</button></li>`;
+}
+// A bead that landed: to its PR, with who landed it.
+const landedRow = (f, now) => `<li data-key="landed#${esc(f.slug)}#${esc(f.id)}"><a class="bead-row" ${f.url ? `href="${esc(f.url)}" target="_blank" rel="noopener"` : ''} title="${esc(`${f.id} · ${f.slug}\n${f.title || ''}`)}"><span class="l1"><span class="bid">${esc(f.id)}</span></span><span class="bt">${esc(f.title || '')}</span><span class="by">${esc(f.worker || '')} · ${ago(f.closed, now)} ago · ${f.rounds} round${f.rounds === 1 ? '' : 's'}</span></a></li>`;
+// The model a step runs, with what the page knows of its provider: paid, or its probe failing.
+function modelHead(repos, m, what) {
+  if (!m) return `<div class="nm no">no reviewer</div><div class="ns">${what}</div>`;
+  const chips = [];
+  if (costOf(repos[0], m) === 'metered') chips.push('<span class="chip metered" title="a paid provider: every round costs">metered</span>');
+  const fail = repos.map((r) => r.probes && r.probes[providerOf(m)]).find((p) => p && p.ok === false);
+  if (fail) chips.push(`<span class="chip bad" title="${esc(fail.why)}">probe fails: ${esc(String(fail.why).slice(0, 40))}</span>`);
+  return `<div class="nm">${esc(m)}</div><div class="ns">${what}</div>${chips.length ? `<div class="chips">${chips.join('')}</div>` : ''}`;
+}
+function flowNode(key, cls, row, col, head, sub, items, rowOf, empty, total) {
+  const live = items.some((x) => x.lane != null);
+  const n = total == null ? items.length : total;
+  const list = items.length ? `<ul class="beads">${items.map(rowOf).join('')}</ul>` : `<div class="none">${empty || 'none'}</div>`;
+  return `<div class="node ${cls}" data-node="${key}" data-key="${key}" style="grid-row:${row};grid-column:${col}"><div class="nh">${live ? '<span class="dot busy"></span>' : ''}${head}<span class="c">${n}</span></div>${sub}${list}${total > items.length ? `<a class="more" href="#score">+${total - items.length} more · the scoreboard</a>` : ''}</div>`;
+}
+const LANDED_SHOWN = 6;
+function flowGraph(s, repos, gi) {
+  const r0 = repos[0], n = r0.stages.length, at = flowItems(repos), items = (k) => at[k] || [];
+  // the research step: when a repo has a researcher, or a lane is on a research round
+  const research = repos.map((r) => r.research_model).find(Boolean) || (items('research').length ? 'the researcher' : null);
+  const precheck = repos.map((r) => r.precheck_model).find(Boolean);
+  const off = research ? 1 : 0, row = (x) => beadRow(x, s.now);
+  const parts = [];
+  if (research) parts.push(flowNode('research', 'research', 1, 2, 'Research', modelHead(repos, research, 'a brief for the worker, then back to ready'), items('research'), row, 'no brief being written'));
+  let lo = 0;
+  r0.stages.forEach((st, i) => {
+    const k = i + 1, gr = off + k, hi = lo + st.failures - 1;
+    const metered = [st.worker, st.reviewer].some((m) => costOf(r0, m) === 'metered');
+    parts.push(`<div class="band" data-band="${k}" data-key="band:${k}" style="grid-row:${gr};grid-column:1 / 6"></div>`);
+    parts.push(`<div class="slabel${metered ? ' metered' : ''}" data-key="slabel:${k}" style="grid-row:${gr};grid-column:1">stage ${k} · ${metered ? 'metered' : 'local'}</div>`);
+    parts.push(flowNode(`ready:${k}`, 'queue', gr, 2, 'Ready', `<div class="ns">${lo === hi ? `${lo} failure${lo === 1 ? '' : 's'}` : `${lo}–${hi} failures`} so far${k === 1 ? ' · fewest first' : ''}</div>`, items(`ready:${k}`), row, 'nothing ready'));
+    parts.push(flowNode(`work:${k}`, 'work', gr, 3, 'Work', modelHead(repos, st.worker, precheck ? `then the gate, and the pre-check (${esc(precheck)})` : 'then the gate'), items(`work:${k}`), row, 'idle'));
+    parts.push(flowNode(`rq:${k}`, 'queue', gr, 4, 'Review queue', '<div class="ns">gate passed, waiting for the reviewer</div>', items(`rq:${k}`), row, 'empty'));
+    parts.push(flowNode(`review:${k}`, 'review', gr, 5, 'Review', modelHead(repos, st.reviewer, st.reviewer ? 'approve: push, the PR' : 'straight to the PR'), items(`review:${k}`), row, 'idle'));
+    lo = hi + 1;
+  });
+  const span = `${off + 1} / ${off + n + 1}`;
+  const merges = [...new Set(repos.map((r) => r.merge))].join(', ');
+  parts.push(flowNode('ci', 'ci', span, 6, 'CI · merge', `<div class="ns">merge ${esc(merges)} · red goes back +1, a conflict back as a rebase</div>`, items('ci'), row, 'no PRs in flight'));
+  const slugs = new Set(repos.map((r) => r.slug));
+  const landed = s.stats ? s.stats.finished.filter((f) => f.how === 'landed' && f.closed >= s.now - 86400 && slugs.has(f.slug)) : [];
+  parts.push(flowNode('landed', 'landed', span, 7, 'Landed', '<div class="ns">the last 24h · merged, bead closed</div>', landed.slice(0, LANDED_SHOWN), (f) => landedRow(f, s.now), s.stats ? 'nothing in the last 24h' : 'counting…', landed.length));
+  const decisions = repos.reduce((k, r) => k + (r.decisions || []).length, 0);
+  parts.push(flowNode('parked', 'parked', off + n + 1, '2 / 6', 'Parked', `<div class="ns">exhausted, BLOCKED, or its PR closed · yours, under <a href="#repo-${esc(r0.slug)}">Needs you</a>${decisions ? ` · and ${decisions} decision${decisions > 1 ? 's' : ''}` : ''}</div>`, items('parked'), row, 'nothing parked'));
+  return `<div class="flow-wrap" data-key="flow:${gi}"><div class="flow" data-stages="${n}" data-after="${r0.stages.map((st) => st.failures).join(',')}" data-park="${r0.on_exhaust === 'park' ? 1 : ''}"><svg class="edges" aria-hidden="true"></svg>${parts.join('')}</div></div>`;
+}
+
+// The edges, drawn over the laid-out nodes: where each node landed is measured, and the
+// paths go between those boxes — the grid owns the layout, the edges only follow it. A
+// step to the next is a straight line at the nodes' heading; the send-back rail runs
+// under its band from CI's left edge to the band's ready; the way down leaves ready's
+// bottom for the next band's, or parked. Redrawn after every render and on every resize;
+// under the test stub there is nothing to measure and nothing is drawn.
+let edgeFrame = 0;
+const flowSeen = typeof ResizeObserver === 'function'
+  ? new ResizeObserver(() => { if (!edgeFrame) edgeFrame = requestAnimationFrame(() => { edgeFrame = 0; drawEdges(); }); }) : null;
+function drawEdges() {
+  if (typeof document.querySelectorAll !== 'function') return;
+  for (const g of document.querySelectorAll('.flow')) {
+    if (flowSeen) flowSeen.observe(g);
+    const svg = g.querySelector('svg.edges'), o = g.getBoundingClientRect();
+    const box = (sel) => { const e = g.querySelector(sel); if (!e) return null; const b = e.getBoundingClientRect(); return { l: b.left - o.left, r: b.right - o.left, t: b.top - o.top, b: b.bottom - o.top, w: b.width, y: b.top - o.top + 19 }; };
+    const at = (k) => box(`[data-node="${k}"]`), band = (k) => box(`[data-band="${k}"]`);
+    const head = (x, y, dir) => dir === 'r' ? `M${x},${y}l-9,-4.5v9z` : dir === 'd' ? `M${x},${y}l-4.5,-9h9z` : `M${x},${y}l-4.5,9h9z`;
+    const text = (x, y, t, anchor) => `<text x="${x}" y="${y}" text-anchor="${anchor || 'middle'}">${esc(t)}</text>`;
+    const out = [];
+    const edge = (cls, d, heads, label) => out.push(`<g class="${cls}"><path d="${d}"/>${heads.map((h) => `<path class="head" d="${h}"/>`).join('')}${label || ''}</g>`);
+    const fwd = (a, b, label) => { if (a && b) edge('fwd', `M${a.r},${a.y}H${b.l - 1}`, [head(b.l - 1, a.y, 'r')], label ? text((a.r + b.l) / 2, a.y - 6, label) : ''); };
+    const n = Number(g.dataset.stages), after = g.dataset.after.split(',').map(Number), ci = at('ci');
+    for (let k = 1; k <= n; k++) {
+      const rd = at(`ready:${k}`), wk = at(`work:${k}`), rq = at(`rq:${k}`), rv = at(`review:${k}`), bd = band(k);
+      fwd(rd, wk); fwd(wk, rq, 'gate ✓'); fwd(rq, rv); fwd(rv, ci, 'PR');
+      if (!rd || !bd) continue;
+      if (ci) {
+        const y = bd.b - 24, x = rd.l + rd.w * 0.72;
+        edge('back', `M${ci.l},${y}H${x}V${rd.b + 1}`, [head(x, rd.b + 1, 'u')], text(rq ? rq.l + rq.w / 2 : (x + ci.l) / 2, y - 5, '↩ sent back · +1 failure'));
+        for (const m of [wk, rv]) if (m) edge('back', `M${m.l + m.w / 2},${m.b}V${y}`, []);
+      }
+      const next = k < n ? at(`ready:${k + 1}`) : at('parked'), x = rd.l + rd.w * 0.28, f = after[k - 1];
+      const label = `after ${f} failure${f === 1 ? '' : 's'}${k < n ? '' : g.dataset.park ? ': exhausted' : ''}`;
+      if (next) edge(k < n ? 'esc' : 'park', `M${x},${rd.b}V${next.t - 1}`, [head(x, next.t - 1, 'd')], text(x + 7, bd.b - 7, label, 'start'));
+    }
+    fwd(ci, at('landed'), 'merge');
+    const rs = at('research'), r1 = at('ready:1');
+    if (rs && r1) { const x = r1.l + r1.w / 2; edge('res', `M${x},${rs.b + 1}V${r1.t - 1}`, [head(x, r1.t - 1, 'd'), head(x, rs.b + 1, 'u')], text(x + 8, (rs.b + r1.t) / 2 + 4, 'no brief yet ⇄ brief written', 'start')); }
+    svg.innerHTML = out.join('');
+  }
+}
+
+// The bead you pressed, under the graph: where it is, the title, its failures and stage,
+// the rounds and a note behind their toggles, the session a lane has it in with the last
+// lines it said and Abort; the PR's state in CI; for a parked bead, its question — the
+// answer box is under Needs you. Gone from every node (landed, closed, blocked), it says so.
+function findIn(r, id) {
+  for (const [lane, l] of Object.entries(r.lanes)) if (l.id === id) return { b: l, lane };
+  let i;
+  if ((i = r.queues.dev.findIndex((b) => b.id === id)) >= 0) return { b: r.queues.dev[i], q: 'dev', pos: i + 1 };
+  if ((i = r.queues.review.findIndex((b) => b.id === id)) >= 0) return { b: r.queues.review[i], q: 'review', pos: i + 1 };
+  const one = (list, k) => { const b = (list || []).find((x) => x.id === id); return b && { b, [k]: true }; };
+  return one(r.queues.merge, 'pr') || one(r.ready_to_publish, 'publish') || one(r.parked, 'parked');
+}
+const tailBlock = (l) => (l.tail || []).length ? `<pre class="tail">${esc(l.tail.join('\n'))}</pre>` : '';
+function inspector(s) {
+  if (!picked) return '';
+  const r = s.repos.find((x) => x.repo === picked.repo), x = r && findIn(r, picked.id);
+  const close = '<button class="x" onclick="pick()" title="close">×</button>';
+  if (!x) return `<div class="insp" data-key="insp"><div class="ih"><span class="bid">${esc(picked.id)}</span><span class="muted">in no node now — landed, closed, or waiting on a blocker</span>${close}</div></div>`;
+  const { b } = x, now = s.now;
+  const step = x.lane != null && stepOf(b);
+  const where = step === 'research' ? `Research · on the ${x.lane} lane, ${ago(b.since, now)}`
+    : step ? `${step === 'review' ? 'Review' : 'Work'} · stage ${stageOf(r, b)} · on the ${x.lane} lane, ${ago(b.since, now)}`
+    : x.q === 'dev' ? `Ready · stage ${stageOf(r, b)} · #${x.pos} in the dev queue`
+    : x.q === 'review' ? `Review queue · stage ${stageOf(r, b)} · #${x.pos}, waiting ${ago(b.since, now)}`
+    : x.pr ? 'CI · merge' : x.publish ? 'Ready to publish · yours' : 'Parked · yours';
+  const wt = step && r.worktrees.find((w) => w.id === b.id);
+  const live = wt && wt.sessions.find((ss) => ss.state === 'busy' || ss.state === 'rejoin');
+  const session = !step ? '' : live
+    ? `<div class="row">${roleChip(live.agent)} <span class="mono">${esc(live.model)}</span> <span>last output ${ago(live.updated, now)} ago</span> <a href="${esc(live.url)}" target="_blank" rel="noopener">open session ↗</a> ${abortBtn(r, live, `${live.agent} on ${b.id}`)}</div>`
+    : `<div class="row"><span>${step === 'research' ? 'making the worktree' : step === 'review' ? 'no session on the server: pushing the PR, or a reviewer that runs on its own' : 'no session on the server: setup, the gate, or a harness that runs on its own'}</span></div>`;
+  const marks = x.pr ? `${failChip(b.failures)}${noteToggle(b)} ${prChips(b, now, r)}${b.url ? ` <a href="${esc(b.url)}" target="_blank" rel="noopener">${esc(b.url.replace(/^https?:\/\/github\.com\/[^/]+\//, ''))} ↗</a>` : ''}`
+    : `${failChip(b.failures)}${histToggle(b)}${x.parked ? '' : noteToggle(b)} ${stageChip(b.stage, r)}${researchChip(b)}${b.held ? ` ${word(['warn', 'held'], b.held.why)} <span>${esc(b.held.why)}</span>` : ''}`;
+  const levers = x.q ? claudeBtn(r, b) : '';
+  const parked = !x.parked ? '' : `<div class="ask"><div class="head">${b.parked ? esc(b.parked.reason) : 'stopped'}<span class="muted">answer, reopen or work it with Claude under <a href="#repo-${esc(r.slug)}">Needs you</a></span></div>${b.parked && b.parked.question ? `<pre class="text">${esc(b.parked.question)}</pre>` : ''}</div>`;
+  return `<div class="insp" data-key="insp">
+    <div class="ih"><span class="bid">${esc(b.id)}</span>${s.repos.length > 1 ? `<span class="muted">${esc(r.slug)}</span>` : ''}<span class="where">${esc(where)}</span>${close}</div>
+    <div class="it">${esc(b.title || '')}</div>
+    <div class="row">${marks}${levers ? `<span class="levers">${levers}</span>` : ''}</div>
+    ${session}${step ? tailBlock(b) : ''}${parked}${histList(b, r)}${x.parked ? '' : noteBox(b, r)}
+  </div>`;
+}
+
+// The lanes, once, under the graph: a lane is one thing for the whole loop (it walks every
+// repo), so its strip says which bead it is on, at which step, and what its session last
+// said — or why it is idle; Pause / Resume on each (paused is paused everywhere).
+function laneStrip(s) {
   const ticking = s.service.available && (s.service.active === 'active' || s.service.active === 'activating');
   const names = [...new Set(s.repos.flatMap((r) => r.lane_names || ['dev', 'review']))];
-  const panels = names.map((name) => {
-    const on = s.repos.find((r) => r.lanes && r.lanes[name]);
-    if (on) return lanePanel(on, name, s.now, ticking, true);
+  return `<div class="lanes">${names.map((name) => {
     const lane = laneOf(name);
     const paused = s.repos.some((r) => r.paused && r.paused[name]);
-    const pauseBtn = lever(paused ? 'Resume lane' : 'Pause lane', 'lane', { name: lane, paused: !paused });
+    const pauseBtn = lever(paused ? 'Resume' : 'Pause', 'lane', { name: lane, paused: !paused }, { title: paused ? 'the lane starts rounds again' : 'the round it is on finishes; it starts no new one' });
+    const on = s.repos.find((r) => r.lanes && r.lanes[name]);
+    if (on) {
+      const l = on.lanes[name];
+      return `<div class="lane busy${paused ? ' paused' : ''}" data-key="${esc(name)}"><div class="lh"><span class="dot busy"></span><b>${esc(name)}</b>${paused ? '<span class="chip warn" title="finishes this round, then starts no new one">pausing</span>' : ''}<span class="act">${pauseBtn}</span></div>
+        <div class="what">${esc(stepOf(l))} · <button class="bref" onclick="pick(${js(on.repo)},${js(l.id)})" title="${esc(l.title || '')}">${esc(l.id)}</button>${s.repos.length > 1 ? ` · ${esc(on.slug)}` : ''} · ${ago(l.since, s.now)}</div>${tailBlock(l)}</div>`;
+    }
     const onLane = (b) => b.stage && [b.stage.worker, b.stage.reviewer].some((m) => m && providerOf(m) === lane);
     const count = (pick) => s.repos.reduce((n, r) => n + r.queues.dev.filter(pick).length + r.queues.review.filter(pick).length, 0);
     const queued = lane === 'dev' ? s.repos.reduce((n, r) => n + r.queues.dev.length, 0)
@@ -607,12 +819,19 @@ function lanesPane(s) {
       : count(onLane);
     const probeFail = s.repos.map((r) => r.probes && r.probes[lane]).find((p) => p && p.ok === false);
     const why = paused ? 'paused — starts no new round until resumed'
-      : queued === 0 ? 'idle — nothing queued for it in any repo'
+      : queued === 0 ? 'idle — nothing queued for it'
       : probeFail ? `idle — ${queued} waiting — ${lane}: probe fails (${probeFail.why})`
-      : ticking ? `idle — ${queued} queued across repos, starting…` : `idle — ${queued} queued; the loop is down`;
-    return `<div class="lane idle ${esc(name)}${paused ? ' paused' : ''}" data-key="${esc(name)}"><div class="label">${esc(name)} lane ${paused ? '<span class="chip warn">paused</span>' : ''}<span class="act">${pauseBtn}</span></div><div class="what">${why}</div></div>`;
-  });
-  return `<section class="card" id="lanes"><h2>Lanes <span class="cfg">one each for the whole loop · a bead names its repo</span></h2><div class="lanes">${panels.join('')}</div></section>`;
+      : ticking ? `idle — ${queued} queued, starting…` : `idle — ${queued} queued; the loop is down`;
+    return `<div class="lane${paused ? ' paused' : ''}" data-key="${esc(name)}"><div class="lh"><span class="dot"></span><b>${esc(name)}</b>${paused ? '<span class="chip warn">paused</span>' : ''}<span class="act">${pauseBtn}</span></div><div class="what">${esc(why)}</div></div>`;
+  }).join('')}</div>`;
+}
+function flowPane(s) {
+  const groups = new Map();
+  for (const r of s.repos) { const k = JSON.stringify(r.stages.map((st) => [st.worker, st.reviewer || '', st.failures])); if (!groups.has(k)) groups.set(k, []); groups.get(k).push(r); }
+  const many = groups.size > 1;
+  const graphs = [...groups.values()].map((repos, i) => `${many ? `<h3 data-key="fg:${i}">${esc(repos.map((r) => r.slug).join(' · '))}</h3>` : ''}${flowGraph(s, repos, i)}`).join('');
+  return `<section class="card" id="flow"><h2>Flow <span class="cfg">a band per stage · a bead moves right as it passes, back along the rail when it fails, down a band when its stage is spent · press one to open it${!many && s.repos.length > 1 ? ` · ${esc(s.repos.map((r) => r.slug).join(', '))}` : ''}</span></h2>${graphs}${inspector(s)}
+    <h3>Lanes<span class="note">who runs the rounds · one each for the whole loop</span></h3>${laneStrip(s)}</section>`;
 }
 // Sessions the server is still running that are on no lane yet: a 'rejoin' the last
 // restart found and a lane has not picked up its bead for, a real 'orphan' (a killed
@@ -627,36 +846,6 @@ function strays(r, now) {
         <td class="muted fit">${ago(s.updated, now)} ago</td>
         <td class="title"><span class="t"><a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(titleOf(s, s.wt))} ↗</a></span></td>
         <td class="act">${abortBtn(r, s, `${s.agent} on ${s.wt.id}`)}</td></tr>`).join('')}</table>`;
-}
-
-// The queues, in the order the lanes take them. Position is the information: #1 is next.
-// Rows carry the bead's id as their key, so a bead that moves up a place keeps its open
-// history, its note box and what is typed in it.
-const qRow = (i, b, extra, r) => `<tr data-key="${esc(b.id)}"><td class="pos">${i + 1}</td><td class="id">${esc(b.id)}${b.target ? ` <span class="muted">[${esc(b.target)}]</span>` : ''}</td><td class="title"><span class="t" title="${esc(b.title || '')}">${esc(b.title || '')}</span></td><td class="fit">${failChip(b.failures)}${histToggle(b)}${noteToggle(b)}${extra || ''}</td></tr>${histRow(b, 4, r)}${noteRow(b, 4, r)}`;
-function queueCol(name, rows, r, now) {
-  const empty = { dev: 'nothing ready', review: 'nothing waiting for review', merge: 'no PRs in flight' }[name];
-  const sub = { dev: 'no open blocker, fewest failures first, then bd’s order', review: 'gate passed; the reviewer next', merge: r.max_inflight == null ? 'PRs in CI · no cap: dependencies are the gate' : `PRs in CI · dev pauses at ${r.max_inflight}` }[name];
-  let body;
-  if (rows.length === 0) body = `<div class="empty">${empty}</div>`;
-  else if (name === 'merge') body = `<table>${rows.map((p) => `<tr data-key="${esc(p.id)}"><td class="id">${esc(p.id)}${p.target ? ` <span class="muted">[${esc(p.target)}]</span>` : ''}</td><td class="title"><span class="t"><a href="${esc(p.url)}" target="_blank" rel="noopener">${esc(p.url.replace(/^https?:\/\/github\.com\/[^/]+\//, ''))} ↗</a></span></td></tr><tr class="sub" data-key="${esc(p.id)}:pr"><td></td><td>${prChips(p, now, r)}</td></tr>`).join('')}</table>`;
-  else body = `<table>${rows.map((b, i) => qRow(i, b, (name === 'dev' ? ` ${stageChip(b.stage, r)}${researchChip(b)}` : ` <span class="muted">${ago(b.since, now)}</span>${stageChip(b.stage, r).includes('waits for') ? ' <span class="chip bad">waits for Claude sign-in</span>' : ''}`) + `</td><td class="act">${claudeBtn(r, b)}`, r)).join('')}</table>`;
-  return `<div class="q ${name}"><h3>${name} queue<span class="n">${rows.length}</span></h3><div class="sub">${sub}</div>${body}</div>`;
-}
-// The metered column: every bead whose current stage names a worker or reviewer on a
-// metered (paid) provider, and where it sits. A view over the lanes and the dev and
-// review queues, not a queue of its own — the last stage is metered, and this is where
-// its beads are found. What is being worked comes first, then the queues in the order
-// the lanes take them.
-const onMetered = (r, b) => !!(b.stage && [b.stage.worker, b.stage.reviewer].some((m) => m && r.providers && r.providers[providerOf(m)] && r.providers[providerOf(m)].cost === 'metered'));
-function meteredCol(r) {
-  const rows = [
-    ...Object.entries(r.lanes).map(([k, l]) => ({ b: l, where: `on the ${k} lane` })),
-    ...r.queues.dev.map((b, i) => ({ b, where: `dev queue #${i + 1}` })),
-    ...r.queues.review.map((b, i) => ({ b, where: `review queue #${i + 1}` })),
-  ].filter((x) => onMetered(r, x.b));
-  const body = rows.length === 0 ? '<div class="empty">no bead on a metered stage</div>'
-    : `<table>${rows.map(({ b, where }) => `<tr data-key="${esc(b.id)}"><td class="id">${esc(b.id)}</td><td class="title"><span class="t" title="${esc(b.title || '')}">${esc(b.title || '')}</span></td><td class="fit">${failChip(b.failures)}${histToggle(b)} <span class="muted">${esc(where)}</span></td></tr>${histRow(b, 2, r)}`).join('')}</table>`;
-  return `<div class="q metered"><h3>metered<span class="n">${rows.length}</span></h3><div class="sub">beads on a paid model, and where they sit</div>${body}</div>`;
 }
 
 // The scoreboard: how well the workflow works, over a window you pick — 24h, 7d, 30d or
@@ -810,7 +999,6 @@ function repo(r, now, ticking) {
     : lever('☆ make priority', 'priority', { repo: r.repo }, { cls: 'prio', title: 'the lanes look at this repo first on every pass' });
   return `<section class="card" id="repo-${esc(r.slug)}">
     <h2>${esc(r.slug)} ${prio} <span class="cfg">${esc(r.label)} · ${esc(r.base)} · merge ${esc(r.merge)} · stages: ${stages} · then ${esc(r.on_exhaust)}${r.attach ? '' : ' · <b>no attach</b>: sessions not visible'}</span></h2>
-    <div class="queues">${queueCol('dev', r.queues.dev, r, now)}${queueCol('review', r.queues.review, r, now)}${queueCol('merge', r.queues.merge, r, now)}${meteredCol(r)}</div>
     ${strays(r, now)}
     <h3 class="human">Needs you<span class="n">${(r.decisions || []).length + r.parked.length + (r.held || []).length + (r.ready_to_publish || []).length}</span><span class="note">a decision asked of you · a bead parked on a question, exhausted, or its PR closed · a bead held in its queue by something outside the loop · a proposal ready to publish</span></h3>${decisions}${human}${held}${publish}
   </section>`;
@@ -845,9 +1033,10 @@ function render() {
     : `<pre class="log" id="log">${lines.map((l) => `<span class="t">${clock(l.t)}</span>  <span class="${l.cls}">${esc(l.m)}</span>`).join("\n")}</pre>`;
   const sysBox = `<label class="opt" title="systemd’s Starting/Finished/Stopped lines for the unit"><input type="checkbox" ${showSys ? 'checked' : ''} onchange="setSys(this.checked)">systemd lines</label>`;
   patch($('main'), (last.error ? `<div class="banner" data-key="error">status failed: ${esc(last.error)}</div>` : '')
-    + (last.repos.length === 0 ? '<section class="card" data-key="norepos"><div class="empty">no repos: set <span class="mono">repos</span> in ~/.config/bead-loop/config.toml</div></section>' : lanesPane(last) + scoreboard(last))
+    + (last.repos.length === 0 ? '<section class="card" data-key="norepos"><div class="empty">no repos: set <span class="mono">repos</span> in ~/.config/bead-loop/config.toml</div></section>' : flowPane(last) + scoreboard(last))
     + last.repos.map((r) => repo(r, last.now, last.service.available && (last.service.active === 'active' || last.service.active === 'activating'))).join("")
     + `<section class="card" id="journal"><h3 class="log">Supervisor log${sysBox}</h3>${log}</section>`);
+  drawEdges();
   const el = $('log'); if (el && logTail) el.scrollTop = el.scrollHeight;
   $('foot').textContent = `state as of ${clock(last.now)} · pushed on every change`;
   // The tab says how many things wait on you.

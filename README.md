@@ -136,9 +136,10 @@ config, and have CI report a status on the repo's PRs with `gh` logged in. Every
 bead-supervisor doctor                                  # every dependency probed, red or green, one line each; --json for the page
 ```
 
-The page, **<http://127.0.0.1:4097>**, shows the lanes, the scoreboard, the queues and
-**Needs you** — every parked bead with its question, every held bead with its reason —
-with a lever for each thing you would otherwise type.
+The page, **<http://127.0.0.1:4097>**, shows the flow — the workflow as one graph, a band
+per stage, every bead at the node it is at — the lanes, the scoreboard and **Needs you**
+— every parked bead with its question, every held bead with its reason — with a lever
+for each thing you would otherwise type.
 
 ## Docs
 
