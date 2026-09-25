@@ -1,10 +1,9 @@
 //! The lanes, and the two ways to run them.
 //!
 //! A lane is a `LaneSpec` (config.rs): a name, the models whose rounds it takes, and
-//! its roles. The defaults are the pair the loop always had — `dev` (worker rounds),
-//! `review` (reviewer rounds) — plus `claude` when a stage names `claude/*`; `[[lanes]]`
-//! in the global config replaces them with a lane per model server, so that a round on
-//! the CPU box never holds the GPU's queue, and the other way round.
+//! its roles. By default there is one lane per provider the config names (`devbox`,
+//! `acbox`, `claude`: `providers_named`), so that a round on the CPU box never holds the
+//! GPU's queue, and the other way round; `[[lanes]]` in the global config replaces them.
 //!
 //! A lane with `parallel = N` runs N slots, a thread each, `NAME` then `NAME.2` … — its
 //! own lock and marker per slot, one pause flag for the lane. Two slots over one queue
@@ -47,14 +46,40 @@ pub fn lane_names(ctx: &Ctx) -> Vec<String> {
     ctx.lanes.iter().map(|l| l.name.clone()).collect()
 }
 
-/// Whether any repo's stages name a claude/* worker or reviewer (or conflict_worker):
-/// the default lanes then include a claude lane.
-pub fn has_claude_stage(repos: &[PathBuf], model_flag: Option<&str>) -> bool {
-    repos.iter().any(|r| {
-        let repo = Repo::load(r, model_flag);
-        repo.conflict_worker.starts_with("claude/")
-            || repo.stages.iter().any(|s| s.worker.starts_with("claude/") || s.reviewer.starts_with("claude/"))
-    })
+/// The providers the repos' config names — every stage's worker and reviewer, then
+/// `conflict_worker`, `brief_model` and `research_model` when set — deduplicated in the
+/// order first seen: the lanes `Layers::lanes` derives when there is no `[[lanes]]`.
+pub fn providers_named(repos: &[PathBuf], model_flag: Option<&str>) -> Vec<String> {
+    let mut out = Vec::new();
+    for r in repos {
+        for p in providers_named_in(&Repo::load(r, model_flag)) {
+            if !out.contains(&p) {
+                out.push(p);
+            }
+        }
+    }
+    out
+}
+
+/// `providers_named` for one repo.
+pub fn providers_named_in(repo: &Repo) -> Vec<String> {
+    let mut models: Vec<&str> = Vec::new();
+    for s in &repo.stages {
+        models.push(&s.worker);
+        models.push(&s.reviewer);
+    }
+    models.extend([repo.conflict_worker.as_str(), repo.brief_model.as_str(), repo.research_model.as_str()]);
+    let mut out: Vec<String> = Vec::new();
+    for m in models {
+        if m.is_empty() || m == "none" {
+            continue;
+        }
+        let p = crate::config::provider_name(m).to_string();
+        if !out.contains(&p) {
+            out.push(p);
+        }
+    }
+    out
 }
 
 fn lane_wait() -> f64 {
@@ -383,9 +408,13 @@ pub fn recover(ctx: &Ctx) {
         // came, for the freshness check below — a session from well before that round is
         // not this restart's to rejoin, even if it is still the newest on the worktree.
         let mut lane_mtimes = std::collections::HashMap::new();
+        let mut researching = std::collections::HashSet::new();
         for name in repo.lane_files() {
             if let Some(id) = repo.lane_bead(&name) {
-                lane_mtimes.insert(id, mtime(&repo.lane_path(&name)));
+                lane_mtimes.insert(id.clone(), mtime(&repo.lane_path(&name)));
+                if repo.lane_role(&name).as_deref() == Some("research") {
+                    researching.insert(id);
+                }
             }
             log(&format!("{}: stale lane.{name} from a stop; cleared", repo.slug));
             repo.lane_clear(&name);
@@ -412,7 +441,13 @@ pub fn recover(ctx: &Ctx) {
                 // back in its queue with a marker, and the lane that takes it waits on the
                 // session instead of starting one — rather than abort it and start over.
                 if in_review || is_inprog {
-                    let kind = if in_review { "reviewer" } else { "worker" };
+                    let kind = if in_review {
+                        "reviewer"
+                    } else if researching.contains(&id) {
+                        "research"
+                    } else {
+                        "worker"
+                    };
                     if let Some(sid) = crate::harness::running_session(&repo, &dir) {
                         repo.rejoin_set(&id, &sid, kind);
                         if !in_review {

@@ -9,7 +9,7 @@ name. Both are read afresh on every round, so an edit takes effect on the next r
 | Key | Default | What |
 | --- | --- | --- |
 | `repos` | `[]` | global only: the repos the lanes walk, `~` allowed |
-| `[[lanes]]` | `dev` + `review` (+ `claude`) | global only: the lanes, one per model server — `name`, `models` (globs: `devbox/*`, `acbox/*`, `claude/*`, `*`), `roles` (`worker`, `reviewer`; both by default), `exclude`, `parallel` (rounds at once, default 1). Each takes the rounds whose model it matches. Unset: the pair by role, plus a `claude` lane when a stage names `claude/*` |
+| `[[lanes]]` | one lane per provider named in the stages | global only: the lanes, one per model server — `name`, `models` (globs: `devbox/*`, `acbox/*`, `claude/*`, `*`), `roles` (`worker`, `reviewer`; both by default), `exclude`, `parallel` (rounds at once, default 1). Each takes the rounds whose model it matches. Unset: one lane per provider (the part before the `/`) that a stage, `conflict_worker`, `brief_model` or `research_model` names, in the order first named, each with both roles and as wide as its `[providers.NAME]` `parallel` |
 | `label` | `"delegate:local"` | `bd ready -l LABEL` picks the work; the loop claims, notes and closes beads as this actor, not as you (`BEADS_ACTOR` in its environment overrides) |
 | `base` | origin's HEAD | branch to fork from and PR into |
 | `setup` | none | runs in a fresh worktree before the worker (`npm ci`); not again on a branch sent back. It failing holds the bead, no failure: setup runs on the base, so it cannot be the bead's fault |
@@ -20,6 +20,8 @@ name. Both are read afresh on every round, so an edit takes effect on the next r
 | `on_exhaust` | `"park"` | after the last stage: `park` for you, or `repeat` the stages |
 | `conflict_worker` | the last stage's worker | who rebases a PR that conflicts with the base; a rebase is judgement, so the strong model by default |
 | `brief_model` | the last stage's worker | who writes the **brief** when a bead is parked for you — what each round tried, why it was sent back, the question you have to answer; `none` for no brief, the loop's own question then |
+| `research_model` | none (off) | who reads the repo for a bead before its first worker round and writes the **brief** — Files / Shape / Check / Pitfalls, at most sixty lines — that every worker prompt then carries (agent `bead-researcher`, read-only). Its round runs on the lane whose models match it, reviews first, so on this box the 80B on `acbox` researches while the GPU implements. A worker lane with nothing briefed to take takes a bead without a brief rather than wait. `BLOCKED:` from the researcher parks the bead before any edit. Research never counts a failure |
+| `research` | `"first"` | `first`: one brief per bead · `every`: a send-back sets the brief aside and the next research round refines it with the round's note |
 | `merge` | `"auto"` | `auto`: the watcher merges on green · `pipeline`: the loop labels, CI merges · `manual`: PR only, the bead held for you once green |
 | `merge_label` | `"automerge"` | the label `pipeline` puts on each PR |
 | `adopt` | `true` | open `bead/*` PRs from anyone join the loop: merged on green under `auto`, labelled under `pipeline`, the bead the branch names closed; red or conflicting, held with a note for whoever opened them. They do not count toward `max_inflight` |
@@ -31,10 +33,9 @@ name. Both are read afresh on every round, so an edit takes effect on the next r
 
 ## Lanes per model server
 
-The default lanes are split by role: **dev** (claim, worker, gate → the review queue)
-and **review** (reviewer, then push and PR → the merge queue). The scarce thing is the
-*server*, and a round on the CPU box should never hold the GPU's queue, so `[[lanes]]`
-in the global config replaces the defaults with lanes keyed by model:
+Without `[[lanes]]` there is one lane per provider the stages name — `devbox`, `acbox`,
+`claude` — each taking both roles on its own server's rounds, so a round on the CPU box never
+holds the GPU's queue. `[[lanes]]` in the global config replaces them, to group or rename:
 
 ```toml
 [[lanes]]
@@ -55,8 +56,7 @@ and a bead escalated to Claude runs at once, on Anthropic, never behind either. 
 keeps a bead's rounds together (worker, then its reviewer round when that is the same
 lane's, or straight to PR with no reviewer), pauses on its own (`pause cpu`), and is its
 own panel on the page. The first lane also parks beads whose stages are exhausted; the
-first reviewing lane also takes rounds with no reviewer. Without `[[lanes]]`, a stage
-naming `claude/*` still gets its own `claude` lane beside `dev` and `review`. With Claude
+first reviewing lane also takes rounds with no reviewer. With Claude
 signed out its lane waits, saying so, and takes the beads the moment Sign in completes.
 
 `parallel = N` on a lane runs N rounds of its models at once, one bead each, in slots

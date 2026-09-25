@@ -127,6 +127,7 @@ pub fn close_merged(repo: &Repo, id: &str, url: &str, view: &Value) {
     }
     let _ = std::fs::remove_file(repo.inflight_path(id));
     repo.clear_target(id);
+    repo.research_clear(id);
     for m in ["red", "nocheck", "adopted", "held"] {
         let _ = std::fs::remove_file(repo.mark(id, m));
     }
@@ -354,6 +355,7 @@ pub fn reconcile(repo: &Repo) {
             "CLOSED" => {
                 let _ = std::fs::remove_file(&f);
                 repo.clear_target(&id);
+                repo.research_clear(&id);
                 for m in ["red", "nocheck", "adopted", "held"] {
                     let _ = std::fs::remove_file(repo.mark(&id, m));
                 }

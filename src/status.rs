@@ -152,17 +152,12 @@ fn bead_json(repo: &Repo, byid: &Map<String, Value>, id: &str) -> Map<String, Va
 
 /// `status_json`: this repo, one JSON object.
 pub fn status_json(repo: &Repo) -> Value {
-    // lanes: the configured ones ([[lanes]] in the global file), else dev + review, plus
-    // claude when this repo's stages name it — the same list the loop runs, a row per slot.
-    let lanes = crate::config::Layers::load(&crate::config::config_dir().join("config.toml"), None).lanes(has_claude_stage(repo));
+    // lanes: the configured ones ([[lanes]] in the global file), else one per provider
+    // this repo names — the same list the loop runs, a row per slot.
+    let lanes =
+        crate::config::Layers::load(&crate::config::config_dir().join("config.toml"), None).lanes(&crate::lanes::providers_named_in(repo));
     let specs = crate::config::slots_of(&lanes);
     status_json_from(repo, bd_ready_json(repo), bd_in_progress_json(repo), &specs)
-}
-
-/// Whether this repo's stages (or its conflict worker) name a claude/* model.
-pub fn has_claude_stage(repo: &Repo) -> bool {
-    repo.stages.iter().any(|s| s.worker.starts_with("claude/") || s.reviewer.starts_with("claude/"))
-        || repo.conflict_worker.starts_with("claude/")
 }
 
 /// The status from what bd said — the ready beads and the in_progress ones — and the
@@ -222,6 +217,8 @@ pub fn status_json_from(repo: &Repo, open: Value, inprog: Value, specs: &[crate:
         if let Some(id) = repo.lane_bead(name) {
             let mut m = bead_json(repo, &byid, &id);
             m.insert("since".into(), json!(mtime(&repo.lane_path(name))));
+            // the round's role when its marker names one (a research round); else null
+            m.insert("role".into(), repo.lane_role(name).map(Value::String).unwrap_or(Value::Null));
             lanes.insert(name.into(), Value::Object(m));
             laneids.push(id);
         }
@@ -234,7 +231,19 @@ pub fn status_json_from(repo: &Repo, open: Value, inprog: Value, specs: &[crate:
     let dev: Vec<Value> = crate::state::order_dev(repo, ready_ids)
         .into_iter()
         .filter(|id| !laneids.contains(id) && !merge_ids.contains(id) && !review_ids.contains(id))
-        .map(|id| Value::Object(bead_json(repo, &byid, &id)))
+        .map(|id| {
+            let mut m = bead_json(repo, &byid, &id);
+            // research on: "pending" until the brief is written, then "done"; off: null
+            let research = if repo.research_model.is_empty() {
+                Value::Null
+            } else if repo.research_path(&id).exists() {
+                json!("done")
+            } else {
+                json!("pending")
+            };
+            m.insert("research".into(), research);
+            Value::Object(m)
+        })
         .collect();
     let review: Vec<Value> = review_ids
         .iter()
@@ -438,7 +447,8 @@ pub fn status_text(j: &Value) -> String {
         let name = name.as_str();
         let l = &j["lanes"][name];
         let what = if l.is_object() {
-            format!("{} {} ({})", s(l, "id"), s(l, "title"), age(l["since"].as_i64().unwrap_or(0)))
+            let role = l["role"].as_str().map(|r| format!("[{r}] ")).unwrap_or_default();
+            format!("{role}{} {} ({})", s(l, "id"), s(l, "title"), age(l["since"].as_i64().unwrap_or(0)))
         } else {
             "idle".to_string()
         };
@@ -665,10 +675,19 @@ mod tests {
         let _ = std::fs::remove_dir_all(&d);
     }
 
-    /// The lanes the loop runs without [[lanes]] in the global file: dev and review, and
-    /// claude when a stage names it. The live global config is not read here.
+    /// The lanes these cases were written for, spelled as [[lanes]]: dev (worker rounds)
+    /// and review (reviewer rounds), and claude when a stage names it. The live global
+    /// config is not read here.
     fn default_lanes(claude: bool) -> Vec<crate::config::LaneSpec> {
-        crate::config::Layers { global: json!({}), repo: json!({}) }.lanes(claude)
+        let ex = if claude { json!(["claude/*"]) } else { json!([]) };
+        let mut lanes = vec![
+            json!({"name": "dev", "models": ["*"], "exclude": ex, "roles": ["worker"]}),
+            json!({"name": "review", "models": ["*"], "exclude": ex, "roles": ["reviewer"]}),
+        ];
+        if claude {
+            lanes.push(json!({"name": "claude", "models": ["claude/*"]}));
+        }
+        crate::config::Layers { global: json!({"lanes": lanes}), repo: json!({}) }.lanes(&[])
     }
 
     /// Three queues and two lanes, laid out by hand: t-1 in the merge queue (red), t-2,
@@ -705,6 +724,29 @@ mod tests {
         ]);
         let j = status_json_from(&repo, open, inprog, &default_lanes(true));
         (d, repo, j)
+    }
+
+    #[test]
+    fn research_shows_on_the_queue_and_the_lane() {
+        let d = crate::config::scratch("status-research");
+        let mut repo = crate::config::test_repo(&d, &["stub/worker:stub/reviewer:2"]);
+        let open = json!([{"id":"t-2","title":"Second"},{"id":"t-3","title":"Third"}]);
+        let inprog = json!([{"id":"t-6","title":"Sixth"}]);
+        let j = status_json_from(&repo, open.clone(), inprog.clone(), &default_lanes(false));
+        assert!(j["queues"]["dev"][0]["research"].is_null(), "research off: null");
+        assert!(j["lanes"].get("dev").is_none());
+        repo.research_model = "stub/researcher".into();
+        crate::util::write_file(&repo.research_path("t-3"), "Files:\n");
+        repo.lane_set_role("dev", "t-6", "research");
+        let j = status_json_from(&repo, open, inprog, &default_lanes(false));
+        let dev = j["queues"]["dev"].as_array().unwrap();
+        let of = |id: &str| dev.iter().find(|b| b["id"] == id).unwrap()["research"].clone();
+        assert_eq!(of("t-2"), "pending", "no brief yet");
+        assert_eq!(of("t-3"), "done", "a brief written");
+        assert_eq!(j["lanes"]["dev"]["id"], "t-6", "the marker's first line is the bead");
+        assert_eq!(j["lanes"]["dev"]["role"], "research", "its second the role");
+        assert!(status_text(&j).contains("dev lane:    [research] t-6 Sixth ("), "the text says so too");
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     #[test]
