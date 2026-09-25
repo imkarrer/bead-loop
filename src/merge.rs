@@ -7,7 +7,7 @@
 use crate::config::Repo;
 use crate::round::send_back;
 use crate::shell::{bd_close, bd_knows, bd_note, bd_ready_json, bd_status, gh, gh_ok, gh_out, git};
-use crate::util::{date_iminutes, log, mtime, now, read_to_string, stderr_str, stdout_str, touch};
+use crate::util::{date_iminutes, log, mtime, now, read_to_string, stderr_str, stdout_str, touch, write_file};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -166,6 +166,101 @@ fn failing_checks(view: &Value) -> String {
         .unwrap_or_default()
 }
 
+/// The view's head commit: `headRefOid`, or "" when it did not come back.
+fn head_sha(view: &Value) -> String {
+    view.get("headRefOid").and_then(|v| v.as_str()).unwrap_or("").to_string()
+}
+
+/// The red run this view shows: the head sha, then the link of each failing check (the
+/// same RED filter `failing_checks` uses), cut at the first `#` (a step's link, not the
+/// build's), deduplicated and sorted so two reads of the same run compare equal. None
+/// when the sha is empty or no failing check has a link — there is no run to name.
+fn red_run(view: &Value) -> Option<String> {
+    let sha = head_sha(view);
+    if sha.is_empty() {
+        return None;
+    }
+    let mut runs: Vec<String> = view
+        .get("statusCheckRollup")
+        .and_then(|v| v.as_array())
+        .map(|a| {
+            a.iter()
+                .filter(|c| RED.contains(&check_state(c).as_str()))
+                .map(|c| c.get("targetUrl").or_else(|| c.get("detailsUrl")).and_then(|v| v.as_str()).unwrap_or(""))
+                .map(build_of)
+                .filter(|l| !l.is_empty())
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
+    if runs.is_empty() {
+        return None;
+    }
+    runs.sort();
+    runs.dedup();
+    Some(std::iter::once(sha).chain(runs).collect::<Vec<_>>().join(" "))
+}
+
+/// True when `current` is the same run as the one already `recorded`: the same head sha,
+/// and every run in `current` also in `recorded`. A subset, not equality: at the charge
+/// the build-level context may already be red while the suite is still running, and
+/// afterwards either one may linger while the other has gone stale or cleared.
+fn same_red(recorded: &str, current: &str) -> bool {
+    let mut r = recorded.split_whitespace();
+    let mut c = current.split_whitespace();
+    let (rsha, csha) = match (r.next(), c.next()) {
+        (Some(a), Some(b)) => (a, b),
+        _ => return false,
+    };
+    if rsha != csha {
+        return false;
+    }
+    let recorded_runs: std::collections::HashSet<&str> = r.collect();
+    c.all(|run| recorded_runs.contains(run))
+}
+
+/// Records the run charged as red, so the next pass can tell whether a later red is the
+/// same run (already charged) or a new one. Cleared when the view no longer names one.
+fn record_red(repo: &Repo, id: &str, view: &Value) {
+    match red_run(view) {
+        Some(r) => write_file(&repo.mark(id, "lastred"), &format!("{r}\n")),
+        None => {
+            let _ = std::fs::remove_file(repo.mark(id, "lastred"));
+        }
+    }
+}
+
+/// True when this view's red run is the one already charged (`record_red`'s mark).
+fn red_seen(repo: &Repo, id: &str, view: &Value) -> bool {
+    match red_run(view) {
+        Some(current) => match read_to_string(&repo.mark(id, "lastred")) {
+            Some(recorded) => same_red(recorded.trim(), &current),
+            None => false,
+        },
+        None => false,
+    }
+}
+
+/// The head sha of the red run last charged for this bead, if any.
+pub fn red_head(repo: &Repo, id: &str) -> Option<String> {
+    read_to_string(&repo.mark(id, "lastred"))?.split_whitespace().next().map(str::to_string)
+}
+
+/// A fix round that made no new commit cannot re-run CI by pushing (`git push
+/// --force-with-lease` of the same sha does nothing) or by re-labelling (the PR already
+/// carries the label, so no labeled event fires either) — #132 on 25 Sep showed the fix:
+/// take the label off and put it back on, which does fire a labeled event, and build 296
+/// re-ran CI that build 286 had left red.
+pub fn rerun_ci(repo: &Repo, id: &str, url: &str, why: &str) {
+    // A failure here is not fatal: if the label was already off, adding it back still
+    // fires the event; if it cannot be taken off, no build starts, and the CI_TIMEOUT
+    // hold in reconcile_open's new middle branch reports that in time.
+    let _ = gh_ok(repo, &["pr", "edit", url, "--remove-label", &repo.merge_label]);
+    log(&format!("{}: {id}: {why}; CI re-runs on {url} (the {} label off and back on)", repo.slug, repo.merge_label));
+    bd_note(repo, id, &format!("bead-loop {}: {why}; CI re-runs on {url}", date_iminutes()));
+    hand_to_pipeline(repo, id, url);
+}
+
 /// `ci=SUCCESS build=FAILURE`, what the close reason quotes; "none reported" without checks.
 pub fn checks_at_merge(view: &Value) -> String {
     let checks: Vec<String> = view
@@ -211,7 +306,7 @@ pub fn close_merged(repo: &Repo, id: &str, url: &str, view: &Value) {
     let _ = std::fs::remove_file(repo.inflight_path(id));
     repo.clear_target(id);
     repo.research_clear(id);
-    for m in ["red", "nocheck", "adopted", "held"] {
+    for m in ["red", "nocheck", "adopted", "held", "lastred"] {
         let _ = std::fs::remove_file(repo.mark(id, m));
     }
     repo.release(id);
@@ -414,24 +509,25 @@ pub fn reconcile(repo: &Repo) {
         let f = repo.inflight_path(&id);
         let url = read_to_string(&f).unwrap_or_default().trim().to_string();
         crate::config::need("gh");
-        let view = match gh(&r, &["pr", "view", &url, "--json", "state,mergedAt,mergeable,mergeStateStatus,statusCheckRollup,url"]) {
-            Ok(o) if o.status.success() => match serde_json::from_str::<Value>(&stdout_str(&o)) {
-                Ok(v) => v,
+        let view =
+            match gh(&r, &["pr", "view", &url, "--json", "state,mergedAt,mergeable,mergeStateStatus,statusCheckRollup,url,headRefOid"]) {
+                Ok(o) if o.status.success() => match serde_json::from_str::<Value>(&stdout_str(&o)) {
+                    Ok(v) => v,
+                    Err(_) => {
+                        log(&format!("{}: cannot read PR {url}", repo.slug));
+                        continue;
+                    }
+                },
+                Ok(o) => {
+                    log(&format!("{}: cannot read PR {url}", repo.slug));
+                    held_in_merge(repo, &id, &format!("gh cannot read {url}: {}", stderr_str(&o).trim().lines().last().unwrap_or("")));
+                    continue;
+                }
                 Err(_) => {
                     log(&format!("{}: cannot read PR {url}", repo.slug));
                     continue;
                 }
-            },
-            Ok(o) => {
-                log(&format!("{}: cannot read PR {url}", repo.slug));
-                held_in_merge(repo, &id, &format!("gh cannot read {url}: {}", stderr_str(&o).trim().lines().last().unwrap_or("")));
-                continue;
-            }
-            Err(_) => {
-                log(&format!("{}: cannot read PR {url}", repo.slug));
-                continue;
-            }
-        };
+            };
         let view = skip_free(&r, &url, view);
         let state = view.get("state").and_then(|s| s.as_str()).unwrap_or("");
         match state {
@@ -440,7 +536,7 @@ pub fn reconcile(repo: &Repo) {
                 let _ = std::fs::remove_file(&f);
                 repo.clear_target(&id);
                 repo.research_clear(&id);
-                for m in ["red", "nocheck", "adopted", "held"] {
+                for m in ["red", "nocheck", "adopted", "held", "lastred"] {
                     let _ = std::fs::remove_file(repo.mark(&id, m));
                 }
                 repo.release(&id);
@@ -529,8 +625,35 @@ fn reconcile_open(repo: &Repo, id: &str, f: &std::path::Path, url: &str, view: &
                     log(&format!("{}: {id}: CI red on adopted {url}", repo.slug));
                 }
                 held_in_merge(repo, id, &format!("CI red on adopted {url} ({checks}); not the loop's branch to fix"));
+            } else if red_seen(repo, id, view) {
+                // The run already charged, on the same head: no new commit fixed it, and
+                // nothing further to charge until a re-run reports.
+                if repo.merge == "pipeline" {
+                    say(id, format!("{}: {id}: CI red on {url} is the run already charged; waiting for the re-run", repo.slug));
+                    let since = mtime(f);
+                    if since > 0 && now() - since >= CI_TIMEOUT {
+                        held_in_merge(
+                            repo,
+                            id,
+                            &format!(
+                                "{url} still shows the red run already charged, {} h after the push; did the re-run start?",
+                                (now() - since) / 3600
+                            ),
+                        );
+                    }
+                } else {
+                    let sha7: String = head_sha(view).chars().take(7).collect();
+                    held_in_merge(
+                        repo,
+                        id,
+                        &format!(
+                            "CI red on {url} is the run already charged, on the same head {sha7}: the fix round made no new commit. Re-run CI or push a change"
+                        ),
+                    );
+                }
             } else {
                 // Ours: back to the dev queue on the same branch; the next push updates this PR.
+                record_red(repo, id, view);
                 let _ = std::fs::remove_file(f);
                 let _ = std::fs::remove_file(repo.mark(id, "nocheck"));
                 let _ = std::fs::remove_file(repo.mark(id, "held"));
@@ -681,6 +804,31 @@ mod tests {
         assert!(g.as_ref().unwrap().get("k").is_none(), "loud lines are not remembered");
         drop(g);
         set_quiet(false);
+    }
+    #[test]
+    fn red_run_is_the_head_and_its_builds() {
+        use serde_json::json;
+        let view = json!({
+            "headRefOid": "abc",
+            "statusCheckRollup": [
+                {"context":"ci","state":"FAILURE","targetUrl":"https://bk/builds/286"},
+                {"context":"suite","state":"FAILURE","targetUrl":"https://bk/builds/286#j1"},
+                {"context":"rust","state":"SUCCESS","targetUrl":"https://bk/builds/286#j2"}
+            ]
+        });
+        assert_eq!(red_run(&view).as_deref(), Some("abc https://bk/builds/286"));
+        let mut no_sha = view.clone();
+        no_sha.as_object_mut().unwrap().remove("headRefOid");
+        assert_eq!(red_run(&no_sha), None, "no headRefOid, no run");
+        let no_link = json!({"headRefOid": "abc", "statusCheckRollup": [{"context":"ci","state":"FAILURE"}]});
+        assert_eq!(red_run(&no_link), None, "a failing check with no link");
+    }
+    #[test]
+    fn same_red_when_every_run_was_charged() {
+        assert!(same_red("abc https://bk/builds/286", "abc https://bk/builds/286"));
+        assert!(!same_red("abc https://bk/builds/286", "abc https://bk/builds/296"));
+        assert!(!same_red("abc https://bk/builds/286", "def https://bk/builds/286"));
+        assert!(same_red("abc https://bk/builds/286 https://bk/builds/287", "abc https://bk/builds/286"));
     }
     #[test]
     fn green_since_is_a_marker_made_once() {

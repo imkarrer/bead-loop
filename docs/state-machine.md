@@ -66,7 +66,7 @@ The loop keeps no state of its own beyond files; a bead's state is a function of
 | bd | `status` (`open` / `in_progress` / `closed`; `blocked`, `deferred` by hand), the label, blockers (`bd ready` lists only beads with none open), notes (people's, and the loop's own event log: a `bead-loop` line each, its body indented under it — what stats and the page read) |
 | `$RS/beads/ID/failures` | the failure count → the stage (`stage_for`); `rounds.jsonl` beside it the history, one record per send-back, the only history a prompt carries |
 | `$RS/review/ID` | in the review queue (holds the worker's last line) |
-| `$RS/inflight/ID` | in the merge queue (holds the PR url); beside it `.ID.adopted`, `.ID.red`, `.ID.nocheck`, `.ID.fixing`, `.ID.conflict` |
+| `$RS/inflight/ID` | in the merge queue (holds the PR url); beside it `.ID.adopted`, `.ID.red`, `.ID.nocheck`, `.ID.fixing`, `.ID.conflict`, `.ID.lastred` (the red CI run last charged: head sha and builds) |
 | `$RS/proposed/ID` | ready to publish: the PR's title, body, head, base, pr_repo and compare url, as JSON; counts toward `max_inflight` |
 | `$RS/held/ID` | the bead waits on something outside the loop; the file says what |
 | `$RS/parked/ID` | the loop's record of a parking: the reason, the stage, the question, the brief |
@@ -178,6 +178,7 @@ Every row is a case in `test/run.sh`.
 | CI green / no checks / pending, `merge = "external"` | no hold, no note; the page shows how long | PR left open, awaiting the maintainer |
 | CI green, GitHub refuses the merge (branch protection) | **held** with GitHub's state | PR left open |
 | CI red | note with the failing checks, +1 failure; dev queue | kept; the next round's push updates the PR |
+| CI red again on the commit already charged (a fix round made no new commit) | not charged again: under `pipeline` the merge label comes off and back on and the bead waits for the re-run; otherwise **held** | unchanged |
 | CI red on an adopted PR | one note, **held** | left open for whoever opened it |
 | CI pending for over two hours | **held**, still polled: is the agent up? | waits |
 | A status from a build CI skipped (Buildkite's `Build #N skipped`, state error) | not a result, no failure: its check reads as the newest status from a build that was not skipped, pending while none has reported | waits |
@@ -229,6 +230,7 @@ code is fixed.
 | reviewing | the reviewer exits non-zero after work | ready | +1 | kept |
 | reviewing | `REJECT:` | ready | +1 | kept |
 | reviewing | `APPROVE:`, push, PR opened or updated | merge | — | pushed |
+| reviewing | `APPROVE:` on the commit CI was red on (no new commit), `pipeline` | merge; the merge label off and back on, so CI re-runs | — | unchanged |
 | reviewing | push refused (someone pushed to `bead/ID`) | review (held: the push's words) | — | kept |
 | reviewing | `gh pr create` fails (gh signed out, network) | review (held: gh's words) | — | pushed |
 | reviewing | the loop stopped | review (the lane retakes it) | — | kept |
@@ -246,6 +248,7 @@ The watcher looks at every `inflight/ID` on each pass.
 | merge | `mergeable = CONFLICTING`, ours | ready (`.fixing`, `.conflict`; a rebase round by `conflict_worker`) | — | kept; the push updates the PR |
 | merge | conflicting, adopted | left alone | — | — |
 | merge | checks red, ours | ready (`.fixing`) | +1 | kept; the next push updates the PR |
+| merge | checks red, ours, every failing check from a run already charged on this head (`.lastred`) | merge (waits for the re-run under `pipeline`, held after 2 h; held at once otherwise) | — | — |
 | merge | checks red, adopted | merge (held: not the loop's branch to fix; one note) | — | — |
 | merge | green, `auto`, `CLEAN` → `gh pr merge` | closed | — | deleted |
 | merge | green, `auto`, `BEHIND` → `update-branch` | merge (CI reruns) | — | updated |
