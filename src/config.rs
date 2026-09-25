@@ -1370,4 +1370,75 @@ mod tests {
         assert_eq!(out.repo, r.repo, "so it is the default target");
         let _ = std::fs::remove_dir_all(&d);
     }
+
+    #[test]
+    fn config_keys_are_documented() {
+        const KEYS: &[&str] = &[
+            "repos",
+            "lanes",
+            "label",
+            "base",
+            "setup",
+            "gate",
+            "precheck_model",
+            "model",
+            "review_model",
+            "stages",
+            "on_exhaust",
+            "conflict_worker",
+            "brief_model",
+            "research_model",
+            "research",
+            "research_timeout",
+            "merge",
+            "merge_label",
+            "adopt",
+            "max_inflight",
+            "worker_timeout",
+            "stall_compactions",
+            "stall_steps",
+            "attach",
+        ];
+
+        let docs = include_str!("../docs/config.md");
+        let example = include_str!("../bead-loop.example.toml");
+
+        // Every key is a row in the config reference table.
+        for key in KEYS {
+            let pattern = if *key == "stages" || *key == "lanes" { format!("| `[[{key}]]` |") } else { format!("| `{key}` |") };
+            if !docs.contains(&pattern) {
+                panic!("key `{key}` missing from the config reference (docs/config.md): expected `{pattern}`");
+            }
+        }
+
+        // Every key but the two global-only ones has an example line.
+        for key in KEYS {
+            if *key == "repos" || *key == "lanes" {
+                continue;
+            }
+            let bare = format!("{key} =");
+            let bracketed = format!("[[{key}]]");
+            let found = example.lines().any(|line| {
+                let line = line.strip_prefix("# ").unwrap_or(line);
+                line.starts_with(&bare) || line.starts_with(&bracketed)
+            });
+            if !found {
+                panic!("key `{key}` missing from bead-loop.example.toml: expected `{bare}` or `{bracketed}` at the start of a line");
+            }
+        }
+
+        // And nothing in the table's rows is undocumented in KEYS.
+        for line in docs.lines() {
+            if line.starts_with("## ") {
+                break;
+            }
+            if let Some(rest) = line.strip_prefix("| `") {
+                let cell = rest.split('`').next().unwrap_or("");
+                let key = cell.trim_start_matches("[[").trim_end_matches("]]");
+                if !KEYS.contains(&key) {
+                    panic!("docs/config.md documents `{key}`, which is not in KEYS");
+                }
+            }
+        }
+    }
 }
