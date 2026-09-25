@@ -1370,4 +1370,83 @@ mod tests {
         assert_eq!(out.repo, r.repo, "so it is the default target");
         let _ = std::fs::remove_dir_all(&d);
     }
+
+    #[test]
+    fn config_keys_are_documented() {
+        const KEYS: &[&str] = &[
+            "repos",
+            "lanes",
+            "label",
+            "base",
+            "setup",
+            "gate",
+            "precheck_model",
+            "model",
+            "review_model",
+            "stages",
+            "on_exhaust",
+            "conflict_worker",
+            "brief_model",
+            "research_model",
+            "research",
+            "research_timeout",
+            "merge",
+            "merge_label",
+            "adopt",
+            "max_inflight",
+            "worker_timeout",
+            "stall_compactions",
+            "stall_steps",
+            "attach",
+        ];
+
+        let docs = include_str!("../docs/config.md");
+        let example = include_str!("../bead-loop.example.toml");
+
+        // Check that all keys appear in the docs table
+        for key in KEYS {
+            // Skip repos and lanes as they are special
+            if *key == "repos" || *key == "lanes" {
+                continue;
+            }
+            
+            // For stages and lanes, check for [[stages]] and [[lanes]] patterns
+            let key_pattern = if *key == "stages" || *key == "lanes" {
+                format!("| `[[{key}]]` |")
+            } else {
+                format!("| `{key}` |")
+            };
+            
+            if !docs.contains(&key_pattern) {
+                panic!("Key `{key}` missing from docs/config.md table (pattern: {key_pattern})");
+            }
+        }
+
+        // Check that all keys (except repos and lanes) appear in the example config file
+        for key in KEYS {
+            // Skip repos and lanes as they are global only and exempt from example checking
+            if *key == "repos" || *key == "lanes" {
+                continue;
+            }
+            
+            // Check if the key appears in the example config file (allowing for comments)
+            let mut found = false;
+            for line in example.lines() {
+                // Check if the line contains key = (allowing for comments at the start)
+                if line.contains(&format!("{} = ", key)) || line.contains(&format!("{} =\"", key)) {
+                    found = true;
+                    break;
+                }
+                // Also check for [[stages]] and [[lanes]] patterns  
+                if line.starts_with(&format!("[[{key}]]")) {
+                    found = true;
+                    break;
+                }
+            }
+            
+            if !found {
+                panic!("Key `{key}` missing from bead-loop.example.toml (expected at start of line)");
+            }
+        }
+    }
 }
