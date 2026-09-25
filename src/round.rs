@@ -1371,6 +1371,18 @@ pub fn review_one(repo: &Repo, opts: &Opts, id: Option<&str>, lane: Option<&Lane
             send_back(repo, &id, &wt, true, &note, &model, false, Some(&logf));
             return Pass::Worked;
         }
+        if r.text.trim().is_empty() {
+            // A clean exit with not one word (a step started, then nothing): no verdict on
+            // the work, so nothing the worker can fix. Held like a reviewer that never
+            // answered, no failure charged; not a REJECT with an empty work order.
+            hold(
+                repo,
+                &id,
+                None,
+                &format!("reviewer {review_model} gave no verdict (it exited 0 with no text). Log: {}", review_log.display()),
+            );
+            return Pass::Worked;
+        }
         if !r.text.lines().any(|l| l.starts_with("APPROVE:")) {
             let _ = std::fs::remove_file(repo.review_path(&id));
             // The whole of the reviewer's verdict travels — the REJECT line and the block for
