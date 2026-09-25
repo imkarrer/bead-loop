@@ -162,6 +162,7 @@ Every row is a case in `test/run.sh`.
 | Gate passes, pre-check `PASS` (or the pre-check cannot run) | in_progress; review queue | kept, in its worktree |
 | Pre-check `SEND BACK` | note with the pre-checker's block, +1 failure; dev queue — the next round on the next stage | kept |
 | Reviewer `REJECT:` (any verdict that is not `APPROVE:`) | note with the rejection, +1 failure; dev queue — the worker fixes in place | kept |
+| The same `REJECT:` twice running (first REJECT line equal, whitespace aside) | note with the rejection and "the same REJECT twice: escalated to <worker>", the failure count jumps to the next stage with a different worker (parked as exhausted if there is none); dev queue | kept |
 | Reviewer `APPROVE:` | in_progress, comment with the url; merge queue | pushed; PR opened, or the existing one updated |
 | Push or `gh pr create` refused | **held** in the review queue with gh's words | pushed / not |
 | CI green, `merge = "auto"` | closed with the PR url | squash-merged by the watcher, branch deleted |
