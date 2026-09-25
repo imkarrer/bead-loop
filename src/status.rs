@@ -618,7 +618,6 @@ mod tests {
         byid.insert("t-1".into(), json!({"id": "t-1"}));
         let result = bead_json(&repo, &byid, "t-1");
         assert_eq!(result.get("target"), Some(&json!("t")));
-        
         repo.set_target("t-2", "");
         let mut byid = Map::new();
         byid.insert("t-2".into(), json!({"id": "t-2"}));
