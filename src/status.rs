@@ -367,9 +367,10 @@ pub fn status_json_from(repo: &Repo, open: Value, inprog: Value, specs: &[crate:
         .into_iter()
         .map(|id| {
             let mut m = bead_json(repo, &byid, &id);
-            // Add the proposal content from proposed_path(id)
-            let proposal_content = read_to_string(&repo.proposed_path(&id)).unwrap_or_default();
-            m.insert("proposal".into(), json!(proposal_content));
+            let proposal = read_to_string(&repo.proposed_path(&id))
+                .and_then(|s| serde_json::from_str(&s).ok())
+                .unwrap_or(Value::Null);
+            m.insert("proposal".into(), proposal);
             Value::Object(m)
         })
         .collect();
@@ -956,23 +957,20 @@ mod tests {
     fn ready_to_publish_lists_proposed_beads() {
         let d = crate::config::scratch("ready-to-publish");
         let repo = crate::config::test_repo(&d, &["stub/worker:stub/reviewer:2"]);
-        // Create a proposed bead
-        let proposed_content = r#"{"id":"t-1","title":"Test bead","description":"This is a test bead","acceptance":"cargo test"}"#;
-        crate::util::write_file(&repo.proposed_path("t-1"), proposed_content);
-        let open = json!([]);
-        let inprog = json!([]);
-        let j = status_json_from(&repo, open, inprog, &default_lanes(false));
-
-        // Check that ready_to_publish exists and contains our proposed bead
-        assert!(j.get("ready_to_publish").is_some(), "ready_to_publish should exist");
+        let proposed_content = r#"{"title":"T","compare_url":"https://x"}"#;
+        crate::util::write_file(&repo.proposed_path("t-9"), proposed_content);
+        let j = status_json_from(&repo, json!([]), json!([]), &default_lanes(false));
         let ready_to_publish = j["ready_to_publish"].as_array().unwrap();
         assert_eq!(ready_to_publish.len(), 1, "Should have one proposed bead");
-
         let bead = &ready_to_publish[0];
-        assert_eq!(bead["id"], "t-1", "Should have the correct bead ID");
-        // Check that proposal content is included
-        assert_eq!(bead["proposal"], proposed_content, "Should include the proposal content");
-
+        assert_eq!(bead["id"], "t-9", "Should have the correct bead ID");
+        assert_eq!(bead["proposal"]["compare_url"], "https://x", "Should include the parsed proposal");
         let _ = std::fs::remove_dir_all(&d);
+
+        let d2 = crate::config::scratch("ready-empty");
+        let repo2 = crate::config::test_repo(&d2, &["stub/worker:stub/reviewer:2"]);
+        let j2 = status_json_from(&repo2, json!([]), json!([]), &default_lanes(false));
+        assert_eq!(j2["ready_to_publish"].as_array().unwrap().len(), 0, "Should have no proposed beads");
+        let _ = std::fs::remove_dir_all(&d2);
     }
 }
