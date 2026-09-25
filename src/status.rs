@@ -141,7 +141,10 @@ fn bead_json(repo: &Repo, byid: &Map<String, Value>, id: &str) -> Map<String, Va
     m.insert("failures".into(), json!(n));
     m.insert("stage".into(), stage_json(repo, n));
     m.insert("history".into(), history_json(repo, id));
-    let held = repo.held_why(id).map(|w| json!({"why": w, "since": repo.held_since(id)})).unwrap_or(Value::Null);
+    let held = repo
+        .held_why(id)
+        .map(|w| json!({"why": w, "since": repo.held_since(id), "retry_at": crate::round::hold_retry_at(repo, id)}))
+        .unwrap_or(Value::Null);
     m.insert("held".into(), held);
     let t = repo.target_of(id);
     if !t.is_empty() {
@@ -197,7 +200,12 @@ pub fn status_json_from(repo: &Repo, open: Value, inprog: Value, specs: &[crate:
             m.insert("adopted".into(), json!(repo.mark(id, "adopted").exists()));
             m.insert("failures".into(), json!(repo.failures_of(id)));
             m.insert("title".into(), json!(byid.get(id).and_then(|b| b.get("title")).and_then(|t| t.as_str()).unwrap_or("")));
-            m.insert("held".into(), repo.held_why(id).map(|w| json!({"why": w, "since": repo.held_since(id)})).unwrap_or(Value::Null));
+            m.insert(
+                "held".into(),
+                repo.held_why(id)
+                    .map(|w| json!({"why": w, "since": repo.held_since(id), "retry_at": crate::round::hold_retry_at(repo, id)}))
+                    .unwrap_or(Value::Null),
+            );
             m.insert("merge_mode".into(), json!(repo.for_id(id).merge));
             m.insert("awaiting_since".into(), json!(mtime(&repo.inflight_path(id))));
             let t = repo.target_of(id);
@@ -288,7 +296,8 @@ pub fn status_json_from(repo: &Repo, open: Value, inprog: Value, specs: &[crate:
     // held: every bead with a held/ file, wherever it sits — the human list beside parked
     let held: Vec<Value> = std::fs::read_dir(repo.rs.join("held"))
         .map(|rd| {
-            let mut ids: Vec<String> = rd.flatten().filter_map(|e| e.file_name().into_string().ok()).collect();
+            let mut ids: Vec<String> =
+                rd.flatten().filter_map(|e| e.file_name().into_string().ok()).filter(|n| !n.ends_with(".n")).collect();
             ids.sort();
             ids.into_iter()
                 .map(|id| {
@@ -303,6 +312,7 @@ pub fn status_json_from(repo: &Repo, open: Value, inprog: Value, specs: &[crate:
                     m.insert("where".into(), json!(wher));
                     m.insert("why".into(), json!(repo.held_why(&id).unwrap_or_default()));
                     m.insert("since".into(), json!(repo.held_since(&id)));
+                    m.insert("retry_at".into(), json!(crate::round::hold_retry_at(repo, &id)));
                     Value::Object(m)
                 })
                 .collect()
