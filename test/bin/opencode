@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Stub opencode for bead-loop tests. `run` only. Behaviour from $TEST_CTRL:
 #   worker      one line per round, the last line for the rest: done | blocked | nocommit | uncommitted |
-#               hang | crash | server-error   (what the implementor leaves behind)
+#               hang | crash | server-error | stall   (what the implementor leaves behind; stall loops
+#               tool_use/compaction events forever, no edit, until the watchdog or a stop kills it)
 #   abort-delay seconds the server takes for the next abort, once (curl stub): the stop's race
 #   review      one line per round: approve | reject | hang | crash | server-error
 #   brief       shape (default: WHAT HAPPENED / WHY / QUESTION) | plain (no shape) | crash
@@ -36,6 +37,12 @@ case $agent in
       blocked) say "I looked."; say "BLOCKED: lib/x.ts:3 has no such flag" ;;
       nocommit) say "DONE: nothing to do" ;;
       hang) say "working on it"; sleep 30 ;;   # said something, then the clock or a stop ends it
+      stall)   # an endless read/compaction loop, no edit: the watchdog trips well before worker_timeout
+        while :; do
+          jq -cn '{type:"tool_use", part:{type:"tool", tool:"read"}}'
+          jq -cn '{type:"text", part:{type:"text", metadata:{compaction_continue:true}, text:"Continue"}}'
+          sleep 0.05
+        done ;;
       crash) echo "connection refused" >&2; exit 7 ;;   # the harness died before the model said a word
       server-error) server_error ;;   # the server answered an error before the model ran
       uncommitted) echo "work" >"$dir/work.txt"; say "DONE: wrote work.txt (forgot to commit)" ;;

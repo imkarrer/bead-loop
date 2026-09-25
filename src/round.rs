@@ -744,7 +744,8 @@ pub fn dev_one(repo: &Repo, opts: &Opts, id: Option<&str>, last_id: &mut Option<
         return Pass::Worked;
     }
     if r.rc != 0 {
-        let note = format!("worker exited {} (timeout={timeout} s). Log: {}", r.rc, worker_log.display());
+        let note =
+            r.stalled.clone().unwrap_or_else(|| format!("worker exited {} (timeout={timeout} s). Log: {}", r.rc, worker_log.display()));
         let pm = postmortem(repo, &id, &wt, &json, &r.text, "", &logf);
         send_back(repo, &id, &wt, false, &format!("{note}{pm}"), &model, st.last, Some(&logf));
         return Pass::Worked;
@@ -778,7 +779,8 @@ pub fn dev_one(repo: &Repo, opts: &Opts, id: Option<&str>, last_id: &mut Option<
             return Pass::Worked;
         }
         if r2.rc != 0 {
-            let note = format!("worker exited {} in gate fix round. Log: {}", r2.rc, fix_log.display());
+            let note =
+                r2.stalled.clone().unwrap_or_else(|| format!("worker exited {} in gate fix round. Log: {}", r2.rc, fix_log.display()));
             let pm = postmortem(repo, &id, &wt, &json, &r2.text, &gate_out, &logf);
             send_back(repo, &id, &wt, false, &format!("{note}{pm}"), &model, st.last, Some(&logf));
             return Pass::Worked;
@@ -947,16 +949,8 @@ pub fn review_one(repo: &Repo, opts: &Opts, id: Option<&str>, lane: Option<&Lane
         }
         if r.rc != 0 {
             let _ = std::fs::remove_file(repo.review_path(&id));
-            send_back(
-                repo,
-                &id,
-                &wt,
-                true,
-                &format!("reviewer exited {}. Log: {}", r.rc, review_log.display()),
-                &model,
-                false,
-                Some(&logf),
-            );
+            let note = r.stalled.clone().unwrap_or_else(|| format!("reviewer exited {}. Log: {}", r.rc, review_log.display()));
+            send_back(repo, &id, &wt, true, &note, &model, false, Some(&logf));
             return Pass::Worked;
         }
         if !r.text.lines().any(|l| l.starts_with("APPROVE:")) {
@@ -1207,7 +1201,8 @@ mod tests {
     }
     #[test]
     fn a_round_the_model_never_answered_holds_with_the_harness_words() {
-        let r = |rc, error: &str| AgentRun { text: String::new(), full: String::new(), rc, empty: true, error: error.into() };
+        let r =
+            |rc, error: &str| AgentRun { text: String::new(), full: String::new(), rc, empty: true, error: error.into(), stalled: None };
         assert_eq!(
             never_answered("reviewer", "acbox/reviewer", &r(1, "UnknownError: Unexpected server error. Check server logs for details. (ref err_502a8619)")),
             "reviewer acbox/reviewer exited 1 before the model answered (harness or server down?): UnknownError: Unexpected server error. Check server logs for details. (ref err_502a8619)",

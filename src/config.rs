@@ -256,6 +256,13 @@ pub struct Repo {
     pub adopt: bool,
     pub max_inflight: u64,
     pub worker_timeout: u64,
+    /// opencode sessions only: past this many compaction events, the watchdog aborts the
+    /// session as stalled — a read/compaction loop the model never broke out of on its
+    /// own. `0` disables the check (bl-uhl)
+    pub stall_compactions: u64,
+    /// opencode sessions only: past this many tool calls since the last edit/write/patch
+    /// call, the watchdog aborts the session as stalled. `0` disables the check (bl-uhl)
+    pub stall_steps: u64,
     pub attach: String,
     pub base: String,
     /// where `bead/*` branches fork from and PR into; default `origin` — for a target,
@@ -326,6 +333,8 @@ impl Repo {
             adopt: cfg.bool("adopt", true),
             max_inflight: cfg.u64("max_inflight", u64::MAX),
             worker_timeout: cfg.u64("worker_timeout", 3600),
+            stall_compactions: cfg.u64("stall_compactions", 10),
+            stall_steps: cfg.u64("stall_steps", 60),
             attach: cfg.str("attach", ""),
             base_remote,
             push_remote: cfg.str("push_remote", "origin"),
@@ -511,6 +520,8 @@ pub fn test_repo(root: &Path, stages: &[&str]) -> Repo {
         adopt: true,
         max_inflight: u64::MAX,
         worker_timeout: 60,
+        stall_compactions: 10,
+        stall_steps: 60,
         attach: String::new(),
         base: "main".into(),
         base_remote: "origin".into(),
