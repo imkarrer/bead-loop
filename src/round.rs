@@ -669,7 +669,7 @@ pub fn dev_prompt(
         format!(" House rules for this work are the skills under .agents/skills/ (linked from {house}); the repository's own AGENTS.md and CONTRIBUTING.md win on style.")
     };
     format!(
-        "Work the bead below in this repository, following the bead-workflow skill.\n\n<bead>\n{}\n</bead>\n\nYou are on branch {branch}{}.{gate_block}{house_block} Commit your work on this branch and leave .beads/ untouched. End your turn with one line: DONE: <evidence> or BLOCKED: <note>.{rebase}{research_block}{history_block}",
+        "Work the bead below in this repository.\n\n<bead>\n{}\n</bead>\n\nYou are on branch {branch}{}.{gate_block}{house_block} Commit your work on this branch and leave .beads/ untouched. End your turn with one line: DONE: <evidence> or BLOCKED: <note>.{rebase}{research_block}{history_block}",
         render_bead(json),
         if resumed {
             ", which already carries your earlier commit(s) for this bead: fix them in place rather than starting over".to_string()
@@ -1746,6 +1746,8 @@ mod tests {
     fn dev_prompt_says_fresh_or_resumed_and_carries_the_history() {
         let j: Value = serde_json::json!([{"id":"t-1","title":"T","description":"D"}]);
         let fresh = dev_prompt(&j, "bead/t-1", "main", false, "", "", "", "", "");
+        assert!(fresh.starts_with("Work the bead below in this repository.\n\n<bead>\n"), "the opening sentence");
+        assert!(!fresh.contains("bead-workflow"), "agents/bead-worker.md says not to load that skill");
         assert!(fresh.contains("<bead>\nid: t-1\n"), "the bead rendered into the prompt");
         assert!(fresh.contains("You are on branch bead/t-1, a fresh worktree of main."));
         assert!(!fresh.contains("<previous-attempts>"), "first attempt has no history");
