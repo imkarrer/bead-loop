@@ -295,7 +295,7 @@ fn bead_of(repo: &Repo, b: &Value) -> Option<Bead> {
     let url =
         reason.strip_prefix("bead-loop: ").and_then(|r| r.split_whitespace().next()).filter(|u| u.starts_with("http")).map(str::to_string);
     let noted = events.iter().filter_map(|e| if let Event::SendBack { round, .. } = e { Some(*round) } else { None }).max().unwrap_or(0);
-    let failures = if repo.rs.join("failures").join(&id).exists() { repo.failures_of(&id) } else { noted };
+    let failures = if repo.failures_path(&id).exists() { repo.failures_of(&id) } else { noted };
     let worker = repo.stage_for(failures).map(|st| st.model).unwrap_or_else(|| "exhausted".into());
     let metered = repo.resolve(&worker).provider.cost == "metered";
     let closed_unmerged = if notes.contains("was closed without merging") { parse_iso(s("updated_at")).or(closed) } else { None };

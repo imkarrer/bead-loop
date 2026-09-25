@@ -142,6 +142,9 @@ pub fn write_file(p: &Path, s: &str) {
 
 pub fn append_file(p: &Path, s: &str) {
     use std::fs::OpenOptions;
+    if let Some(d) = p.parent() {
+        let _ = std::fs::create_dir_all(d);
+    }
     if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(p) {
         let _ = f.write_all(s.as_bytes());
     }

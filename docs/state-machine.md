@@ -35,7 +35,11 @@ tried again five minutes later (`BEAD_LOOP_HOLD_BACKOFF`).
 The failure count chooses the **stage** ([config.md](config.md#stages)). Both queues are
 ordered **fewest failures first**, then bd's own order: everything is tried once before
 anything is tried twice, and a bead that keeps failing gets out of the way of the ones
-that do not. The next round's worker reads the notes of the earlier ones.
+that do not. The next round's worker reads the notes of the earlier ones (the last three
+records of `beads/ID/rounds.jsonl`), and its reviewer the last one whole, to hold the
+diff to it. The loop also notes every event on the bead, but a prompt carries the bead's
+notes without the loop's own lines: what people wrote — the filer, an answer, a note by
+hand — and the parking question an answer replies to.
 
 Three things put a bead in the **human queue** as *parked* (`in_progress`, no more rounds
 until you act): the stages are exhausted with `on_exhaust = "park"`, the *last* stage says
@@ -59,8 +63,8 @@ The loop keeps no state of its own beyond files; a bead's state is a function of
 
 | where | what |
 | --- | --- |
-| bd | `status` (`open` / `in_progress` / `closed`; `blocked`, `deferred` by hand), the label, blockers (`bd ready` lists only beads with none open), notes |
-| `$RS/failures/ID` | the failure count → the stage (`stage_for`); `.rounds.jsonl` the history, one record per send-back |
+| bd | `status` (`open` / `in_progress` / `closed`; `blocked`, `deferred` by hand), the label, blockers (`bd ready` lists only beads with none open), notes (people's, and the loop's own event log: a `bead-loop` line each, its body indented under it — what stats and the page read) |
+| `$RS/beads/ID/failures` | the failure count → the stage (`stage_for`); `rounds.jsonl` beside it the history, one record per send-back, the only history a prompt carries |
 | `$RS/review/ID` | in the review queue (holds the worker's last line) |
 | `$RS/inflight/ID` | in the merge queue (holds the PR url); beside it `.ID.adopted`, `.ID.red`, `.ID.nocheck`, `.ID.fixing`, `.ID.conflict` |
 | `$RS/proposed/ID` | ready to publish: the PR's title, body, head, base, pr_repo and compare url, as JSON; counts toward `max_inflight` |
@@ -68,7 +72,7 @@ The loop keeps no state of its own beyond files; a bead's state is a function of
 | `$RS/parked/ID` | the loop's record of a parking: the reason, the stage, the question, the brief |
 | `$RS/lane.NAME` | the bead the lane NAME is on (`dev`, `review`, `claude`; or the `[[lanes]]` names) |
 | `$RS/rejoin/ID` | `SID worker`, `SID reviewer` or `SID research`: a session still running on the server after a restart, for the lane to wait on instead of starting one |
-| `$RS/research/ID` | the brief the research round wrote (`research_model`), carried by every worker prompt under `<research>`; `.prev` the one a send-back set aside under `research = "every"`. Absent with research on: the next pick is a research round, unless the worker's lane has nothing else, in which case it goes without |
+| `$RS/beads/ID/brief` | the brief the research round wrote (`research_model`), carried by every worker prompt under `<research>`; `brief.prev` the one a send-back set aside under `research = "every"`. Absent with research on: the next pick is a research round, unless the worker's lane has nothing else, in which case it goes without |
 | `$RS/wt/ID`, branch `bead/ID` (local, origin) | the work |
 | GitHub | the PR: none / OPEN (checks pending, green, red, none; mergeable CONFLICTING; mergeState CLEAN, BEHIND, BLOCKED) / MERGED / CLOSED |
 | the servers | an opencode session running or orphaned; devbox, acbox, claude, gh reachable or not |
@@ -105,7 +109,7 @@ stateDiagram-v2
 | --- | --- | --- |
 | **waiting** | bd `open` + label, a blocker not `closed` | bd, when the blocker closes (a merge, or a human) |
 | **ready** | bd `open` + label, no blocker open; none of the markers below | a lane with the worker role whose models match the stage's worker |
-| **research** | `lane.NAME = ID` with `research` on its second line, bd `in_progress` | that lane: back to ready with `research/ID` written, or human |
+| **research** | `lane.NAME = ID` with `research` on its second line, bd `in_progress` | that lane: back to ready with `beads/ID/brief` written, or human |
 | **dev** | `lane.NAME = ID`, bd `in_progress`, `wt/ID` | that lane: to review, or back to ready |
 | **review** | `review/ID`, `wt/ID`, bd `in_progress` | a lane with the reviewer role whose models match the stage's reviewer |
 | **reviewing** | `review/ID` + `lane.NAME = ID` | that lane: to merge, or back to ready |
@@ -151,7 +155,7 @@ Every row is a case in `test/run.sh`.
 
 | Outcome | Bead | Branch / PR |
 | --- | --- | --- |
-| Researcher writes a brief | `research/ID`, a note with its length; dev queue, **no failure** | a worktree the round made is removed again |
+| Researcher writes a brief | `beads/ID/brief`, a note with its length; dev queue, **no failure** | a worktree the round made is removed again |
 | Researcher `BLOCKED:` | parked before any edit, the researcher's line as the question, **no failure** | removed |
 | No brief yet, and the worker's lane has nothing else to take | the worker round runs without one (the GPU never waits on the CPU) | as any worker round |
 | Worker `BLOCKED:` | note with the worker's line, +1 failure; dev queue — parked if this was the last stage, with the brief's question | removed (after the brief) |

@@ -88,12 +88,22 @@ fn ids_of(s: &str) -> Vec<String> {
 }
 
 /// `bd update ID --append-notes TEXT` (the note on the bead); failure is logged, not fatal.
+/// The text goes on as `note_entry` shapes it.
 pub fn bd_note(repo: &Repo, id: &str, text: &str) {
-    if let Ok(o) = bd(repo, &["update", id, "--append-notes", text]) {
+    if let Ok(o) = bd(repo, &["update", id, "--append-notes", &note_entry(text)]) {
         if !o.status.success() {
             log(&format!("{}: {id}: bd could not take the note: {}", repo.slug, stderr_str(&o).trim()));
         }
     }
+}
+
+/// A note as one entry of the bead's notes: its first line as it is, the rest indented two
+/// spaces under it, so the entry ends where the next unindented line begins — what
+/// round.rs `people_notes` reads the loop's entries apart from people's by.
+pub fn note_entry(text: &str) -> String {
+    let mut lines = text.trim_end().lines();
+    let first = lines.next().unwrap_or("").to_string();
+    std::iter::once(first).chain(lines.map(|l| format!("  {l}"))).collect::<Vec<_>>().join("\n")
 }
 
 pub fn bd_status(repo: &Repo, id: &str, status: &str) {
@@ -241,5 +251,14 @@ mod tests {
         assert_eq!(parse_array("null"), serde_json::json!([]));
         assert_eq!(parse_array("not json"), serde_json::json!([]));
         assert_eq!(ids_of("[{\"id\":\"t-1\"},{\"title\":\"no id\"},{\"id\":\"t-2\"}]"), vec!["t-1", "t-2"]);
+    }
+    #[test]
+    fn a_note_is_one_entry_its_body_indented() {
+        assert_eq!(note_entry("bead-loop x: one line"), "bead-loop x: one line");
+        assert_eq!(
+            note_entry("bead-loop round 1 (m) x: review rejected:\nREJECT: a\n\nFor the worker:\n- b\n"),
+            "bead-loop round 1 (m) x: review rejected:\n  REJECT: a\n  \n  For the worker:\n  - b",
+            "the body under the first line, the blank line too, so the entry stays one"
+        );
     }
 }

@@ -1,7 +1,10 @@
 //! The state on disk, `~/.local/state/bead-loop/<repo>/`, and what it means:
 //!
-//! - `failures/ID` the count of send-backs (→ the stage), `failures/ID.notes` the history
-//! - `failures/ID.rounds.jsonl` the history, one record per send-back
+//! - `beads/ID/`   what the loop keeps of one bead between rounds: `failures` the count of
+//!   send-backs (→ the stage), `rounds.jsonl` the history, one record per send-back
+//!   (`notes` the older one-line history), `brief` the brief a research round wrote, for
+//!   the worker prompt, and `brief.prev` the one a send-back cleared under
+//!   `research = "every"`, for the next research round to refine
 //! - `review/ID`   the review queue: the worker's last line, for the reviewer's prompt
 //! - `inflight/ID` the merge queue: the PR url; `.ID.red|nocheck|adopted|fixing|conflict`
 //!   beside it
@@ -9,8 +12,6 @@
 //!   file says what. Shown in the human queue, polled, cleared when the reason goes.
 //! - `parked/ID`   the record of a parking: reason, stage, question, brief
 //! - `rejoin/ID`   `SID worker|reviewer`, a session to wait on after a restart
-//! - `research/ID` the brief a research round wrote, for the worker prompt; `.prev` the one
-//!   a send-back cleared under `research = "every"`, for the next research round to refine
 //! - `target/ID`   the `[targets.NAME]` name `for_bead` resolved at claim, when it is not
 //!   the default target — read back by `Repo::for_id` so the review lane, the merge
 //!   watcher, `open`, `answer` and `escalate` act on the same checkout; goes with
@@ -91,14 +92,22 @@ pub fn quorum(verdicts: &[Option<bool>], rule: &Approvals) -> Quorum {
 
 impl Repo {
     // ---- files ------------------------------------------------------------------
+    /// `beads/ID/`: what the loop keeps of one bead from round to round — the count, the
+    /// history, the brief. Queue membership is not here: that is the queue directories.
+    pub fn bead_dir(&self, id: &str) -> PathBuf {
+        self.rs.join("beads").join(id)
+    }
+    pub fn failures_path(&self, id: &str) -> PathBuf {
+        self.bead_dir(id).join("failures")
+    }
     pub fn failures_of(&self, id: &str) -> u64 {
-        read_to_string(&self.rs.join("failures").join(id)).and_then(|s| s.trim().parse().ok()).unwrap_or(0)
+        read_to_string(&self.failures_path(id)).and_then(|s| s.trim().parse().ok()).unwrap_or(0)
     }
     pub fn set_failures(&self, id: &str, n: u64) {
-        write_file(&self.rs.join("failures").join(id), &format!("{n}\n"));
+        write_file(&self.failures_path(id), &format!("{n}\n"));
     }
     pub fn notes_path(&self, id: &str) -> PathBuf {
-        self.rs.join("failures").join(format!("{id}.notes"))
+        self.bead_dir(id).join("notes")
     }
     pub fn review_path(&self, id: &str) -> PathBuf {
         self.rs.join("review").join(id)
@@ -145,16 +154,16 @@ impl Repo {
     pub fn clear_target(&self, id: &str) {
         let _ = std::fs::remove_file(self.target_path(id));
     }
-    /// `$RS/research/ID`: the brief the research round wrote, carried by the bead's
+    /// `$RS/beads/ID/brief`: the brief the research round wrote, carried by the bead's
     /// worker prompt. Absent (with `research_model` set) is what makes the next pick a
     /// research round.
     pub fn research_path(&self, id: &str) -> PathBuf {
-        self.rs.join("research").join(id)
+        self.bead_dir(id).join("brief")
     }
-    /// `$RS/research/ID.prev`: the brief a send-back cleared under `research = "every"`,
+    /// `$RS/beads/ID/brief.prev`: the brief a send-back cleared under `research = "every"`,
     /// handed to the next research round to refine.
     pub fn research_prev_path(&self, id: &str) -> PathBuf {
-        self.rs.join("research").join(format!("{id}.prev"))
+        self.bead_dir(id).join("brief.prev")
     }
     pub fn research_of(&self, id: &str) -> Option<String> {
         read_to_string(&self.research_path(id))
@@ -485,8 +494,8 @@ mod tests {
         assert_eq!(repo.failures_of("t-1"), 0, "no file: none");
         repo.set_failures("t-1", 2);
         assert_eq!(repo.failures_of("t-1"), 2);
-        assert_eq!(std::fs::read_to_string(repo.rs.join("failures/t-1")).unwrap(), "2\n");
-        std::fs::write(repo.rs.join("failures/t-2"), "junk").unwrap();
+        assert_eq!(std::fs::read_to_string(repo.rs.join("beads/t-1/failures")).unwrap(), "2\n");
+        write_file(&repo.failures_path("t-2"), "junk");
         assert_eq!(repo.failures_of("t-2"), 0, "an unreadable count is none");
         let _ = std::fs::remove_dir_all(&d);
     }

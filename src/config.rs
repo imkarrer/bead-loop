@@ -662,25 +662,67 @@ impl Repo {
     }
 }
 
-/// The repo's state directories, and the older `attempts/` carried into `failures/`:
-/// same counter, file by file (a status run may have made failures/ first), then the
-/// old directory goes.
+/// The repo's state directories, and the older layouts carried into `beads/ID/` file by
+/// file, then gone: `failures/` and `research/`, then the oldest, `attempts/`.
+///
+/// A file still under `failures/` or `research/` was written by an older loop than the
+/// one running this — in a deploy, the old process until its restart, while a status
+/// run of the new binary has already moved the rest — so it is the newer copy: it
+/// replaces the one under `beads/ID/`, and a history is appended to rather than replaced.
+/// `attempts/` is older than everything: its counter goes only where there is none.
 pub fn make_state_dirs(rs: &Path) {
-    for d in ["inflight", "logs", "wt", "review", "failures", "held", "parked", "rejoin", "target", "proposed", "research"] {
+    for d in ["inflight", "logs", "wt", "review", "beads", "held", "parked", "rejoin", "target", "proposed"] {
         let _ = std::fs::create_dir_all(rs.join(d));
     }
-    let old = rs.join("attempts");
-    if old.is_dir() {
-        if let Ok(rd) = std::fs::read_dir(&old) {
-            for e in rd.flatten() {
-                let dst = rs.join("failures").join(e.file_name());
-                if !dst.exists() {
-                    let _ = std::fs::rename(e.path(), dst);
-                }
-            }
-        }
-        let _ = std::fs::remove_dir_all(&old);
+    carry_into_beads(rs, "failures", failures_file, true);
+    carry_into_beads(rs, "research", research_file, true);
+    carry_into_beads(rs, "attempts", failures_file, false);
+    let _ = std::fs::remove_dir_all(rs.join("attempts"));
+}
+
+/// `failures/NAME` (and `attempts/NAME`): the bead and its file under `beads/ID/`.
+fn failures_file(name: &str) -> (&str, &'static str) {
+    if let Some(id) = name.strip_suffix(".rounds.jsonl") {
+        (id, "rounds.jsonl")
+    } else if let Some(id) = name.strip_suffix(".notes") {
+        (id, "notes")
+    } else {
+        (name, "failures")
     }
+}
+
+/// `research/NAME`: the bead and its file under `beads/ID/`.
+fn research_file(name: &str) -> (&str, &'static str) {
+    match name.strip_suffix(".prev") {
+        Some(id) => (id, "brief.prev"),
+        None => (name, "brief"),
+    }
+}
+
+/// Each file of `rs/DIR` to `rs/beads/ID/FILE`, `place` naming both; `newer`, it replaces
+/// the one there (a history appended to it), else it goes only where there is none.
+/// The emptied directory goes.
+fn carry_into_beads(rs: &Path, dir: &str, place: fn(&str) -> (&str, &'static str), newer: bool) {
+    let old = rs.join(dir);
+    let Ok(rd) = std::fs::read_dir(&old) else { return };
+    for e in rd.flatten() {
+        let Ok(name) = e.file_name().into_string() else { continue };
+        let (id, file) = place(&name);
+        let dst = rs.join("beads").join(id).join(file);
+        if dst.exists() && !newer {
+            continue;
+        }
+        let _ = std::fs::create_dir_all(rs.join("beads").join(id));
+        if dst.exists() && file == "rounds.jsonl" {
+            if let Ok(s) = std::fs::read_to_string(e.path()) {
+                crate::util::append_file(&dst, &s);
+                let _ = std::fs::remove_file(e.path());
+            }
+        } else {
+            let _ = std::fs::rename(e.path(), &dst);
+        }
+    }
+    let _ = std::fs::remove_dir(&old);
 }
 
 /// A `Repo` over a scratch directory, for the unit tests: no git, no bd, no config
@@ -1199,25 +1241,47 @@ mod tests {
     }
 
     #[test]
-    fn attempts_carry_over_into_failures() {
-        // The older attempts/ counter moves into failures/ file by file, even when
-        // failures/ already exists, and the old directory goes.
+    fn older_layouts_carry_over_into_beads() {
+        // failures/, research/ and the oldest attempts/ move into beads/ID/ file by file,
+        // the ids with dots in them too, and the old directories go.
         let d = scratch("attempts");
         let rs = d.join("rs");
-        std::fs::create_dir_all(rs.join("attempts")).unwrap();
-        std::fs::create_dir_all(rs.join("failures")).unwrap();
+        for sub in ["attempts", "failures", "research", "beads/t-5"] {
+            std::fs::create_dir_all(rs.join(sub)).unwrap();
+        }
+        let read = |p: &str| std::fs::read_to_string(rs.join(p)).unwrap();
         std::fs::write(rs.join("attempts/t-1"), "2\n").unwrap();
         std::fs::write(rs.join("attempts/t-1.notes"), "round 1 (x): y\n").unwrap();
         std::fs::write(rs.join("attempts/t-9"), "1\n").unwrap();
         std::fs::write(rs.join("failures/t-9"), "5\n").unwrap();
+        std::fs::write(rs.join("failures/bl-3x2.2"), "3\n").unwrap();
+        std::fs::write(rs.join("failures/bl-3x2.2.rounds.jsonl"), "{\"round\":1}\n").unwrap();
+        std::fs::write(rs.join("research/bl-3x2.2"), "Files:\n- a\n").unwrap();
+        std::fs::write(rs.join("research/bl-3x2.2.prev"), "old\n").unwrap();
+        // what a new binary's status run moved, then the old process (until its restart)
+        // wrote again: the old path is the newer copy
+        std::fs::write(rs.join("beads/t-5/failures"), "1\n").unwrap();
+        std::fs::write(rs.join("beads/t-5/rounds.jsonl"), "{\"round\":1}\n").unwrap();
+        std::fs::write(rs.join("failures/t-5"), "2\n").unwrap();
+        std::fs::write(rs.join("failures/t-5.rounds.jsonl"), "{\"round\":2}\n").unwrap();
         make_state_dirs(&rs);
-        assert_eq!(std::fs::read_to_string(rs.join("failures/t-1")).unwrap(), "2\n");
-        assert_eq!(std::fs::read_to_string(rs.join("failures/t-1.notes")).unwrap(), "round 1 (x): y\n", "the history too");
-        assert_eq!(std::fs::read_to_string(rs.join("failures/t-9")).unwrap(), "5\n", "an existing counter is not overwritten");
-        assert!(!rs.join("attempts").exists(), "attempts/ gone");
-        for sub in ["inflight", "logs", "wt", "review", "failures", "held", "rejoin"] {
+        assert_eq!(read("beads/t-1/failures"), "2\n");
+        assert_eq!(read("beads/t-1/notes"), "round 1 (x): y\n", "the history too");
+        assert_eq!(read("beads/t-9/failures"), "5\n", "attempts/ never replaces a counter");
+        assert_eq!(read("beads/bl-3x2.2/failures"), "3\n");
+        assert_eq!(read("beads/bl-3x2.2/rounds.jsonl"), "{\"round\":1}\n");
+        assert_eq!(read("beads/bl-3x2.2/brief"), "Files:\n- a\n");
+        assert_eq!(read("beads/bl-3x2.2/brief.prev"), "old\n");
+        assert_eq!(read("beads/t-5/failures"), "2\n", "the newer counter wins");
+        assert_eq!(read("beads/t-5/rounds.jsonl"), "{\"round\":1}\n{\"round\":2}\n", "the newer round appended");
+        for gone in ["attempts", "failures", "research"] {
+            assert!(!rs.join(gone).exists(), "{gone}/ gone");
+        }
+        for sub in ["inflight", "logs", "wt", "review", "beads", "held", "rejoin"] {
             assert!(rs.join(sub).is_dir(), "{sub}/ made");
         }
+        make_state_dirs(&rs);
+        assert_eq!(read("beads/t-5/rounds.jsonl"), "{\"round\":1}\n{\"round\":2}\n", "a second run moves nothing");
         let _ = std::fs::remove_dir_all(&d);
     }
 

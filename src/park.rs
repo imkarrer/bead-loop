@@ -1,11 +1,14 @@
 //! Parking: the moment the loop gives a bead to its owner. Two things make that moment
 //! answerable — a **question** and the **history** behind it.
 //!
-//! - `failures/ID.rounds.jsonl` is the history: one record per send-back — the round,
-//!   its worker and stage, when, the whole note (the BLOCKED line, the rejection with its
-//!   work order, the gate's output) and the round's log files. The worker's prompt reads
-//!   the last three of it as before; the page reads all of it. (Beads from before have
-//!   `failures/ID.notes`, one line per round; it is read when there is no record.)
+//! - `beads/ID/rounds.jsonl` is the history: one record per send-back — the round, its
+//!   worker and stage, when, the whole note (the BLOCKED line, the rejection with its work
+//!   order, the gate's output) and the round's log files. It is the only history a prompt
+//!   carries (the bead's own notes reach it without the loop's lines, round.rs
+//!   `people_notes`): the worker's and the researcher's read the last three of it, the
+//!   reviewer's and the pre-checker's the last one whole; the page reads all of it. (Beads
+//!   from before have `beads/ID/notes`, one line per round; it is read when there is no
+//!   record.)
 //! - `parked/ID` is the question: why the bead was parked (BLOCKED at the last stage,
 //!   stages exhausted, its PR closed), the stage it stopped on, and what its owner has to
 //!   decide — written by the **brief**: one call to `brief_model` (the last stage's
@@ -58,7 +61,7 @@ impl Reason {
 
 impl Repo {
     pub fn rounds_path(&self, id: &str) -> PathBuf {
-        self.rs.join("failures").join(format!("{id}.rounds.jsonl"))
+        self.bead_dir(id).join("rounds.jsonl")
     }
     pub fn parked_path(&self, id: &str) -> PathBuf {
         self.rs.join("parked").join(id)
@@ -139,6 +142,19 @@ pub fn history(repo: &Repo, id: &str, n: usize) -> String {
     let all = rounds(repo, id);
     let start = all.len().saturating_sub(n);
     all[start..].iter().map(round_line).collect::<Vec<_>>().join("\n")
+}
+
+/// The last round whole — `round N (model):` and its note with the newlines kept, the
+/// record's own cut only — what the reviewer and the pre-checker check this round
+/// against. Empty on a bead no round was sent back from.
+pub fn last_round(repo: &Repo, id: &str) -> String {
+    let all = rounds(repo, id);
+    let Some(r) = all.last() else { return String::new() };
+    let note = r.get("note").and_then(|n| n.as_str()).unwrap_or("").trim_end();
+    match (r.get("round").and_then(|n| n.as_u64()), r.get("model").and_then(|m| m.as_str())) {
+        (Some(n), Some(m)) => format!("round {n} ({m}):\n{note}"),
+        _ => note.to_string(),
+    }
 }
 
 // ---- the question -----------------------------------------------------------------
@@ -403,6 +419,15 @@ mod tests {
             "one line per round, the last three"
         );
         assert_eq!(history(&repo, "t-9", 3), "", "no rounds: nothing");
+        assert_eq!(last_round(&repo, "t-1"), "round 4 (slow):\nworker made no commit", "the last one");
+        record_round(&repo, "t-2", 1, "fast", "review (rev) rejected:\nREJECT: x\n\nFor the worker:\n- What to do: y\n", None);
+        assert_eq!(
+            last_round(&repo, "t-2"),
+            "round 1 (fast):\nreview (rev) rejected:\nREJECT: x\n\nFor the worker:\n- What to do: y",
+            "whole, newlines kept: the work order as the reviewer wrote it"
+        );
+        assert_eq!(last_round(&repo, "t-9"), "", "no rounds: nothing");
+        assert!(repo.rounds_path("t-1").starts_with(repo.bead_dir("t-1")), "the history lives with the bead");
         let _ = std::fs::remove_dir_all(&d);
     }
     #[test]

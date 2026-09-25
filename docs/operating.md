@@ -172,8 +172,9 @@ changed.
 `.<id>.red|nocheck|adopted|fixing|conflict` markers beside it), `logs/<id>.<stamp>.*`
 (setup, worker, gate, reviewer, brief output per round), `wt/<id>` (the worktree while a
 bead is on a lane or waiting for review), `review/<id>` (the review queue: the worker's
-last words), `failures/<id>` (the count; `.rounds.jsonl` the history, one record per
-send-back with the whole note and the round's log files), `parked/<id>` (the loop's
+last words), `beads/<id>/` (what the loop keeps of one bead between rounds: `failures`
+the count, `rounds.jsonl` the history, one record per send-back with the whole note and
+the round's log files, `brief` the research round's brief), `parked/<id>` (the loop's
 record of a parking: the reason, the stage it stopped on, the question, the brief),
 `held/<id>` (the reason a bead waits), `rejoin/<id>` (a session to wait on after a
 restart), `lane.<name>` (the bead that lane is on). Under the state dir itself: `wake`
