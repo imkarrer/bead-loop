@@ -1409,14 +1409,10 @@ mod tests {
             if *key == "repos" || *key == "lanes" {
                 continue;
             }
-            
+
             // For stages and lanes, check for [[stages]] and [[lanes]] patterns
-            let key_pattern = if *key == "stages" || *key == "lanes" {
-                format!("| `[[{key}]]` |")
-            } else {
-                format!("| `{key}` |")
-            };
-            
+            let key_pattern = if *key == "stages" || *key == "lanes" { format!("| `[[{key}]]` |") } else { format!("| `{key}` |") };
+
             if !docs.contains(&key_pattern) {
                 panic!("Key `{key}` missing from docs/config.md table (pattern: {key_pattern})");
             }
@@ -1428,7 +1424,7 @@ mod tests {
             if *key == "repos" || *key == "lanes" {
                 continue;
             }
-            
+
             // Check if the key appears in the example config file (allowing for comments)
             let mut found = false;
             for line in example.lines() {
@@ -1437,13 +1433,13 @@ mod tests {
                     found = true;
                     break;
                 }
-                // Also check for [[stages]] and [[lanes]] patterns  
+                // Also check for [[stages]] and [[lanes]] patterns
                 if line.starts_with(&format!("[[{key}]]")) {
                     found = true;
                     break;
                 }
             }
-            
+
             if !found {
                 panic!("Key `{key}` missing from bead-loop.example.toml (expected at start of line)");
             }

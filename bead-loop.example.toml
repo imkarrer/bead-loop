@@ -27,7 +27,7 @@ on_exhaust = "repeat"                  # repeat: cycle the stages until it lands
                                        # since its last edit/write/patch call (0 disables)
 # precheck_model = "acbox/reviewer"    # runs after the gate, before the review queue; SEND BACK is a failure, anything else is not
 # model = "devbox/coder"               # the worker when no [[stages]] table applies
-# attach = "http://127.0.0.1:4096"     # an opencode server url; sessions run there and stream in its web UI
+# attach = "http://localhost:8080"     # an opencode server url; sessions run there and stream in its web UI
 
 # Escalation, in order. Every send-back to the dev queue — the gate failing twice, a
 # REJECT from review, CI red — is one failure; a stage takes the bead for the next
