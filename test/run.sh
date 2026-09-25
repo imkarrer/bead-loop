@@ -1278,6 +1278,34 @@ case_target_review_lane() {
   assert_match "$(cat "$TEST_CTRL/prompt.2")" "<diff>" "reviewer got a diff"
   assert_match "$(cat "$TEST_CTRL/prompt.2")" "work.txt" "the diff shows the worker's change: computed against upstream/main, which has it"
 }
+case_ask_holds_the_pr() {
+  # open_pr = "ask": the branch is pushed, but the PR is the human's to open — the round
+  # writes proposed/ID instead of calling gh pr create (docs/design-targets.md).
+  setup_target
+  echo 'open_pr = "ask"' >>"$REPO/.bead-loop.toml"   # inside [targets.t], the last table
+  sup work "$REPO" t-3
+  assert_eq "$(calls)" "bead-worker bead-reviewer" "worker then reviewer, same as any other round"
+  git -C "$T/target.git" show-ref -q refs/heads/bead/t-3 && ok || bad "the branch is on the push remote"
+  ! grep -q 'pr create' "$TEST_CTRL/gh.log" && ok || bad "no PR opened"
+  assert_file "$BEAD_LOOP_STATE/repo/proposed/t-3" "proposed/t-3 written"
+  assert_eq "$(jq -r .title "$BEAD_LOOP_STATE/repo/proposed/t-3")" Theirs "holds the title"
+  assert_match "$(jq -r .body "$BEAD_LOOP_STATE/repo/proposed/t-3")" 'Bead `t-3`' "holds the body"
+  assert_match "$(bead3 .comments | tr '\n' ' ')" "ready to publish" "the bead carries the ready-to-publish comment"
+  assert_eq "$(bead3 .status)" in_progress "in_progress: the dev queue (status=open only) does not take it again"
+}
+case_ask_counts_inflight() {
+  # A proposed/ID holds a slot in max_inflight, same as a PR waiting on CI: the dev lane
+  # will not take a second work:t bead while the first sits waiting to be published.
+  setup_target
+  echo 'open_pr = "ask"' >>"$REPO/.bead-loop.toml"   # inside [targets.t], the last table
+  echo 'max_inflight = 1' >>"$REPO/.bead-loop.toml"
+  sup work "$REPO" t-3
+  assert_file "$BEAD_LOOP_STATE/repo/proposed/t-3" "t-3 proposed"
+  jq '. + [{id:"t-5", title:"Second", description:"Edit work.txt", acceptance_criteria:"work.txt exists", status:"open", priority:2, issue_type:"task", labels:["delegate:local","work:t"]}]' "$BD_STATE/issues.json" >"$BD_STATE/i.tmp" && mv "$BD_STATE/i.tmp" "$BD_STATE/issues.json"
+  : >"$TEST_CTRL/calls"
+  sup work "$REPO" t-5
+  assert_eq "$(calls)" "" "max_inflight=1 with t-3 proposed: the second work:t bead is not taken"
+}
 
 # ---- the state machine's exits (docs/state-machine.md) ------------------------------------
 case_git_refusing_the_worktree_holds() {

@@ -19,6 +19,7 @@ use crate::state::{dev_queue, review_queue, StageHit};
 use crate::util::{
     cut_bytes, date_iminutes, die, first_line, log, read_to_string, stamp, stderr_str, stdout_str, tail_bytes, tail_lines, write_file,
 };
+use serde_json::json;
 use serde_json::Value;
 use std::path::Path;
 use std::sync::Mutex;
@@ -1068,6 +1069,22 @@ pub fn review_one(repo: &Repo, opts: &Opts, id: Option<&str>, lane: Option<&Lane
         return Pass::Worked;
     }
 
+    // Function to store PR details in the proposed directory for manual publishing
+    fn store_proposed_pr(repo: &Repo, id: &str, title: &str, body: &str, head: &str, compare_url: &str) -> Result<(), String> {
+        let proposed_path = repo.rs.join("proposed").join(id);
+        let pr_details = json!({
+            "title": title,
+            "body": body,
+            "head": head,
+            "base": repo.base,
+            "pr_repo": repo.pr_repo,
+            "compare_url": compare_url
+        });
+
+        write_file(&proposed_path, &pr_details.to_string());
+        Ok(())
+    }
+
     match git(&wt, &["push", "-q", "-u", &repo.push_remote, &branch, "--force-with-lease"]) {
         Ok(o) if o.status.success() => {}
         Ok(o) => {
@@ -1095,6 +1112,21 @@ pub fn review_one(repo: &Repo, opts: &Opts, id: Option<&str>, lane: Option<&Lane
     list_args.extend(repo_args.iter().copied());
     list_args.extend(["--head", &head, "--json", "url", "--jq", ".[0].url // empty"]);
     let existing = crate::shell::gh_stdout_any(repo, &list_args).trim().to_string();
+    if existing.is_empty() && repo.open_pr.as_deref() == Some("ask") {
+        let compare_url = format!("https://github.com/{}/compare/{}...{head}?expand=1", repo.pr_repo, repo.base);
+        if let Err(e) = store_proposed_pr(repo, &id, &title, &body, &head, &compare_url) {
+            write_file(&repo.review_path(&id), &format!("{final_text}\n"));
+            hold(repo, &id, None, &format!("failed to store proposed PR: {e}"));
+            return Pass::Worked;
+        }
+        bd_comment(repo, &id, &format!("bead-loop: ready to publish: {compare_url}"));
+        log(&format!("{}: {id}: pushed to {head}, PR details stored in proposed/", repo.slug));
+        repo.release(&id);
+        repo.lane_clear(lane_name);
+        signals::clear_current(lane_name);
+        repo.wake();
+        return Pass::Worked;
+    }
     let url = if !existing.is_empty() {
         log(&format!("{}: {id}: pushed a new round to {existing}", repo.slug));
         bd_comment(repo, &id, &format!("bead-loop: pushed round {} to {existing}", n + 1));

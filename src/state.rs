@@ -59,6 +59,18 @@ impl Repo {
     pub fn held_path(&self, id: &str) -> PathBuf {
         self.rs.join("held").join(id)
     }
+    /// `proposed/ID`: `open_pr = "ask"`'s PR details, waiting on a human to publish.
+    pub fn proposed_path(&self, id: &str) -> PathBuf {
+        self.rs.join("proposed").join(id)
+    }
+    /// Every bead holding a `proposed/ID`, sorted, like `inflight_ids`.
+    pub fn proposed_ids(&self) -> Vec<String> {
+        let mut v: Vec<String> = std::fs::read_dir(self.rs.join("proposed"))
+            .map(|rd| rd.flatten().filter_map(|e| e.file_name().into_string().ok()).filter(|n| !n.starts_with('.')).collect())
+            .unwrap_or_default();
+        v.sort();
+        v
+    }
     pub fn target_path(&self, id: &str) -> PathBuf {
         self.rs.join("target").join(id)
     }
@@ -182,13 +194,15 @@ impl Repo {
     /// `max_inflight` gates (round.rs, lanes.rs) want `inflight_count_for` instead.
     #[allow(dead_code)]
     pub fn inflight_count(&self) -> u64 {
-        self.inflight_ids().iter().filter(|id| !self.mark(id, "adopted").exists()).count() as u64
+        self.inflight_ids().iter().filter(|id| !self.mark(id, "adopted").exists()).count() as u64 + self.proposed_ids().len() as u64
     }
     /// `inflight_count`, restricted to the beads claimed on `target` (`target_of`; `""`
     /// is the default target) — so a PR waiting on a foreign repo's CI does not count
-    /// against this repo's own `max_inflight` (docs/design-targets.md).
+    /// against this repo's own `max_inflight` (docs/design-targets.md). A `proposed/ID`
+    /// (`open_pr = "ask"`, waiting on a human to publish) holds a slot the same way.
     pub fn inflight_count_for(&self, target: &str) -> u64 {
         self.inflight_ids().iter().filter(|id| !self.mark(id, "adopted").exists() && self.target_of(id) == target).count() as u64
+            + self.proposed_ids().iter().filter(|id| self.target_of(id) == target).count() as u64
     }
 
     // ---- stages -----------------------------------------------------------------
