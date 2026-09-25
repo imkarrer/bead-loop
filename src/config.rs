@@ -18,6 +18,17 @@ pub struct Stage {
     pub reviewer: String,
     pub failures: u64,
     pub timeout: Option<u64>,
+    pub seats: Vec<Seat>,
+    pub approvals: Approvals,
+}
+
+/// One reviewer seat: a model, and the agent identity it reviews as (`""` is
+/// bead-reviewer).
+#[cfg_attr(not(test), allow(dead_code))]
+#[derive(Clone, Debug, PartialEq)]
+pub struct Seat {
+    pub model: String,
+    pub agent: String,
 }
 
 /// How many of a stage's seats must approve: every one, any one, or at least N.
@@ -151,6 +162,37 @@ fn scalar(v: &Value) -> String {
     }
 }
 
+/// `reviewer`: a string (one seat; `""` is none), an array of model strings, or an array
+/// mixing those with `{ model = "...", agent = "..." }` tables.
+fn parse_seats(v: &Value) -> Vec<Seat> {
+    match v {
+        Value::String(s) if s.is_empty() => Vec::new(),
+        Value::String(s) => vec![Seat { model: s.clone(), agent: String::new() }],
+        Value::Array(a) => a
+            .iter()
+            .map(|item| match item {
+                Value::Object(_) => Seat {
+                    model: item.get("model").map(scalar).unwrap_or_default(),
+                    agent: item.get("agent").map(scalar).unwrap_or_default(),
+                },
+                _ => Seat { model: scalar(item), agent: String::new() },
+            })
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// `approvals`: "all" | "any" | a number (or a numeric string); absent is All.
+fn parse_approvals(v: Option<&Value>) -> Approvals {
+    match v {
+        Some(Value::String(s)) if s == "any" => Approvals::Any,
+        Some(Value::String(s)) if s == "all" => Approvals::All,
+        Some(Value::String(s)) => s.trim().parse().map(Approvals::Count).unwrap_or_default(),
+        Some(Value::Number(n)) => n.as_u64().map(Approvals::Count).unwrap_or_default(),
+        _ => Approvals::All,
+    }
+}
+
 impl Layers {
     pub fn load(global_path: &Path, repo_path: Option<&Path>) -> Layers {
         Layers { global: toml_json(global_path), repo: repo_path.map(toml_json).unwrap_or(Value::Object(Default::default())) }
@@ -201,16 +243,21 @@ impl Layers {
         table
             .iter()
             .enumerate()
-            .map(|(i, s)| Stage {
-                name: s.get("name").map(scalar).unwrap_or_else(|| (i + 1).to_string()),
-                worker: s.get("worker").map(scalar).unwrap_or_default(),
-                reviewer: s.get("reviewer").map(scalar).unwrap_or_default(),
-                failures: s
-                    .get("failures")
-                    .or_else(|| s.get("attempts"))
-                    .and_then(|v| v.as_u64().or_else(|| v.as_str().and_then(|t| t.parse().ok())))
-                    .unwrap_or(1),
-                timeout: s.get("timeout").and_then(|v| v.as_u64()),
+            .map(|(i, s)| {
+                let seats = s.get("reviewer").map(parse_seats).unwrap_or_default();
+                Stage {
+                    name: s.get("name").map(scalar).unwrap_or_else(|| (i + 1).to_string()),
+                    worker: s.get("worker").map(scalar).unwrap_or_default(),
+                    reviewer: seats.first().map(|seat| seat.model.clone()).unwrap_or_default(),
+                    failures: s
+                        .get("failures")
+                        .or_else(|| s.get("attempts"))
+                        .and_then(|v| v.as_u64().or_else(|| v.as_str().and_then(|t| t.parse().ok())))
+                        .unwrap_or(1),
+                    timeout: s.get("timeout").and_then(|v| v.as_u64()),
+                    approvals: parse_approvals(s.get("approvals")),
+                    seats,
+                }
             })
             .collect()
     }
@@ -413,7 +460,15 @@ impl Repo {
         let review_model = cfg.str("review_model", "");
         let mut stages = cfg.stages();
         if stages.is_empty() {
-            stages.push(Stage { name: "1".to_string(), worker: model.clone(), reviewer: review_model.clone(), failures: 3, timeout: None });
+            stages.push(Stage {
+                name: "1".to_string(),
+                worker: model.clone(),
+                reviewer: review_model.clone(),
+                failures: 3,
+                timeout: None,
+                seats: if review_model.is_empty() { Vec::new() } else { vec![Seat { model: review_model.clone(), agent: String::new() }] },
+                approvals: Approvals::All,
+            });
         }
         for s in &stages {
             if s.worker.starts_with("claude/") || s.reviewer.starts_with("claude/") {
@@ -638,12 +693,17 @@ pub fn test_repo(root: &Path, stages: &[&str]) -> Repo {
         .enumerate()
         .map(|(i, s)| {
             let mut it = s.split(':');
+            let worker = it.next().unwrap_or("").to_string();
+            let reviewer = it.next().unwrap_or("").to_string();
+            let failures = it.next().and_then(|n| n.parse().ok()).unwrap_or(1);
             Stage {
                 name: (i + 1).to_string(),
-                worker: it.next().unwrap_or("").to_string(),
-                reviewer: it.next().unwrap_or("").to_string(),
-                failures: it.next().and_then(|n| n.parse().ok()).unwrap_or(1),
+                seats: if reviewer.is_empty() { Vec::new() } else { vec![Seat { model: reviewer.clone(), agent: String::new() }] },
+                worker,
+                reviewer,
+                failures,
                 timeout: None,
+                approvals: Approvals::All,
             }
         })
         .collect();
@@ -1080,6 +1140,28 @@ mod tests {
     fn a_stage_without_a_count_takes_one() {
         let l = layers("[[stages]]\nworker = \"a\"", "");
         assert_eq!(l.stages()[0].failures, 1);
+    }
+
+    #[test]
+    fn a_reviewer_string_is_one_seat() {
+        let l = layers("[[stages]]\nworker = \"w\"\nreviewer = \"a/b\"", "");
+        let s = &l.stages()[0];
+        assert_eq!(s.seats, vec![Seat { model: "a/b".into(), agent: "".into() }]);
+        assert_eq!(s.reviewer, "a/b");
+    }
+
+    #[test]
+    fn seats_parse_models_and_tables() {
+        let l = layers("[[stages]]\nworker = \"w\"\nreviewer = [\"a/x\", { model = \"b/y\", agent = \"bead-second\" }]\napprovals = 1", "");
+        let s = &l.stages()[0];
+        assert_eq!(
+            s.seats,
+            vec![Seat { model: "a/x".into(), agent: "".into() }, Seat { model: "b/y".into(), agent: "bead-second".into() }]
+        );
+        assert_eq!(s.reviewer, "a/x");
+        assert_eq!(s.approvals, Approvals::Count(1));
+        let l = layers("[[stages]]\nworker = \"w\"\nreviewer = \"a\"\napprovals = \"any\"", "");
+        assert_eq!(l.stages()[0].approvals, Approvals::Any);
     }
 
     #[test]

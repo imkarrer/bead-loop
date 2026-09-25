@@ -21,7 +21,7 @@
 //!
 //! and, under the state dir itself: `lock.<name>`, `pause.<name>` (not only dev/review),
 //! `restart` (dropped by the deploy before it restarts the service; signals.rs reads it).
-use crate::config::{Approvals, Repo, Stage};
+use crate::config::{Approvals, Repo, Seat, Stage};
 use crate::util::{mtime, read_to_string, touch, write_file};
 use std::path::PathBuf;
 
@@ -35,6 +35,10 @@ pub struct StageHit {
     pub last: bool,
     /// 1-based, what status --json shows
     pub index: usize,
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub seats: Vec<Seat>,
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub approvals: Approvals,
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
@@ -327,6 +331,8 @@ pub fn stage_for(stages: &[Stage], on_exhaust: &str, worker_timeout: u64, n: u64
                 timeout: s.timeout.unwrap_or(worker_timeout),
                 last: i + 1 == stages.len(),
                 index: i + 1,
+                seats: s.seats.clone(),
+                approvals: s.approvals.clone(),
             });
         }
     }
@@ -382,7 +388,15 @@ pub fn order_dev(repo: &Repo, ready: Vec<String>) -> Vec<String> {
 mod tests {
     use super::*;
     fn st(w: &str, r: &str, f: u64) -> Stage {
-        Stage { name: String::new(), worker: w.into(), reviewer: r.into(), failures: f, timeout: None }
+        Stage {
+            name: String::new(),
+            worker: w.into(),
+            seats: if r.is_empty() { Vec::new() } else { vec![Seat { model: r.into(), agent: String::new() }] },
+            reviewer: r.into(),
+            failures: f,
+            timeout: None,
+            approvals: Approvals::All,
+        }
     }
     #[test]
     fn research_file_is_read_and_cleared() {
