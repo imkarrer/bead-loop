@@ -758,6 +758,19 @@ pub fn why_not(repo: &Repo, model: &str) -> String {
     }
 }
 
+/// The probe for one named provider, and what it checked: `(ok, why)`. `None` when the
+/// provider has nothing to probe (no `probe` url, and not Claude Code).
+pub fn probe_of(repo: &Repo, provider: &str) -> Option<(bool, String)> {
+    let p = repo.providers.iter().find(|p| p.name == provider).cloned().unwrap_or_else(|| crate::config::Provider::implicit(provider));
+    if p.harness == "claude-code" {
+        Some((claude_ok(), "signed out".into()))
+    } else if !p.probe.is_empty() {
+        Some((probe_ok(&p.probe), p.probe.clone()))
+    } else {
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
