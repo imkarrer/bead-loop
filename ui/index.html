@@ -166,10 +166,11 @@
   /* the box you write in: full width, grows with the text, keeps what you typed across
      every push (the page is patched, not rebuilt) and across a reload (a draft per box) */
   .reply { display: grid; gap: 8px; margin-top: 8px; max-width: 900px; animation: rise var(--quick); }
-  .reply textarea { width: 100%; font: 13px/1.45 var(--sans); padding: 7px 9px; border: 1px solid var(--line-strong); border-radius: 6px;
+  .reply textarea, .reply input[type=text] { width: 100%; font: 13px/1.45 var(--sans); padding: 7px 9px; border: 1px solid var(--line-strong); border-radius: 6px;
                     background: var(--base03); color: var(--bright); resize: vertical; field-sizing: content; min-height: calc(2 * 1.45em + 16px); max-height: 40vh;
                     transition: border-color var(--quick); }
-  .reply textarea:focus { border-color: var(--accent); outline: none; }
+  .reply input[type=text] { min-height: 0; }
+  .reply textarea:focus, .reply input[type=text]:focus { border-color: var(--accent); outline: none; }
   .reply textarea::placeholder { color: var(--base01); }
   .reply .actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
   .reply .actions .alt { margin-left: auto; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; color: var(--muted); font-size: 12.5px; }
@@ -782,6 +783,22 @@ function repo(r, now, ticking) {
         ${box(`dec-${d.id}`, 'Your decision — goes on the bead as its close reason; whoever asked reads it there')}
         <div class="actions">${lever('Answer &amp; close', 'decide', { repo: r.repo, id: d.id }, { cls: 'primary', send: `dec-${d.id}` })}<span class="hint">Ctrl+Enter sends</span></div>
       </div></td></tr>`).join('')}</table>`;
+  // Ready to publish: a proposal an `open_pr = "ask"` round left in proposed/ID, waiting
+  // on you. The compare_url to look the diff over, the title and body it would open the
+  // PR with — yours to edit, the input and textarea prefilled and (like every box here)
+  // patched in place, never rebuilt, so what you typed survives every push. Open PR posts
+  // {repo, id, title, body} straight from those two fields to /api/publish.
+  const publish = (r.ready_to_publish || []).length === 0 ? '' : `<table>${r.ready_to_publish.map((b) => {
+    const p = b.proposal || {}, t = `pub-title-${b.id}`, body = `pub-body-${b.id}`;
+    return `<tr data-key="${esc(b.id)}"><td class="id">${esc(b.id)}</td><td class="title"><span class="t" title="${esc(b.title || '')}">${esc(b.title || '')}</span></td>
+        <td class="fit"><span class="chip warn">ready to publish</span></td><td class="act"></td></tr>
+    <tr class="sub" data-key="${esc(b.id)}:why"><td></td><td colspan="3" class="why">${p.compare_url ? `<div><a href="${esc(p.compare_url)}" target="_blank" rel="noopener">${esc(p.compare_url)} ↗</a></div>` : ''}
+      <div class="reply">
+        <input id="${esc(t)}" type="text" value="${esc(p.title || '')}">
+        <textarea id="${esc(body)}" rows="4">${esc(p.body || '')}</textarea>
+        <div class="actions"><button class="primary" onclick="act('publish',{repo:${js(r.repo)},id:${js(b.id)},title:document.getElementById(${js(t)}).value,body:document.getElementById(${js(body)}).value})">Open PR</button></div>
+      </div></td></tr>`;
+  }).join('')}</table>`;
   // The priority repo: the lanes look at it first on every pass; otherwise round-robin.
   const prio = r.priority
     ? lever('★ priority', 'priority', { repo: 'none' }, { cls: 'prio on', title: 'the lanes look at this repo first on every pass; click to go back to round-robin' })
@@ -790,7 +807,7 @@ function repo(r, now, ticking) {
     <h2>${esc(r.slug)} ${prio} <span class="cfg">${esc(r.label)} · ${esc(r.base)} · merge ${esc(r.merge)} · stages: ${stages} · then ${esc(r.on_exhaust)}${r.attach ? '' : ' · <b>no attach</b>: sessions not visible'}</span></h2>
     <div class="queues">${queueCol('dev', r.queues.dev, r, now)}${queueCol('review', r.queues.review, r, now)}${queueCol('merge', r.queues.merge, r, now)}${claudeCol(r)}</div>
     ${strays(r, now)}
-    <h3 class="human">Needs you<span class="n">${(r.decisions || []).length + r.parked.length + (r.held || []).length}</span><span class="note">a decision asked of you · a bead parked on a question, exhausted, or its PR closed · a bead held in its queue by something outside the loop</span></h3>${decisions}${human}${held}
+    <h3 class="human">Needs you<span class="n">${(r.decisions || []).length + r.parked.length + (r.held || []).length + (r.ready_to_publish || []).length}</span><span class="note">a decision asked of you · a bead parked on a question, exhausted, or its PR closed · a bead held in its queue by something outside the loop · a proposal ready to publish</span></h3>${decisions}${human}${held}${publish}
   </section>`;
 }
 
