@@ -156,7 +156,7 @@
   .queues { display: grid; grid-template-columns: 1.3fr 1fr 1fr 1fr; gap: 0 28px; margin-top: 6px; }
   @media (max-width: 1000px) { .queues { grid-template-columns: 1fr; } }
   .q h3 { margin-bottom: 2px; } .q .sub { color: var(--muted); font-size: 12px; margin-bottom: 8px; }
-  .q.dev h3 { color: var(--worker); } .q.review h3 { color: var(--reviewer); } .q.merge h3 { color: var(--green); } .q.claude h3 { color: var(--blue); }
+  .q.dev h3 { color: var(--worker); } .q.review h3 { color: var(--reviewer); } .q.merge h3 { color: var(--green); } .q.metered h3 { color: var(--blue); }
   .q td.pos { color: var(--muted); font: 500 12px var(--mono); width: 22px; padding-right: 6px; text-align: right; }
   .q tr:first-child td.pos, .q tr:first-child td.id { color: var(--bright); }
   .q tr.sub td { border-top: 0; padding-top: 0; font-size: 12.5px; }
@@ -404,7 +404,7 @@ function claude(s) {
   b.hidden = false;
   if (b.dataset.url !== s.login.url) {
     b.dataset.url = s.login.url;
-    b.innerHTML = `<b>Sign Claude in</b> — the claude/* stage fails until this is done.
+    b.innerHTML = `<b>Sign Claude in</b> — the Claude Code stage fails until this is done.
       <ol><li><a href="${esc(s.login.url)}" target="_blank" rel="noopener">Open the sign-in page ↗</a> and sign in with the account that has the subscription.</li>
       <li>Paste the code it shows: <input id="code" class="mono" size="44" placeholder="code" autocomplete="off"> <button class="primary" onclick="act('claude_code',{code:document.getElementById('code').value})">Finish sign-in</button> <button class="danger" onclick="act('claude_cancel')">Cancel</button></li></ol>`;
   }
@@ -507,7 +507,7 @@ const noteRow = (b, span, r) => !openNote.has(b.id) ? '' : `<tr class="sub" data
 const fold = (k, label, body) => `<div class="fold"><button class="hist${openFold.has(k) ? ' on' : ''}" onclick="toggleFold(${js(k)})">${openFold.has(k) ? '▾' : '▸'} ${esc(label)}</button>${openFold.has(k) ? body : ''}</div>`;
 const providerOf = (m) => (m || '').replace(/^aider:/, '').split('/')[0];
 const probeFails = (r, m) => !!(m && r && r.probes && r.probes[providerOf(m)] && r.probes[providerOf(m)].ok === false);
-// stageChip and claudeBtn below both gate on probeFails, not on the retired claude_ok flag.
+// stageChip and claudeBtn below both gate on probeFails, not on a per-provider signed-in flag.
 const stageChip = (st, r) => !st ? '<span class="chip bad" title="stages exhausted">exhausted</span>'
   : `<span class="chip ${st.index > 1 ? 'warn' : ''}" title="stage ${st.index}: worker ${esc(st.worker)}${st.reviewer ? ', reviewer ' + esc(st.reviewer) : ''}">${st.index > 1 ? `S${st.index} · ` : ''}${esc(st.worker)}</span>`
     + ((probeFails(r, st.worker) || probeFails(r, st.reviewer)) ? ' <span class="chip bad" title="a claude/* round cannot run while Claude is signed out; the lane takes other beads meanwhile">waits for Claude sign-in</span>' : '');
@@ -551,22 +551,23 @@ function lanePanel(r, name, now, ticking, showRepo) {
   // the lane's pause flag.
   const lane = laneOf(name);
   const l = r.lanes[name];
-  // The lane's role: the default pair split by role; a configured lane ([[lanes]]) or
-  // the claude lane takes both roles for its models.
-  const role = lane === 'dev' ? 'worker' : lane === 'review' ? 'reviewer' : lane === 'claude' ? 'worker or reviewer · Anthropic, waits on no local model' : 'worker or reviewer · its models’ rounds';
+  // The lane's role: the default pair split by role; any other lane takes both roles
+  // for its models.
+  const role = lane === 'dev' ? 'worker' : lane === 'review' ? 'reviewer' : 'worker or reviewer · its models’ rounds';
   const paused = r.paused && r.paused[name];
   const pauseBtn = lever(paused ? 'Resume lane' : 'Pause lane', 'lane', { name: lane, paused: !paused });
   if (!l) {
     const capped = r.max_inflight != null && r.queues.merge.filter((p) => !p.adopted).length >= r.max_inflight;
     const heldOnly = (q) => q.length > 0 && q.every((b) => b.held);
-    const onClaude = (b) => b.stage && /^claude\//.test(b.stage.worker + ' ' + (b.stage.reviewer || ''));
-    const claudeQueued = r.queues.dev.filter(onClaude).length + r.queues.review.filter(onClaude).length;
+    const otherLanes = (r.lane_names || []).map(laneOf).filter((n) => n !== 'dev' && n !== 'review');
+    const onOtherLane = (b) => b.stage && [b.stage.worker, b.stage.reviewer].some((m) => m && otherLanes.includes(providerOf(m)));
+    const onLane = (b) => b.stage && [b.stage.worker, b.stage.reviewer].some((m) => m && providerOf(m) === lane);
+    const laneQueued = r.queues.dev.filter(onLane).length + r.queues.review.filter(onLane).length;
+    const laneProbe = r.probes && r.probes[lane];
     const why = lane === 'dev'
-      ? (r.queues.dev.length === 0 ? 'dev queue empty' : capped ? `waiting on CI (${r.max_inflight} in flight is the limit)` : heldOnly(r.queues.dev) ? 'every bead in the queue is held — see Needs you' : r.queues.dev.every(onClaude) ? 'only Claude-stage beads queued — the Claude lane has them' : ticking ? 'starting…' : 'the loop is down')
-      : lane === 'claude'
-      ? (claudeQueued === 0 ? 'nothing on the Claude stage' : r.claude_ok === false ? `${claudeQueued} waiting — Claude is signed out (Sign in at the top)` : ticking ? 'starting…' : 'the loop is down')
+      ? (r.queues.dev.length === 0 ? 'dev queue empty' : capped ? `waiting on CI (${r.max_inflight} in flight is the limit)` : heldOnly(r.queues.dev) ? 'every bead in the queue is held — see Needs you' : r.queues.dev.every(onOtherLane) ? 'only later-stage beads queued — another lane has them' : ticking ? 'starting…' : 'the loop is down')
       : lane !== 'review'
-      ? (ticking ? 'nothing queued for its models' : 'the loop is down')
+      ? (laneQueued === 0 ? 'nothing queued for its models' : laneProbe && laneProbe.ok === false ? `${laneQueued} waiting — ${lane}: probe fails (${laneProbe.why})` : ticking ? 'starting…' : 'the loop is down')
       : (r.queues.review.length === 0 ? 'review queue empty' : heldOnly(r.queues.review) ? 'every bead in the queue is held — see Needs you' : ticking ? 'starting…' : 'the loop is down');
     return `<div class="lane idle ${name}${paused ? ' paused' : ''}" data-key="${esc(name)}"><div class="label">${name} lane ${paused ? '<span class="chip warn">paused</span>' : ''}<span class="act">${pauseBtn}</span></div><div class="what">${paused ? 'paused — starts no new round until resumed' : `idle — ${esc(why)}`}</div></div>`;
   }
@@ -599,15 +600,15 @@ function lanesPane(s) {
     const lane = laneOf(name);
     const paused = s.repos.some((r) => r.paused && r.paused[name]);
     const pauseBtn = lever(paused ? 'Resume lane' : 'Pause lane', 'lane', { name: lane, paused: !paused });
-    const onClaude = (b) => b.stage && /^claude\//.test(b.stage.worker + ' ' + (b.stage.reviewer || ''));
+    const onLane = (b) => b.stage && [b.stage.worker, b.stage.reviewer].some((m) => m && providerOf(m) === lane);
     const count = (pick) => s.repos.reduce((n, r) => n + r.queues.dev.filter(pick).length + r.queues.review.filter(pick).length, 0);
     const queued = lane === 'dev' ? s.repos.reduce((n, r) => n + r.queues.dev.length, 0)
       : lane === 'review' ? s.repos.reduce((n, r) => n + r.queues.review.length, 0)
-      : lane === 'claude' ? count(onClaude) : count(() => true);
-    const signedOut = lane === 'claude' && s.repos.some((r) => r.claude_ok === false);
+      : count(onLane);
+    const probeFail = s.repos.map((r) => r.probes && r.probes[lane]).find((p) => p && p.ok === false);
     const why = paused ? 'paused — starts no new round until resumed'
       : queued === 0 ? 'idle — nothing queued for it in any repo'
-      : signedOut ? `idle — ${queued} waiting; Claude is signed out (Sign in at the top)`
+      : probeFail ? `idle — ${queued} waiting — ${lane}: probe fails (${probeFail.why})`
       : ticking ? `idle — ${queued} queued across repos, starting…` : `idle — ${queued} queued; the loop is down`;
     return `<div class="lane idle ${esc(name)}${paused ? ' paused' : ''}" data-key="${esc(name)}"><div class="label">${esc(name)} lane ${paused ? '<span class="chip warn">paused</span>' : ''}<span class="act">${pauseBtn}</span></div><div class="what">${why}</div></div>`;
   });
@@ -641,20 +642,21 @@ function queueCol(name, rows, r, now) {
   else body = `<table>${rows.map((b, i) => qRow(i, b, (name === 'dev' ? ` ${stageChip(b.stage, r)}${researchChip(b)}` : ` <span class="muted">${ago(b.since, now)}</span>${stageChip(b.stage, r).includes('waits for') ? ' <span class="chip bad">waits for Claude sign-in</span>' : ''}`) + `</td><td class="act">${claudeBtn(r, b)}`, r)).join('')}</table>`;
   return `<div class="q ${name}"><h3>${name} queue<span class="n">${rows.length}</span></h3><div class="sub">${sub}</div>${body}</div>`;
 }
-// The Claude column: every bead whose current stage names a claude/* worker or reviewer,
-// and where it sits. A view over the lanes and the dev and review queues, not a queue of
-// its own — the last stage is Claude's, and this is where its beads are found. What is
-// being worked comes first, then the queues in the order the lanes take them.
-const onClaude = (b) => !!(b.stage && /^claude\//.test(b.stage.worker + ' ' + (b.stage.reviewer || '')));
-function claudeCol(r) {
+// The metered column: every bead whose current stage names a worker or reviewer on a
+// metered (paid) provider, and where it sits. A view over the lanes and the dev and
+// review queues, not a queue of its own — the last stage is metered, and this is where
+// its beads are found. What is being worked comes first, then the queues in the order
+// the lanes take them.
+const onMetered = (r, b) => !!(b.stage && [b.stage.worker, b.stage.reviewer].some((m) => m && r.providers && r.providers[providerOf(m)] && r.providers[providerOf(m)].cost === 'metered'));
+function meteredCol(r) {
   const rows = [
     ...Object.entries(r.lanes).map(([k, l]) => ({ b: l, where: `on the ${k} lane` })),
     ...r.queues.dev.map((b, i) => ({ b, where: `dev queue #${i + 1}` })),
     ...r.queues.review.map((b, i) => ({ b, where: `review queue #${i + 1}` })),
-  ].filter((x) => onClaude(x.b));
-  const body = rows.length === 0 ? '<div class="empty">no bead on the Claude stage</div>'
+  ].filter((x) => onMetered(r, x.b));
+  const body = rows.length === 0 ? '<div class="empty">no bead on a metered stage</div>'
     : `<table>${rows.map(({ b, where }) => `<tr data-key="${esc(b.id)}"><td class="id">${esc(b.id)}</td><td class="title"><span class="t" title="${esc(b.title || '')}">${esc(b.title || '')}</span></td><td class="fit">${failChip(b.failures)}${histToggle(b)} <span class="muted">${esc(where)}</span></td></tr>${histRow(b, 2, r)}`).join('')}</table>`;
-  return `<div class="q claude"><h3>Claude<span class="n">${rows.length}</span></h3><div class="sub">the last stage; runs on the dev and review lanes</div>${body}</div>`;
+  return `<div class="q metered"><h3>metered<span class="n">${rows.length}</span></h3><div class="sub">beads on a paid model, and where they sit</div>${body}</div>`;
 }
 
 // The scoreboard: how well the workflow works, over a window you pick — 24h, 7d, 30d or
@@ -686,7 +688,7 @@ function scoreboard(s) {
   const tiles = [
     tile('Landed', `${landed}<small>${days >= 2 ? `${(landed / days).toFixed(1)} a day` : ''}</small>`, `merged and closed by the loop${w.closed_by_hand ? ` · ${w.closed_by_hand} finished by hand` : ''}${w.closed_unmerged ? ` · ${w.closed_unmerged} PR closed unmerged` : ''}`),
     tile('First try', pct(w.landed_first_try, landed), `${w.landed_first_try} of ${landed} landed with no send-back`),
-    tile('Without Claude', pct(w.landed_local, landed), `${w.landed_local} of ${landed} landed by a local model`),
+    tile('Without metered models', pct(w.landed_local, landed), `${w.landed_local} of ${landed} landed by a local model`),
     tile('Rounds per landing', `${w.rounds_per_landed.median == null ? '–' : w.rounds_per_landed.median.toFixed(1)}<small>median</small>`, `${w.rounds_per_landed.mean == null ? '–' : w.rounds_per_landed.mean.toFixed(1)} mean · ${sb.total} send-back${sb.total === 1 ? '' : 's'} in all`),
     tile('Time to land', `${dur(w.time_to_land_s.median)}<small>median</small>`, `first claim → merge · ${dur(w.time_to_land_s.mean)} mean`),
     tile('Needed you', `${needed}`, `${w.escalations} escalated · ${w.answers} answered · ${w.holds} held`, needed ? 'warn' : ''),
@@ -808,7 +810,7 @@ function repo(r, now, ticking) {
     : lever('☆ make priority', 'priority', { repo: r.repo }, { cls: 'prio', title: 'the lanes look at this repo first on every pass' });
   return `<section class="card" id="repo-${esc(r.slug)}">
     <h2>${esc(r.slug)} ${prio} <span class="cfg">${esc(r.label)} · ${esc(r.base)} · merge ${esc(r.merge)} · stages: ${stages} · then ${esc(r.on_exhaust)}${r.attach ? '' : ' · <b>no attach</b>: sessions not visible'}</span></h2>
-    <div class="queues">${queueCol('dev', r.queues.dev, r, now)}${queueCol('review', r.queues.review, r, now)}${queueCol('merge', r.queues.merge, r, now)}${claudeCol(r)}</div>
+    <div class="queues">${queueCol('dev', r.queues.dev, r, now)}${queueCol('review', r.queues.review, r, now)}${queueCol('merge', r.queues.merge, r, now)}${meteredCol(r)}</div>
     ${strays(r, now)}
     <h3 class="human">Needs you<span class="n">${(r.decisions || []).length + r.parked.length + (r.held || []).length + (r.ready_to_publish || []).length}</span><span class="note">a decision asked of you · a bead parked on a question, exhausted, or its PR closed · a bead held in its queue by something outside the loop · a proposal ready to publish</span></h3>${decisions}${human}${held}${publish}
   </section>`;

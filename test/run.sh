@@ -885,7 +885,7 @@ case_status_json_and_ui() {
   # The scoreboard card: the tiles from the 7d window (the default), the landing listed.
   score=$(printf '%s' "$html" | tr '\n' ' ' | grep -o '<section class="card" id="score">.*' | cut -c1-6000)
   assert_match "$score" '<div class="label">Landed</div><div class="value ">1<small>' "the Landed tile"
-  assert_match "$score" '<div class="label">Without Claude</div><div class="value ">100%</div>' "the Without Claude tile"
+  assert_match "$score" '<div class="label">Without metered models</div><div class="value ">100%</div>' "the Without metered models tile"
   assert_match "$score" '<span class="k">gate</span><span class="bar" title="1 of 1">' "where rounds go back"
   assert_match "$score" 'class="id">t-9</td>.*<span class="chip ok">landed</span>.*<td class="num">2</td><td class="mono muted fit">stub/worker</td><td class="num">1h00</td>' "the finished row: rounds, who landed it, how long"
   assert_match "$score" '<button class="cur" onclick="setWin(.7d.)">7d</button>' "the window picker, 7d by default"
@@ -895,8 +895,8 @@ case_status_json_and_ui() {
   assert_match "$dec" 'class="id">t-8</td><td class="title"><b>Which ntfy topic?</b>' "the decision, first"
   assert_match "$dec" 'Which topic, and for which events?' "with its text in full"
   assert_match "$dec" "<button class=\"primary\" onclick=\"send('decide',{repo:" "and the Answer &amp; close lever, the box's text with it"
-  assert_match "$(printf '%s' "$html" | grep -o '<div class="q claude">.*' | cut -c1-400)" '<h3>Claude<span class="n">1</span></h3>' "the Claude column, with its count"
-  assert_match "$(printf '%s' "$html" | grep -o '<div class="q claude">.*' | cut -c1-600)" 'class="id">t-7</td>.*dev queue #3' "t-7 in it, with where it sits"
+  assert_match "$(printf '%s' "$html" | grep -o '<div class="q metered">.*' | cut -c1-400)" '<h3>metered<span class="n">1</span></h3>' "the metered column, with its count"
+  assert_match "$(printf '%s' "$html" | grep -o '<div class="q metered">.*' | cut -c1-600)" 'class="id">t-7</td>.*dev queue #3' "t-7 in it, with where it sits"
   assert_match "$(printf '%s' "$html" | grep -o '<div class="q dev">.*' | cut -c1-3000)" 'title="sent back to dev 2 times">2×</span> <button class="hist" onclick="toggleHist(.t-7.)"[^>]*>▸ 2 rounds</button>' "t-7's round history behind a toggle, closed"
   assert_eq "$(printf '%s' "$html" | grep -c 'pre class="hist"')" 0 "no history listed until opened"
   # The parked bead under Needs you: the question first, the reason, the brief and the
