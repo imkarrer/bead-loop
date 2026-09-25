@@ -162,7 +162,7 @@ Every row is a case in `test/run.sh`.
 | CI red | note with the failing checks, +1 failure; dev queue | kept; the next round's push updates the PR |
 | CI red on an adopted PR | one note, **held** | left open for whoever opened it |
 | CI pending for over two hours | **held**, still polled: is the agent up? | waits |
-| No checks reported | one note, **held**: merge it yourself or set `manual` | waits |
+| No checks reported, five minutes after the PR opened (sooner, its CI has not registered: pending) | one note, **held**: merge it yourself or set `manual` | waits |
 | `gh` cannot read the PR | **held** with gh's words, still polled | waits |
 | PR conflicts with the base | note, **no failure**; dev queue — the next round is a rebase by `conflict_worker`, told to keep both sides | kept; the push updates the PR |
 | Adopted PR conflicts | left alone | whoever opened it rebases |
@@ -233,7 +233,7 @@ The watcher looks at every `inflight/ID` on each pass.
 | merge | green, `auto`, GitHub refuses (branch protection) | merge (held: mergeState and why) | — | — |
 | merge | green, `pipeline`, not merged within 30 min (`PIPELINE_TIMEOUT`) | merge (held) | — | — |
 | merge | green, `manual` | merge (held: yours to merge) | — | — |
-| merge | no checks reported | merge (held; one note) | — | — |
+| merge | no checks reported five minutes on | merge (held; one note) | — | — |
 | merge | green / no checks / pending, `merge = "external"` | **merge (external): awaiting maintainer** — no hold, no note, age shown on the page; exits the same as any merge-queue PR: `MERGED`, `CLOSED` unmerged, red, or conflict | — | — |
 | merge | the `pipeline` label cannot be added | merge (held; one note) | — | — |
 | merge | pending longer than 2 h (`CI_TIMEOUT`) | merge (held: is the agent up?), still polled | — | — |
