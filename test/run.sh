@@ -1187,6 +1187,21 @@ case_claude_signed_out_beads_wait() {
   assert_eq "$(cut -d' ' -f3,4 "$TEST_CTRL/calls" | head -1)" "claude/opus claude" "signed in: t-1's Claude round runs"
 }
 
+case_provider_probe_down_beads_wait() {
+  # A provider whose probe fails: its rounds wait in the queue — no round, no failure,
+  # no hold, one log line; the probe answering lets the next pass run.
+  setup
+  printf '[providers.stub]\nprobe = "http://probe.test/health"\n' >>"$BEAD_LOOP_CONFIG/config.toml"
+  : >"$TEST_CTRL/probe-down"
+  sup --once tick
+  assert_eq "$(calls)" "" "no round while the probe fails"
+  assert_nofile "$BEAD_LOOP_STATE/repo/failures/t-1" "no failure charged"
+  assert_nofile "$BEAD_LOOP_STATE/repo/held/t-1" "not held"
+  assert_match "$(cat "$T/sup.log")" "wait for stub — its probe http://probe.test/health fails" "said so"
+  rm "$TEST_CTRL/probe-down"; sup --once tick
+  assert_match "$(calls)" "bead-worker" "the probe answers: the round runs"
+}
+
 case_conflicting_pr_rebased_by_the_last_stage() {
   # GitHub says our PR conflicts with the base: no failure, back to the dev queue on its
   # branch, and that round's worker is the last stage's (Claude), told to rebase; the push
