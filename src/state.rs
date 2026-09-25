@@ -21,7 +21,7 @@
 //!
 //! and, under the state dir itself: `lock.<name>`, `pause.<name>` (not only dev/review),
 //! `restart` (dropped by the deploy before it restarts the service; signals.rs reads it).
-use crate::config::{Repo, Stage};
+use crate::config::{Approvals, Repo, Stage};
 use crate::util::{mtime, read_to_string, touch, write_file};
 use std::path::PathBuf;
 
@@ -35,6 +35,54 @@ pub struct StageHit {
     pub last: bool,
     /// 1-based, what status --json shows
     pub index: usize,
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+#[derive(Clone, Debug, PartialEq)]
+pub enum Quorum {
+    Approve,
+    Reject,
+    Pending,
+}
+
+/// Applies a stage's seat rule to its seats' verdicts: Some(true) approved, Some(false)
+/// rejected, None not in yet. An empty slice is Approve: no reviewer means straight to PR.
+#[cfg_attr(not(test), allow(dead_code))]
+pub fn quorum(verdicts: &[Option<bool>], rule: &Approvals) -> Quorum {
+    if verdicts.is_empty() {
+        return Quorum::Approve;
+    }
+    match rule {
+        Approvals::All => {
+            if verdicts.contains(&Some(false)) {
+                Quorum::Reject
+            } else if verdicts.iter().all(|v| *v == Some(true)) {
+                Quorum::Approve
+            } else {
+                Quorum::Pending
+            }
+        }
+        Approvals::Any => {
+            if verdicts.contains(&Some(true)) {
+                Quorum::Approve
+            } else if verdicts.iter().all(|v| *v == Some(false)) {
+                Quorum::Reject
+            } else {
+                Quorum::Pending
+            }
+        }
+        Approvals::Count(n) => {
+            let trues = verdicts.iter().filter(|v| **v == Some(true)).count() as u64;
+            let nones = verdicts.iter().filter(|v| v.is_none()).count() as u64;
+            if trues >= *n {
+                Quorum::Approve
+            } else if trues + nones < *n {
+                Quorum::Reject
+            } else {
+                Quorum::Pending
+            }
+        }
+    }
 }
 
 impl Repo {
@@ -340,6 +388,33 @@ mod tests {
         assert_eq!(repo.research_of("t-1"), None, "the brief goes");
         assert!(!repo.research_prev_path("t-1").exists(), "and the earlier one");
         let _ = std::fs::remove_dir_all(&d);
+    }
+    #[test]
+    fn quorum_all_any_and_a_count() {
+        assert_eq!(quorum(&[], &Approvals::All), Quorum::Approve, "no reviewer: straight to PR");
+        assert_eq!(quorum(&[], &Approvals::Any), Quorum::Approve);
+        assert_eq!(quorum(&[], &Approvals::Count(2)), Quorum::Approve);
+
+        assert_eq!(quorum(&[Some(true), Some(true)], &Approvals::All), Quorum::Approve);
+        assert_eq!(quorum(&[Some(true), Some(false)], &Approvals::All), Quorum::Reject);
+        assert_eq!(quorum(&[Some(true), None], &Approvals::All), Quorum::Pending);
+        assert_eq!(quorum(&[Some(true), Some(true), Some(true)], &Approvals::All), Quorum::Approve);
+        assert_eq!(quorum(&[Some(true), Some(true), Some(false)], &Approvals::All), Quorum::Reject);
+        assert_eq!(quorum(&[Some(true), None, None], &Approvals::All), Quorum::Pending);
+
+        assert_eq!(quorum(&[Some(true), Some(false)], &Approvals::Any), Quorum::Approve);
+        assert_eq!(quorum(&[Some(false), Some(false)], &Approvals::Any), Quorum::Reject);
+        assert_eq!(quorum(&[Some(false), None], &Approvals::Any), Quorum::Pending);
+        assert_eq!(quorum(&[None, None, Some(true)], &Approvals::Any), Quorum::Approve);
+        assert_eq!(quorum(&[Some(false), Some(false), Some(false)], &Approvals::Any), Quorum::Reject);
+        assert_eq!(quorum(&[Some(false), None, None], &Approvals::Any), Quorum::Pending);
+
+        assert_eq!(quorum(&[Some(true), Some(true)], &Approvals::Count(2)), Quorum::Approve);
+        assert_eq!(quorum(&[Some(true), Some(false)], &Approvals::Count(2)), Quorum::Reject);
+        assert_eq!(quorum(&[Some(true), None], &Approvals::Count(2)), Quorum::Pending);
+        assert_eq!(quorum(&[Some(true), Some(true), None], &Approvals::Count(2)), Quorum::Approve);
+        assert_eq!(quorum(&[Some(true), Some(false), Some(false)], &Approvals::Count(2)), Quorum::Reject);
+        assert_eq!(quorum(&[Some(true), None, None], &Approvals::Count(2)), Quorum::Pending);
     }
     #[test]
     fn stages_by_failure_count() {
