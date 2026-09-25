@@ -154,6 +154,14 @@ case_done_to_pr() {
   assert_match "$(cat "$TEST_CTRL/gh.log")" "pr create --base main --head bead/t-1" "PR against base"
   ! grep -q -- '--auto' "$TEST_CTRL/gh.log" && ok || bad "never asks GitHub to auto-merge"
 }
+case_plain_pr() {
+  setup true auto stub/reviewer 'pr_style = "plain"'
+  sup work "$REPO"
+  assert_match "$(cat "$TEST_CTRL/gh.log")" "pr create .*--title Do the thing --body" "plain title, no id prefix"
+  ! grep -q "t-1: Do the thing" "$TEST_CTRL/gh.log" && ok || bad "no id-prefixed title"
+  assert_match "$(cat "$TEST_CTRL/gh.log")" "## How to verify" "plain body has the verify section"
+  assert_match "$(cat "$TEST_CTRL/gh.log")" "<!-- bead: t-1 -->" "plain body carries the bead marker"
+}
 case_actor_from_env() {
   setup; BEADS_ACTOR=delegate:acbox sup work "$REPO"
   assert_eq "$(bead .assignee)" delegate:acbox "BEADS_ACTOR in the environment wins over the label"
@@ -1355,7 +1363,7 @@ case_ask_holds_the_pr() {
   ! grep -q 'pr create' "$TEST_CTRL/gh.log" && ok || bad "no PR opened"
   assert_file "$BEAD_LOOP_STATE/repo/proposed/t-3" "proposed/t-3 written"
   assert_eq "$(jq -r .title "$BEAD_LOOP_STATE/repo/proposed/t-3")" Theirs "holds the title"
-  assert_match "$(jq -r .body "$BEAD_LOOP_STATE/repo/proposed/t-3")" 'Bead `t-3`' "holds the body"
+  assert_match "$(jq -r .body "$BEAD_LOOP_STATE/repo/proposed/t-3")" '<!-- bead: t-3 -->' "holds the body (plain style: open_pr ask defaults pr_style)"
   assert_match "$(bead3 .comments | tr '\n' ' ')" "ready to publish" "the bead carries the ready-to-publish comment"
   assert_eq "$(bead3 .status)" in_progress "in_progress: the dev queue (status=open only) does not take it again"
 }
@@ -1369,7 +1377,7 @@ case_publish() {
   sup work "$REPO" t-3
   sup publish "$REPO" t-3 --title 'Better title'
   assert_match "$(cat "$TEST_CTRL/gh.log")" "pr create --repo up/target --base main --head .*bead/t-3 --title Better title --body" "gh pr create with the override title"
-  assert_match "$(cat "$TEST_CTRL/gh.log")" 'Bead `t-3`' "the proposed body, unchanged"
+  assert_match "$(cat "$TEST_CTRL/gh.log")" '<!-- bead: t-3 -->' "the proposed body, unchanged (plain style: open_pr ask defaults pr_style)"
   assert_file "$BEAD_LOOP_STATE/repo/inflight/t-3" "inflight/t-3 written"
   assert_nofile "$BEAD_LOOP_STATE/repo/proposed/t-3" "proposed/t-3 gone"
   jq '.state="MERGED"' "$TEST_CTRL/pr.json" >"$TEST_CTRL/pr.tmp" && mv "$TEST_CTRL/pr.tmp" "$TEST_CTRL/pr.json"

@@ -612,7 +612,13 @@ impl Repo {
         r.adopt = target.adopt.unwrap_or(r.adopt);
         r.max_inflight = target.max_inflight.unwrap_or(r.max_inflight);
         r.open_pr = Some(resolve_open_pr(target.open_pr.as_deref(), &r.pr_repo, gh_login().as_deref()));
-        r.pr_style = target.pr_style.clone().unwrap_or(r.pr_style);
+        r.pr_style = target.pr_style.clone().unwrap_or_else(|| {
+            if r.open_pr.as_deref() == Some("ask") {
+                "plain".to_string()
+            } else {
+                r.pr_style.clone()
+            }
+        });
         Ok(r)
     }
 

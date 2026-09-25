@@ -749,7 +749,6 @@ pub fn pr_body(id: &str, title: &str, ac: &str, worker_line: &str, reviewer_line
 }
 
 /// The PR's title: `plain` style is just the title; any other style keeps the id prefix.
-#[cfg_attr(not(test), allow(dead_code))]
 pub fn pr_title(style: &str, id: &str, title: &str) -> String {
     if style == "plain" {
         title.to_string()
@@ -760,7 +759,6 @@ pub fn pr_title(style: &str, id: &str, title: &str) -> String {
 
 /// A plain PR body: the description, how to verify, the worker's last words, and the bead marker.
 /// No "Opened by bead-loop" line, no reviewer line.
-#[cfg_attr(not(test), allow(dead_code))]
 pub fn pr_body_plain(id: &str, description: &str, ac: &str, worker_line: &str) -> String {
     let worker_line = worker_line.strip_prefix("DONE: ").unwrap_or(worker_line);
     format!("{description}\n\n## How to verify\n{ac}\n\n{worker_line}\n\n<!-- bead: {id} -->\n")
@@ -1526,7 +1524,13 @@ pub fn review_one(repo: &Repo, opts: &Opts, id: Option<&str>, lane: Option<&Lane
     } else {
         format!("Reviewer ({review_model}): {}", cut_bytes(&last_line_starting(&verdict, "APPROVE:").unwrap_or_default(), 500))
     };
-    let body = pr_body(&id, &title, ac, &worker_line, &reviewer_line);
+    let body = if repo.pr_style == "plain" {
+        let desc = json.get(0).and_then(|b| b.get("description")).and_then(|v| v.as_str()).unwrap_or("");
+        pr_body_plain(&id, desc, ac, &worker_line)
+    } else {
+        pr_body(&id, &title, ac, &worker_line, &reviewer_line)
+    };
+    let title_line = pr_title(&repo.pr_style, &id, &title);
     // The head gh's pr create/list --head take: the bare branch on our own repos, else
     // OWNER:BRANCH (config.rs Repo::head_ref) — and --repo pr_repo, when it is known
     // (empty in the test suite's local-path remotes, where the owner cannot be parsed).
@@ -1539,7 +1543,7 @@ pub fn review_one(repo: &Repo, opts: &Opts, id: Option<&str>, lane: Option<&Lane
     let existing = crate::shell::gh_stdout_any(repo, &list_args).trim().to_string();
     if existing.is_empty() && repo.open_pr.as_deref() == Some("ask") {
         let compare_url = format!("https://github.com/{}/compare/{}...{head}?expand=1", repo.pr_repo, repo.base);
-        if let Err(e) = store_proposed_pr(repo, &id, &title, &body, &head, &compare_url) {
+        if let Err(e) = store_proposed_pr(repo, &id, &title_line, &body, &head, &compare_url) {
             write_file(&repo.review_path(&id), &format!("{final_text}\n"));
             hold(repo, &id, None, &format!("failed to store proposed PR: {e}"));
             return Pass::Worked;
@@ -1557,7 +1561,6 @@ pub fn review_one(repo: &Repo, opts: &Opts, id: Option<&str>, lane: Option<&Lane
         bd_comment(repo, &id, &format!("bead-loop: pushed round {} to {existing}", n + 1));
         existing
     } else {
-        let title_line = format!("{id}: {title}");
         match create_pr(repo, &head, &title_line, &body) {
             Ok(url) => {
                 bd_comment(repo, &id, &format!("bead-loop: opened {url}"));
