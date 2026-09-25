@@ -167,6 +167,7 @@ Every row is a case in `test/run.sh`.
 | The same `REJECT:` twice running (first REJECT line equal, whitespace aside) | note with the rejection and "the same REJECT twice: escalated to <worker>", the failure count jumps to the next stage with a different worker (parked as exhausted if there is none); dev queue | kept |
 | Reviewer `APPROVE:` | in_progress, comment with the url; merge queue | pushed; PR opened, or the existing one updated |
 | Reviewer `APPROVE:` under `open_pr = "ask"` | in_progress, comment with the compare url; ready to publish | pushed; no PR until you publish |
+| Push or `gh pr create` refused | **held** in the review queue with gh's words | pushed / not |
 | CI green, `merge = "auto"` | closed with the PR url | squash-merged by the watcher, branch deleted |
 | CI green, `merge = "pipeline"` | closed once the pipeline has merged; **held** if it has not after 30 min | labelled `automerge` at open; the pipeline merges |
 | CI green, `merge = "manual"` | **held**: yours to merge | PR left open for you |
