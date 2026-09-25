@@ -14,6 +14,7 @@ name. Both are read afresh on every round, so an edit takes effect on the next r
 | `base` | origin's HEAD | branch to fork from and PR into |
 | `setup` | none | runs in a fresh worktree before the worker (`npm ci`); not again on a branch sent back. It failing holds the bead, no failure: setup runs on the base, so it cannot be the bead's fault |
 | `gate` | none (CI is the gate) | runs after the worker, before the review queue; one fix round on failure |
+| `precheck_model` | none | runs after the gate, before the review queue; SEND BACK is a failure, anything else is not |
 | `model` | none | the worker when no `[[stages]]` table applies. The name picks the harness: `provider/model` runs in opencode, `claude/<alias>` in Claude Code, `aider:provider/model` in aider on that opencode provider's server ([design.md](design.md#harnesses)) |
 | `review_model` | none (no review) | the reviewer when no `[[stages]]` table applies; none: straight to PR |
 | `[[stages]]` | one stage of `model`/`review_model`, `failures = 3` | `worker`, `reviewer`, `failures` (how many send-backs this stage absorbs before the next takes over; `attempts` still reads), `timeout` (`worker_timeout`), in order |
