@@ -1,7 +1,9 @@
 //! `systemctl stop` signals the whole cgroup: the model client dies with us, the
 //! server-side session would not. One thread owns TERM and INT (blocked everywhere else,
-//! taken with sigwait): it aborts the session under every worktree a lane is on, clears
-//! the lane markers, forwards the signal to the children still running (a plain `kill`
+//! taken with sigwait): it aborts the session under every worktree a lane is on (a plain
+//! stop; a restart leaves it for the next process to rejoin), clears the lane markers on
+//! a plain stop (a restart keeps them, for the next process's cutoff), forwards the
+//! signal to the children still running (a plain `kill`
 //! of the supervisor alone reaches them too), and exits 143 — the bash's `on_signal`.
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -103,7 +105,9 @@ fn on_signal() -> ! {
     // A restart (the deploy: `$STATE_DIR/restart` dropped just before it) keeps the
     // sessions: the server outlives this process, and the next one rejoins them
     // (lanes.rs recover). Any other stop — a hand stop, gpu-mode — aborts them, so the
-    // model server is freed.
+    // model server is freed. It also keeps the lane markers, so the next process's
+    // recover can compute its cutoff; a plain stop clears them, since it aborted the
+    // sessions they would have named.
     let restart = std::fs::remove_file(crate::config::state_dir().join("restart")).is_ok();
     if restart && lanes_on_rounds > 0 {
         crate::util::log(&format!("restart: {lanes_on_rounds} session(s) left running on the server for the next process to rejoin"));
@@ -112,7 +116,7 @@ fn on_signal() -> ! {
         if let (Some(wt), false) = (wt, restart) {
             crate::harness::abort_sessions_on(&attach, &slug, &wt);
         }
-        if let Some(f) = lane_file {
+        if let (Some(f), false) = (lane_file, restart) {
             let _ = std::fs::remove_file(f);
         }
     }

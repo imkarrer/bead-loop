@@ -438,10 +438,10 @@ pub fn recover(ctx: &Ctx) {
                 // session instead of starting one — rather than abort it and start over.
                 if in_review || is_inprog {
                     let kind = if in_review { "reviewer" } else { "worker" };
-                    // The session's title says what round it is (the stop deleted the lane
-                    // markers): a research round rejoined as a worker's read the researcher's
-                    // transcript as the worker's. One titled as no round of this bead's is
-                    // not rejoined; the abort below takes it.
+                    // The session's title says what round it is (a plain stop deletes the
+                    // lane markers, a restart keeps them): a research round rejoined as a
+                    // worker's read the researcher's transcript as the worker's. One titled
+                    // as no round of this bead's is not rejoined; the abort below takes it.
                     let running =
                         crate::harness::running_session(&repo, &dir).and_then(|sid| match crate::harness::session_title(&repo, &sid) {
                             None => Some((sid, kind)),
@@ -456,10 +456,17 @@ pub fn recover(ctx: &Ctx) {
                         continue;
                     }
                     // Not busy — but did it finish in the gap between the stop and this
-                    // start, its result never read? Rejoin it anyway: rejoin_session finds
-                    // it not busy and reads its messages at once.
-                    let cutoff = lane_mtimes.get(&id).copied().unwrap_or(0);
-                    if let Some(sid) = crate::harness::finished_session(&repo, &id, &dir, kind, cutoff) {
+                    // start, its result never read? Only when a lane marker named this bead
+                    // at the stop: no marker means a plain stop aborted the session (or no
+                    // lane was on it), so there is nothing here for this process to read.
+                    // Rejoin it anyway: rejoin_session finds it not busy and reads its
+                    // messages at once.
+                    let round = repo.failures_of(&id) + 1;
+                    let finished = lane_mtimes
+                        .get(&id)
+                        .copied()
+                        .and_then(|cutoff| crate::harness::finished_session(&repo, &id, &dir, kind, round, cutoff));
+                    if let Some(sid) = finished {
                         repo.rejoin_set(&id, &sid, kind);
                         if !in_review {
                             crate::shell::bd_status(&repo, &id, "open");
