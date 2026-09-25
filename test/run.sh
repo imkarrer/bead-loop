@@ -1203,6 +1203,18 @@ case_target() {
   assert_nofile "$BEAD_LOOP_STATE/repo/inflight/t-3" "inflight cleared"
   assert_nofile "$BEAD_LOOP_STATE/repo/target/t-3" "target/t-3 removed with inflight/t-3"
 }
+case_target_external_merge_mode() {
+  # The repo merges on green (auto); its target t is merged by the maintainer (external).
+  # The merge row carries the PR's own mode, so the page (prChips reads p.merge_mode, not
+  # the repo's merge) shows t-3 as awaiting the maintainer, and the loop does not merge it.
+  setup_target
+  echo 'merge = "external"' >>"$REPO/.bead-loop.toml"   # inside [targets.t], the last table
+  sup work "$REPO" t-3; set_checks '[{"context":"ci","state":"SUCCESS"}]'; sup reconcile "$REPO"
+  assert_eq "$(jq -r .state "$TEST_CTRL/pr.json")" OPEN "green on an external target: not merged"
+  j=$(sup --json status "$REPO")
+  assert_eq "$(jq -r .merge <<<"$j")" auto "the repo's own merge"
+  assert_eq "$(jq -r '.queues.merge[0].merge_mode' <<<"$j")" external "the PR's merge mode is its target's"
+}
 case_target_unknown() {
   # work:NAME naming no [targets.NAME] (or two work: labels) is a config mistake, not the
   # bead's: held with the reason, no failure, and no round — no worktree at all.
