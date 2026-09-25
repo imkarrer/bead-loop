@@ -720,6 +720,14 @@ pub fn conflict_model(repo: &Repo) -> Option<String> {
     repo.stage_for(repo.last_stage_start()).map(|s| s.model)
 }
 
+/// A local branch with no commits over the base and never pushed: what a research round
+/// leaves, never work to resume.
+fn research_leftover(repo: &Repo, branch: &str) -> bool {
+    local_branch_exists(repo, branch)
+        && !git_ok(&repo.repo, &["show-ref", "-q", &format!("refs/remotes/{}/{branch}", repo.push_remote)])
+        && git_out(&repo.repo, &["rev-list", &format!("{}/{}..{branch}", repo.base_remote, repo.base)]).trim().is_empty()
+}
+
 /// `research_one ID`: the research round — the bead claimed, a worktree on the base (or
 /// its branch after a send-back), the researcher reads and answers. A brief goes to
 /// `research/ID` and the bead back to the dev queue for its worker; `BLOCKED:` parks it
@@ -753,15 +761,17 @@ fn research_one(repo: &Repo, opts: &Opts, id: &str, lane: Option<&LaneSpec>, las
     let branch = format!("bead/{id}");
     let wt = repo.wt(id);
     let logf = repo.rs.join("logs").join(format!("{id}.{}", stamp()));
+    let rejoin = repo
+        .rejoin_of(id)
+        .filter(|(_, kind)| kind == "research")
+        .map(|(sid, _)| sid)
+        .filter(|_| wt.is_dir())
+        .filter(|sid| opts.dry_run || crate::harness::rejoin_fits(repo, id, sid, "research"));
+    repo.rejoin_clear(id);
     let mut resumed = branch_exists(repo, &branch);
-    // A branch here with nothing on it and never pushed is an earlier research round's
-    // that a stop cut short: gone, so the worker does not take it for work to resume.
-    if !opts.dry_run
-        && resumed
-        && local_branch_exists(repo, &branch)
-        && !git_ok(&repo.repo, &["show-ref", "-q", &format!("refs/remotes/{}/{branch}", repo.push_remote)])
-        && git_out(&repo.repo, &["rev-list", &format!("{}/{}..{branch}", repo.base_remote, repo.base)]).trim().is_empty()
-    {
+    // An empty branch never pushed, with no session to rejoin on it, is an earlier research
+    // round's that a stop cut short: gone, so the worker does not take it for work to resume.
+    if !opts.dry_run && rejoin.is_none() && resumed && research_leftover(repo, &branch) {
         worktree_remove(repo, &wt);
         let _ = git(&repo.repo, &["branch", "-D", &branch]);
         resumed = false;
@@ -771,8 +781,6 @@ fn research_one(repo: &Repo, opts: &Opts, id: &str, lane: Option<&LaneSpec>, las
     let prompt = research_prompt(&json, &repo.base, &previous, &last_note);
     // a research round holds a lane the reviewer may share: its own, shorter clock
     let timeout = st.timeout.min(repo.research_timeout);
-    let rejoin = repo.rejoin_of(id).filter(|(_, kind)| kind == "research").map(|(sid, _)| sid).filter(|_| wt.is_dir());
-    repo.rejoin_clear(id);
     log(&format!(
         "{}: research: bead {id} — {title} ({n} failures, researcher {model}{}{})",
         repo.slug,
@@ -823,12 +831,14 @@ fn research_one(repo: &Repo, opts: &Opts, id: &str, lane: Option<&LaneSpec>, las
         ),
     };
     cut_short(repo, id);
+    // what the round made goes: its worktree, and a branch it left empty (a rejoined round's
+    // too), so the worker starts fresh rather than "resuming" nothing
     let tidy = |repo: &Repo| {
-        if made {
+        if research_leftover(repo, &branch) {
             worktree_remove(repo, &wt);
-            if !resumed {
-                let _ = git(&repo.repo, &["branch", "-D", &branch]);
-            }
+            let _ = git(&repo.repo, &["branch", "-D", &branch]);
+        } else if made {
+            worktree_remove(repo, &wt);
         }
     };
     if r.empty && r.rc != 124 {
@@ -845,7 +855,7 @@ fn research_one(repo: &Repo, opts: &Opts, id: &str, lane: Option<&LaneSpec>, las
         clear_lane_of(repo, id);
         repo.release(id);
         park_cleanup(repo, &wt);
-        if !resumed {
+        if research_leftover(repo, &branch) {
             let _ = git(&repo.repo, &["branch", "-D", &branch]);
         }
         repo.wake();
@@ -1027,7 +1037,12 @@ pub fn dev_one(repo: &Repo, opts: &Opts, id: Option<&str>, last_id: &mut Option<
     // A worker session of this bead still running on the server since the last process
     // (recover found it): the round is that session, waited on, not a new one — and the
     // worktree it works in is left alone. Without the worktree there is nothing to rejoin.
-    let rejoin = repo.rejoin_of(&id).filter(|(_, kind)| kind == "worker").map(|(sid, _)| sid).filter(|_| wt.is_dir());
+    let rejoin = repo
+        .rejoin_of(&id)
+        .filter(|(_, kind)| kind == "worker")
+        .map(|(sid, _)| sid)
+        .filter(|_| wt.is_dir())
+        .filter(|sid| opts.dry_run || crate::harness::rejoin_fits(repo, &id, sid, "worker"));
     repo.rejoin_clear(&id);
     log(&format!(
         "{}: dev: bead {id} — {title} ({n} failures, worker {model}, reviewer {}{}{}{})",
@@ -1312,7 +1327,11 @@ pub fn review_one(repo: &Repo, opts: &Opts, id: Option<&str>, lane: Option<&Lane
     if !review_model.is_empty() {
         // A reviewer session of this bead still running on the server since the last
         // process (recover found it): waited on, not started again.
-        let rejoin = repo.rejoin_of(&id).filter(|(_, kind)| kind == "reviewer").map(|(sid, _)| sid);
+        let rejoin = repo
+            .rejoin_of(&id)
+            .filter(|(_, kind)| kind == "reviewer")
+            .map(|(sid, _)| sid)
+            .filter(|sid| crate::harness::rejoin_fits(repo, &id, sid, "reviewer"));
         repo.rejoin_clear(&id);
         log(&format!(
             "{}: review: {id} by {review_model} ({n} failures{})",

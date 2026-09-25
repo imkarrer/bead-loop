@@ -508,6 +508,37 @@ pub fn running_session(repo: &Repo, dir: &Path) -> Option<String> {
     sessions_on(&repo.attach, dir).into_iter().next()
 }
 
+/// The round a session's title says it is, for this bead: `ID · worker · …` (a round or its
+/// gate fix), `ID · reviewer · …`, `ID · research · …`. `None` for another bead's session or
+/// one that is not a round (the brief, the post-mortem). The title is the one record of a
+/// session's kind that survives a restart: the stop deletes the lane markers.
+pub fn session_kind(id: &str, title: &str) -> Option<&'static str> {
+    let rest = title.strip_prefix(id)?.strip_prefix(" · ")?;
+    ["worker", "reviewer", "research"].into_iter().find(|k| rest == *k || rest.starts_with(&format!("{k} ·")))
+}
+
+/// `GET /session/SID`'s title; `None` when the server does not say.
+pub fn session_title(repo: &Repo, sid: &str) -> Option<String> {
+    let body = crate::shell::curl_get(&format!("{}/session/{sid}", repo.attach), None, 5)?;
+    let v: Value = serde_json::from_str(&body).ok()?;
+    v.get("title").and_then(|t| t.as_str()).map(str::to_string)
+}
+
+/// Whether the session a rejoin marker names is the KIND of round about to wait on it. A
+/// session the server titles as some other round (a research round rejoined as the
+/// worker's, 25 Sep: bl-tka.2's worker round read the researcher's transcript and was
+/// charged "no commit") is aborted and not rejoined; the round starts its own. No title
+/// from the server: trusted, as before titles were read.
+pub fn rejoin_fits(repo: &Repo, id: &str, sid: &str, kind: &str) -> bool {
+    let Some(title) = session_title(repo, sid) else { return true };
+    if session_kind(id, &title) == Some(kind) {
+        return true;
+    }
+    log(&format!("{}: {id}: session {sid} is \"{title}\", not a {kind} round; aborting it rather than rejoining", repo.slug));
+    crate::shell::curl_post(&format!("{}/session/{sid}/abort", repo.attach), 5);
+    false
+}
+
 /// A session that said DONE (or APPROVE) between the stop and this start: not busy now,
 /// so `running_session` misses it, but its result is sitting on the server unread. From
 /// `GET /session?directory=DIR` (newest first): the newest one, if its title is this
@@ -690,6 +721,17 @@ mod tests {
         assert_eq!(opencode_provider_in(&f, "nope"), (String::new(), String::new()));
         let _ = std::fs::remove_dir_all(&d);
     }
+    #[test]
+    fn a_session_title_names_its_round() {
+        assert_eq!(session_kind("t-1", "t-1 · worker · round 2"), Some("worker"));
+        assert_eq!(session_kind("t-1", "t-1 · worker · gate fix"), Some("worker"), "the gate fix is the worker's");
+        assert_eq!(session_kind("t-1", "t-1 · reviewer · round 1"), Some("reviewer"));
+        assert_eq!(session_kind("t-1", "t-1 · research · round 1"), Some("research"));
+        assert_eq!(session_kind("t-1", "t-1 · brief"), None, "not a round");
+        assert_eq!(session_kind("t-1", "t-10 · worker · round 1"), None, "another bead's");
+        assert_eq!(session_kind("bl-tka.2", "bl-tka.2 · research · round 1"), Some("research"));
+    }
+
     #[test]
     fn agent_body_is_what_follows_the_frontmatter() {
         assert_eq!(agent_body_of("---\nname: x\n---\nYou are the reviewer.\n\nBe strict.\n"), "You are the reviewer.\n\nBe strict.\n");

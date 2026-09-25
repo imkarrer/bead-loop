@@ -1778,6 +1778,41 @@ case_research_worker_does_not_wait() {
   assert_match "$(cat "$T/sup.log")" "no brief yet; the worker goes without" "said so"
   assert_branch bead/t-1 "and pushed"
 }
+case_restart_rejoins_a_research_session_as_research() {
+  # 25 Sep, bl-tka.2: a deploy restarted the loop mid research round. The stop deletes the
+  # lane markers, so recover took the research session for the worker's; the worker round
+  # then "rejoined" it and was charged the researcher's words as "no commit". Recover reads
+  # the session's title instead, and the research round rejoins it.
+  setup true auto stub/reviewer "$(printf 'attach = "http://oc.test:4096"\nresearch_model = "stub/researcher"')"; echo hang >"$TEST_CTRL/research"
+  mkdir -p "$BEAD_LOOP_STATE"; touch "$BEAD_LOOP_STATE/restart"
+  setsid "$SUP" --once tick 2>>"$T/sup.log" & pid=$!
+  until grep -q '^bead-researcher' "$TEST_CTRL/calls" 2>/dev/null; do sleep 0.1; done
+  echo '{"ses_live":{"type":"busy"}}' >"$TEST_CTRL/session-status.json"; echo "t-1 · research · round 1" >"$TEST_CTRL/session-title"
+  sleep 0.3
+  kill -TERM -- -"$pid"; wait "$pid" 2>/dev/null || true
+  R=$BEAD_LOOP_STATE/repo
+  sup recover "$REPO"
+  assert_match "$(cat "$T/sup.log")" "t-1: research session ses_live still running on the server after the stop; rejoining it" "recover read the title"
+  assert_eq "$(cat "$R/rejoin/t-1" 2>/dev/null)" "ses_live research" "the rejoin marker names research"
+  ( sleep 0.6; jq -cn '[{info:{role:"assistant"},parts:[{type:"text",text:"Files:\n- work.txt: the one to edit"}]}]' >"$TEST_CTRL/messages.json"; echo '{}' >"$TEST_CTRL/session-status.json" ) &
+  BEAD_LOOP_REJOIN_POLL=0.1 sup --once tick; wait
+  assert_match "$(cat "$T/sup.log")" "research: bead t-1 .*rejoining session ses_live" "the research round rejoined it"
+  assert_match "$(cat "$R/research/t-1")" "work.txt: the one to edit" "its words are the brief"
+  assert_eq "$(grep -c '^bead-researcher' "$TEST_CTRL/calls")" 1 "one research call in all"
+  assert_nofile "$R/failures/t-1" "nothing charged"
+}
+case_rejoin_refuses_a_session_of_another_round() {
+  # A worker round told to rejoin a session the server titles as research aborts that
+  # session and runs its own worker.
+  setup true auto stub/reviewer 'attach = "http://oc.test:4096"'
+  R=$BEAD_LOOP_STATE/repo; mkdir -p "$R/rejoin" "$R/wt/t-1"; echo "ses_other worker" >"$R/rejoin/t-1"
+  echo "t-1 · research · round 1" >"$TEST_CTRL/session-title"
+  sup work "$REPO"
+  assert_match "$(cat "$T/sup.log")" 'session ses_other is "t-1 · research · round 1", not a worker round; aborting it' "said why"
+  assert_match "$(cat "$TEST_CTRL/curl.log")" "session/ses_other/abort" "aborted it"
+  assert_eq "$(calls)" "bead-worker bead-reviewer" "its own worker round, then review"
+  assert_nofile "$R/failures/t-1" "nothing charged"
+}
 case_research_skips_an_aider_bead() {
   # harness:aider: whoever filed the bead named its files; no research round holds the
   # lane, the brief is empty, and the worker round runs at once.

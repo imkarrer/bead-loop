@@ -2,7 +2,8 @@
 # Stub curl for bead-loop tests: the attached opencode server's session endpoints, and an
 # opencode provider's /models (the doctor's probe). $TEST_CTRL/sessions.json is what GET
 # /session returns, $TEST_CTRL/session-status.json what GET /session/status returns,
-# $TEST_CTRL/models.json what GET .../models returns; the directory asked for is logged
+# $TEST_CTRL/models.json what GET .../models returns, $TEST_CTRL/session-title the title
+# GET /session/SID gives (none when absent); the directory asked for is logged
 # to curl.log.
 set -euo pipefail
 url=; dir=
@@ -20,7 +21,9 @@ case $url in
                     if [ -f "$TEST_CTRL/abort-delay" ]; then d=$(cat "$TEST_CTRL/abort-delay"); rm -f "$TEST_CTRL/abort-delay"; sleep "$d"; fi ;;
   */session/*/message) cat "$TEST_CTRL/messages.json" 2>/dev/null || echo '[]' ;;   # a rejoined session's messages
   */session/status) if [ -n "$dir" ]; then cat "$TEST_CTRL/session-status.json" 2>/dev/null || echo '{}'; else echo '{}'; fi ;;   # like the real server: nothing without a directory
-  */session/ses_*)  printf '{"id":"%s","time":{"created":%s}}\n' "${url##*/}" "$(( $(date +%s) * 1000 - 1000 ))" ;;   # one session: started a second ago
+  */session/ses_*)  # one session: started a second ago; titled as the round it is when session-title says
+                    jq -cn --arg id "${url##*/}" --argjson t "$(( $(date +%s) * 1000 - 1000 ))" --arg title "$(cat "$TEST_CTRL/session-title" 2>/dev/null)" \
+                      '{id: $id, time: {created: $t}} + (if $title == "" then {} else {title: $title} end)' ;;
   */session)        cat "$TEST_CTRL/sessions.json" 2>/dev/null || echo '[]' ;;
   */models)          cat "$TEST_CTRL/models.json" 2>/dev/null || echo '{"data":[]}' ;;   # the doctor's opencode-provider probe
   *) echo "stub curl: $url" >&2; exit 22 ;;

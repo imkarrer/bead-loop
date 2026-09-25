@@ -408,13 +408,9 @@ pub fn recover(ctx: &Ctx) {
         // came, for the freshness check below — a session from well before that round is
         // not this restart's to rejoin, even if it is still the newest on the worktree.
         let mut lane_mtimes = std::collections::HashMap::new();
-        let mut researching = std::collections::HashSet::new();
         for name in repo.lane_files() {
             if let Some(id) = repo.lane_bead(&name) {
-                lane_mtimes.insert(id.clone(), mtime(&repo.lane_path(&name)));
-                if repo.lane_role(&name).as_deref() == Some("research") {
-                    researching.insert(id);
-                }
+                lane_mtimes.insert(id, mtime(&repo.lane_path(&name)));
             }
             log(&format!("{}: stale lane.{name} from a stop; cleared", repo.slug));
             repo.lane_clear(&name);
@@ -441,14 +437,17 @@ pub fn recover(ctx: &Ctx) {
                 // back in its queue with a marker, and the lane that takes it waits on the
                 // session instead of starting one — rather than abort it and start over.
                 if in_review || is_inprog {
-                    let kind = if in_review {
-                        "reviewer"
-                    } else if researching.contains(&id) {
-                        "research"
-                    } else {
-                        "worker"
-                    };
-                    if let Some(sid) = crate::harness::running_session(&repo, &dir) {
+                    let kind = if in_review { "reviewer" } else { "worker" };
+                    // The session's title says what round it is (the stop deleted the lane
+                    // markers): a research round rejoined as a worker's read the researcher's
+                    // transcript as the worker's. One titled as no round of this bead's is
+                    // not rejoined; the abort below takes it.
+                    let running =
+                        crate::harness::running_session(&repo, &dir).and_then(|sid| match crate::harness::session_title(&repo, &sid) {
+                            None => Some((sid, kind)),
+                            Some(t) => crate::harness::session_kind(&id, &t).map(|k| (sid, k)),
+                        });
+                    if let Some((sid, kind)) = running {
                         repo.rejoin_set(&id, &sid, kind);
                         if !in_review {
                             crate::shell::bd_status(&repo, &id, "open");
