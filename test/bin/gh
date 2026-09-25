@@ -15,6 +15,13 @@ if [ "$1" = api ] && [ "$2" = user ]; then
   if [ -e "$TEST_CTRL/gh-login" ]; then cat "$TEST_CTRL/gh-login"; else echo stubuser; fi
   exit 0
 fi
+# api repos/OWNER/REPO/commits/REF/statuses...: the head's commit statuses, newest first,
+# as GitHub's REST API lists them, with the description the rollup lacks — the test's
+# $TEST_CTRL/statuses.json, or [] when it plants none.
+if [ "$1" = api ] && [[ $2 == repos/*/statuses* ]]; then
+  if [ -e "$TEST_CTRL/statuses.json" ]; then cat "$TEST_CTRL/statuses.json"; else echo '[]'; fi
+  exit 0
+fi
 [ "$1" = pr ] || { echo "stub gh: only pr" >&2; exit 2; }
 primary_url() { [ -e "$TEST_CTRL/pr.json" ] && jq -r .url "$TEST_CTRL/pr.json" 2>/dev/null || true; }
 primary_head() { [ -e "$TEST_CTRL/pr.json" ] && jq -r '.head // empty' "$TEST_CTRL/pr.json" 2>/dev/null || true; }

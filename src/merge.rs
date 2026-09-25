@@ -70,6 +70,89 @@ pub fn verdict(view: &Value) -> &'static str {
     }
 }
 
+/// Buildkite's word for a build it skipped: "skip queued branch builds" drops a build
+/// still queued when a newer one of the branch arrives, and posts `Build #N skipped` with
+/// state error on the build-level context (#132 on 25 Sep: build 285, from the PR's opened
+/// event, skipped for the labeled event's 286; its error reached GitHub a second before
+/// `Build #286 scheduled`). The description is the only mark of it: commit statuses have
+/// no skipped state.
+fn is_skip(status: &Value) -> bool {
+    let d = status.get("description").and_then(|v| v.as_str()).unwrap_or("");
+    d.strip_prefix("Build #")
+        .and_then(|r| r.strip_suffix(" skipped"))
+        .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+}
+
+/// A status's build: its link up to the first `#` (a step's link adds `#<job>`).
+fn build_of(link: &str) -> &str {
+    link.split('#').next().unwrap_or("")
+}
+
+/// The view with every commit status from a skipped build replaced: a skip is not a
+/// result, not red and not green. Its context takes the newest status in `history` (the
+/// head's commit statuses, newest first, as GitHub lists them) from a build that was not
+/// skipped, or PENDING when no such build has reported it yet. Check runs, and a status
+/// whose build nothing calls skipped, are left as they are.
+fn drop_skips(view: &Value, history: &Value) -> Value {
+    let link = |s: &Value, k: &str| s.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let hist: Vec<&Value> = history.as_array().map(|a| a.iter().collect()).unwrap_or_default();
+    let skipped: std::collections::HashSet<String> =
+        hist.iter().filter(|s| is_skip(s)).map(|s| build_of(&link(s, "target_url")).to_string()).filter(|b| !b.is_empty()).collect();
+    let from_skipped = |l: &str| skipped.contains(build_of(l));
+    let mut view = view.clone();
+    if let Some(rollup) = view.get_mut("statusCheckRollup").and_then(|v| v.as_array_mut()) {
+        for c in rollup.iter_mut() {
+            let ctx = match c.get("context").and_then(|v| v.as_str()) {
+                Some(x) => x.to_string(),
+                None => continue,
+            };
+            if !from_skipped(&link(c, "targetUrl")) {
+                continue;
+            }
+            let ran = hist.iter().find(|s| link(s, "context") == ctx && !is_skip(s) && !from_skipped(&link(s, "target_url")));
+            match ran {
+                Some(s) => {
+                    c["state"] = Value::from(link(s, "state").to_uppercase());
+                    c["targetUrl"] = Value::from(link(s, "target_url"));
+                }
+                None => c["state"] = Value::from("PENDING"),
+            }
+        }
+    }
+    view
+}
+
+/// `https://github.com/OWNER/REPO/pull/N` → the REST path of that PR head's commit
+/// statuses. The last 100: about seven Buildkite builds of one head.
+fn statuses_path(url: &str) -> Option<String> {
+    let rest = url.strip_prefix("https://github.com/")?;
+    match rest.split('/').collect::<Vec<_>>().as_slice() {
+        [owner, name, "pull", n] if !owner.is_empty() && !name.is_empty() && !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()) => {
+            Some(format!("repos/{owner}/{name}/commits/refs/pull/{n}/head/statuses?per_page=100"))
+        }
+        _ => None,
+    }
+}
+
+/// `skip_free`: the view every arm of reconcile reads, skipped builds dropped. The rollup
+/// has no description, so the head's statuses are asked for, and only when a commit
+/// status in the rollup is red (a skip is posted as error). A url that is not a GitHub
+/// PR, or gh failing, leaves the view as it was: charged as before.
+fn skip_free(repo: &Repo, url: &str, view: Value) -> Value {
+    let red_status = view
+        .get("statusCheckRollup")
+        .and_then(|v| v.as_array())
+        .is_some_and(|a| a.iter().any(|c| c.get("context").is_some() && RED.contains(&check_state(c).as_str())));
+    let history = match statuses_path(url).filter(|_| red_status) {
+        Some(path) => gh_out(repo, &["api", &path]).and_then(|s| serde_json::from_str::<Value>(&s).ok()),
+        None => None,
+    };
+    match history {
+        Some(h) => drop_skips(&view, &h),
+        None => view,
+    }
+}
+
 fn failing_checks(view: &Value) -> String {
     view.get("statusCheckRollup")
         .and_then(|v| v.as_array())
@@ -349,6 +432,7 @@ pub fn reconcile(repo: &Repo) {
                 continue;
             }
         };
+        let view = skip_free(&r, &url, view);
         let state = view.get("state").and_then(|s| s.as_str()).unwrap_or("");
         match state {
             "MERGED" => close_merged(&r, &id, &url, &view),
@@ -534,6 +618,47 @@ mod tests {
             "skipped and neutral are green"
         );
         assert_eq!(v(serde_json::json!([{"name":"x","status":"IN_PROGRESS"}])), "pending", "a check run still running");
+    }
+    #[test]
+    fn a_skipped_build_is_not_a_result() {
+        use serde_json::json;
+        let st = |ctx: &str, state: &str, desc: &str, link: &str| json!({"context":ctx,"state":state,"description":desc,"target_url":link});
+        let rollup = |c: Value| json!({"statusCheckRollup": c});
+        let skip285 = st("bk", "error", "Build #285 skipped", "https://bk/builds/285");
+        let sched285 = st("bk", "pending", "Build #285 scheduled", "https://bk/builds/285");
+        let skipped = rollup(json!([{"context":"bk","state":"ERROR","targetUrl":"https://bk/builds/285"}]));
+        // #132: the skip before any build ran; then with the next build's status already posted.
+        assert_eq!(verdict(&drop_skips(&skipped, &json!([skip285.clone(), sched285.clone()]))), "pending");
+        let next = drop_skips(&skipped, &json!([st("bk", "pending", "Build #286 scheduled", "https://bk/builds/286"), skip285, sched285]));
+        assert_eq!(verdict(&next), "pending");
+        assert_eq!(next["statusCheckRollup"][0]["targetUrl"], "https://bk/builds/286");
+        // A skip after a green build: green. After a red one: red, named as today.
+        let late = rollup(json!([
+            {"context":"bk","state":"ERROR","targetUrl":"https://bk/builds/287"},
+            {"context":"bk/suite","state":"SUCCESS","targetUrl":"https://bk/builds/286#s"}
+        ]));
+        let skip287 = st("bk", "error", "Build #287 skipped", "https://bk/builds/287");
+        let passed = json!([skip287.clone(), st("bk", "success", "Build #286 passed (2 minutes)", "https://bk/builds/286")]);
+        assert_eq!(verdict(&drop_skips(&late, &passed)), "green");
+        let failed =
+            drop_skips(&late, &json!([skip287.clone(), st("bk", "failure", "Build #286 failed (3 minutes)", "https://bk/builds/286")]));
+        assert_eq!((verdict(&failed), failing_checks(&failed).as_str()), ("red", "bk"));
+        // A red that is no skip, a check run, an empty history: as they were.
+        let red =
+            rollup(json!([{"context":"bk","state":"FAILURE","targetUrl":"https://bk/builds/288"},{"name":"lint","conclusion":"FAILURE"}]));
+        assert_eq!(drop_skips(&red, &json!([skip287, st("bk", "failure", "Build #288 failed", "https://bk/builds/288")])), red);
+        assert_eq!(drop_skips(&skipped, &json!([])), skipped);
+        assert!(!is_skip(&st("bk", "failure", "Build #286 failed (15 minutes, 37 seconds)", "")));
+        assert!(!is_skip(&st("bk", "error", "Build # skipped", "")));
+    }
+    #[test]
+    fn statuses_path_from_the_pr_url() {
+        assert_eq!(
+            statuses_path("https://github.com/imkarrer/bead-loop/pull/132").as_deref(),
+            Some("repos/imkarrer/bead-loop/commits/refs/pull/132/head/statuses?per_page=100")
+        );
+        assert_eq!(statuses_path("https://x/pull/7"), None);
+        assert_eq!(statuses_path("https://github.com/o/r/issues/7"), None);
     }
     #[test]
     fn what_the_notes_quote() {

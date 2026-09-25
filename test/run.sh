@@ -387,6 +387,37 @@ case_merge_pipeline() {
   assert_eq "$(bead .status)" closed "the next tick sees MERGED and closes the bead"
   assert_nofile "$BEAD_LOOP_STATE/repo/inflight/t-1" "no longer in flight"
 }
+case_ci_skipped_build_is_not_red() {
+  # bl-iej.2.3 / #132, 25 Sep: Buildkite skipped build 285 (the PR's opened event) for the
+  # labeled event's 286 and posted "Build #285 skipped", state error, a second before
+  # "Build #286 scheduled". The loop charged it as CI red and parked the bead. A skipped
+  # build's status is not a result: its context reads as the newest status from a build
+  # that was not skipped, and as pending while there is none.
+  setup true pipeline; sup work "$REPO"
+  set_checks '[{"context":"ci","state":"ERROR","targetUrl":"https://ci.example/builds/285"}]'
+  echo '[{"context":"ci","state":"error","description":"Build #285 skipped","target_url":"https://ci.example/builds/285"},
+    {"context":"ci","state":"pending","description":"Build #285 scheduled","target_url":"https://ci.example/builds/285"}]' >"$TEST_CTRL/statuses.json"
+  sup reconcile "$REPO"
+  assert_nofile "$BEAD_LOOP_STATE/repo/beads/t-1/failures" "a skipped build is not charged"
+  assert_file "$BEAD_LOOP_STATE/repo/inflight/t-1" "it waits in the merge queue, pending"
+  assert_match "$(cat "$TEST_CTRL/gh.log")" "api repos/example/repo/commits/refs/pull/7/head/statuses" "asked for the head's statuses"
+  # A skip that lands after a green build's statuses: the green stands.
+  set_checks '[{"context":"ci","state":"ERROR","targetUrl":"https://ci.example/builds/287"},{"context":"ci/suite","state":"SUCCESS","targetUrl":"https://ci.example/builds/286#s"}]'
+  echo '[{"context":"ci","state":"error","description":"Build #287 skipped","target_url":"https://ci.example/builds/287"},
+    {"context":"ci","state":"pending","description":"Build #287 scheduled","target_url":"https://ci.example/builds/287"},
+    {"context":"ci","state":"success","description":"Build #286 passed (2 minutes)","target_url":"https://ci.example/builds/286"},
+    {"context":"ci/suite","state":"success","description":"Passed (1 minute)","target_url":"https://ci.example/builds/286#s"}]' >"$TEST_CTRL/statuses.json"
+  sup reconcile "$REPO"
+  assert_nofile "$BEAD_LOOP_STATE/repo/beads/t-1/failures" "a skip after a green build does not turn it red"
+  assert_file "$BEAD_LOOP_STATE/repo/inflight/.t-1.green" "green: waiting for the pipeline"
+  # A red from a build that ran is charged as ever.
+  set_checks '[{"context":"ci","state":"FAILURE","targetUrl":"https://ci.example/builds/288"}]'
+  echo '[{"context":"ci","state":"failure","description":"Build #288 failed (3 minutes)","target_url":"https://ci.example/builds/288"},
+    {"context":"ci","state":"error","description":"Build #287 skipped","target_url":"https://ci.example/builds/287"}]' >"$TEST_CTRL/statuses.json"
+  sup reconcile "$REPO"
+  assert_eq "$(cat "$BEAD_LOOP_STATE/repo/beads/t-1/failures")" 1 "a red from a build that ran is charged"
+  assert_match "$(bead .notes)" "CI red on https://github.com/example/repo/pull/7: ci" "named as today"
+}
 case_merge_pipeline_label_and_adoption() {
   setup true pipeline stub/reviewer 'merge_label = "ship-it"'
   jq '. + [{id:"t-9", title:"Theirs", description:"z", status:"open", priority:2, labels:[]}]' "$BD_STATE/issues.json" >"$BD_STATE/i.tmp" && mv "$BD_STATE/i.tmp" "$BD_STATE/issues.json"
