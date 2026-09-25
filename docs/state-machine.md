@@ -151,6 +151,8 @@ Every row is a case in `test/run.sh`.
 | Harness exits with nothing from the model — no output, or only its own error (the server down, the model not found on it, a 5xx) | **held**, no failure, with the harness's words; the lane takes the next bead | removed (dev; kept once a round had committed) / kept (review) |
 | Gate fails twice (one fix round with its output) | note with the errors, +1 failure; dev queue | removed |
 | Gate passes | in_progress; review queue | kept, in its worktree |
+| Gate passes, pre-check `PASS` (or the pre-check cannot run) | in_progress; review queue | kept, in its worktree |
+| Pre-check `SEND BACK` | note with the pre-checker's block, +1 failure; dev queue — the next round on the next stage | kept |
 | Reviewer `REJECT:` (any verdict that is not `APPROVE:`) | note with the rejection, +1 failure; dev queue — the worker fixes in place | kept |
 | Reviewer `APPROVE:` | in_progress, comment with the url; merge queue | pushed; PR opened, or the existing one updated |
 | Push or `gh pr create` refused | **held** in the review queue with gh's words | pushed / not |

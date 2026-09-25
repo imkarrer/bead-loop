@@ -34,7 +34,9 @@ flowchart LR
       MQ[["merge queue<br/>PRs in CI on GitHub"]]
     end
 
-    G -- "pass" --> RQ
+    G -- "pass" --> P["pre-check<br/>precheck_model"]
+    P -- "PASS" --> RQ
+    P -- "SEND BACK" --> F
     PR --> MQ
     MQ -- "green: merge<br/>or the pipeline on the label" --> M["squash-merge<br/>bd close ID"]
     MQ -- "red" --> F
