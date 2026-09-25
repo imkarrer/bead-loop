@@ -150,6 +150,9 @@ pub fn run_agent(
         write_file(&ignore, &aider_ignore(&files));
         let mut c = cmd("timeout");
         c.args(["--foreground", &timeout_s, "aider", "--yes-always", "--no-auto-commits", "--no-gitignore"]);
+        // A URL in the bead is text, not a page to fetch: --yes-always had aider scrape
+        // one (bl-iej.2.1's http://127.0.0.1:1/health) and agree to install playwright.
+        c.arg("--no-detect-urls");
         c.args(["--model", &format!("openai/{model_name}")]);
         c.args(["--edit-format", "diff"]);
         c.arg("--aiderignore").arg(&ignore);
