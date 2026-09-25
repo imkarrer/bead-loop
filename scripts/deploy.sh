@@ -21,8 +21,9 @@
 # Development never blocks a deploy: ~/src/bead-loop (the project the loop works, where
 # bd writes .beads/ and the bead worktrees hang) is not read here.
 #
-#   scripts/deploy.sh            deploy if origin/main moved (what the timer runs)
-#   scripts/deploy.sh --force    deploy origin/main's release again, as it is
+#   scripts/deploy.sh            deploy if origin/main moved (what the timer runs), unless an
+#                                aider round is running (it waits: the restart would kill it)
+#   scripts/deploy.sh --force    deploy origin/main's release again, as it is, without waiting
 #   scripts/deploy.sh --dry-run  fetch, download and check; install nothing
 set -euo pipefail
 DEPLOY=${BEAD_LOOP_DEPLOY:-$HOME/.local/state/bead-loop/deploy}
@@ -66,6 +67,15 @@ flox activate -d "$SRC" -- true
 
 if [ "$DRY" = 1 ]; then
   echo "dry run: would install $tag ($(stat -c %s "$dl/bead-supervisor") bytes) over ${have:-nothing}, and recycle the stack"
+  exit 0
+fi
+
+# An aider round is a child of the loop, not a session on the server: the restart below
+# would kill it (no failure charged, but the round's work is lost). Wait for it; the
+# timer comes back in two minutes, and the worker timeout bounds the wait. --force
+# does not wait.
+if [ "$FORCE" = 0 ] && pgrep -u "$(id -u)" -f -- '^timeout --foreground [0-9]+ aider ' >/dev/null; then
+  echo "an aider round is running; $tag waits for it (next time)"
   exit 0
 fi
 
