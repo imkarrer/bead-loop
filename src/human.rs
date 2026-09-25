@@ -6,7 +6,9 @@ use crate::round::render_bead;
 use crate::shell::{bd_note, bd_show, bd_status, branch_exists, git, git_must, local_branch_exists};
 use crate::util::{date_iminutes, die, log};
 
-/// A bead in the merge queue stays there: its PR is what moves it.
+/// A bead in the merge queue stays there: its PR is what moves it. A bead ready to
+/// publish (`proposed/ID`, `open_pr = "ask"`) stays put too: it is not a failure to
+/// send back, it is a PR to open.
 fn refuse_if_in_merge(repo: &Repo, id: &str, what: &str) {
     if repo.inflight_path(id).exists() {
         let url = crate::util::read_to_string(&repo.inflight_path(id)).unwrap_or_default();
@@ -15,6 +17,9 @@ fn refuse_if_in_merge(repo: &Repo, id: &str, what: &str) {
             repo.slug,
             url.trim()
         ));
+    }
+    if repo.proposed_path(id).exists() {
+        die(&format!("{}: {id} is ready to publish; publish it or remove proposed/{id} first", repo.slug));
     }
 }
 
