@@ -1102,19 +1102,27 @@ case_stale_assignee_does_not_block() {
   assert_eq "$(bead .status)" in_progress "claimed"
   assert_branch bead/t-1 "and pushed"
 }
+# The dev and review lanes alone: the lanes case_review_lane_waits_for_dev_to_claim was
+# written for (setup wrote no claude lane before #102). With the claude lane too, two
+# lanes pick slowly (slow-ready: 0.3 s a pass, longer than LANE_WAIT), each keeps finding
+# the other mid-pass, and the tick ends only when timing jitter parts them: 11-870 s on CI.
+dev_review_lanes() {
+  NO_DEFAULT_LANES=1 setup
+  printf '[[lanes]]\nname = "dev"\nmodels = ["*"]\nroles = ["worker"]\n[[lanes]]\nname = "review"\nmodels = ["*"]\nroles = ["reviewer"]\n' >>"$BEAD_LOOP_CONFIG/config.toml"
+}
 case_review_lane_waits_for_dev_to_claim() {
   # At a tick's start the dev lane spends a moment picking before it claims; the review
   # lane, finding its queue empty and no lane marker yet, must not conclude the tick is
   # over. It leaves only after the dev lane has looked idle three checks in a row.
-  setup; echo 0.3 >"$TEST_CTRL/slow-ready"
+  dev_review_lanes; echo 0.3 >"$TEST_CTRL/slow-ready"
   LANE_WAIT=0.2 sup tick
   assert_eq "$(calls)" "bead-worker bead-reviewer" "review waited, then took the bead"
   ! grep -q 'going round again' "$T/sup.log" && ok || bad "no second round needed"
   # A hand-run review lane holding its lock when the tick starts: the tick's review lane
   # skips, dev fills the review queue and leaves; the tick notices work is still queued
   # and runs the lanes again rather than leave it for later.
-  setup; echo 0.3 >"$TEST_CTRL/slow-ready"; mkdir -p "$BEAD_LOOP_STATE"
-  ( exec 8>"$BEAD_LOOP_STATE/lock.review"; flock 8; sleep 0.5 ) &
+  dev_review_lanes; echo 0.3 >"$TEST_CTRL/slow-ready"; mkdir -p "$BEAD_LOOP_STATE"
+  ( exec 8>"$BEAD_LOOP_STATE/lock.review"; flock 8; for _ in $(seq 100); do grep -q 'another review lane holds' "$T/sup.log" 2>/dev/null && break; sleep 0.05; done ) &
   sleep 0.1; LANE_WAIT=0.1 sup tick; wait
   assert_eq "$(calls)" "bead-worker bead-reviewer" "reviewed within the same tick"
   assert_match "$(cat "$T/sup.log")" "another review lane holds .*lock.review; skipping" "the first review lane stood down"
