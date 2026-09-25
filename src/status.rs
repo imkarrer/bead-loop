@@ -227,6 +227,7 @@ pub fn status_json_from(repo: &Repo, open: Value, inprog: Value, specs: &[crate:
             m.insert("since".into(), json!(mtime(&repo.lane_path(name))));
             // the round's role when its marker names one (a research round); else null
             m.insert("role".into(), repo.lane_role(name).map(Value::String).unwrap_or(Value::Null));
+            m.insert("tail".into(), json!(session_tail(repo, &id, 5)));
             lanes.insert(name.into(), Value::Object(m));
             laneids.push(id);
         }
@@ -666,6 +667,35 @@ pub fn log_line(v: &Value) -> Option<String> {
     }
 }
 
+/// The busy lane's session so far: the last `n` lines `log_line` makes of the newest
+/// session log for `id`; empty when there is no such log yet.
+pub fn session_tail(repo: &Repo, id: &str, n: usize) -> Vec<String> {
+    let mut files: Vec<(i64, std::path::PathBuf)> = std::fs::read_dir(repo.rs.join("logs"))
+        .map(|rd| {
+            rd.flatten()
+                .map(|e| e.path())
+                .filter(|p| {
+                    let name = p.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+                    name.ends_with(".jsonl") && name.starts_with(&format!("{id}."))
+                })
+                .map(|p| (mtime(&p), p))
+                .collect()
+        })
+        .unwrap_or_default();
+    files.sort_by_key(|a| std::cmp::Reverse(a.0));
+    let f = match files.first() {
+        Some((_, p)) => p.clone(),
+        None => return Vec::new(),
+    };
+    let lines: Vec<String> = read_to_string(&f)
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|l| serde_json::from_str::<Value>(l).ok().and_then(|v| log_line(&v)))
+        .collect();
+    let start = lines.len().saturating_sub(n);
+    lines[start..].to_vec()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -986,5 +1016,22 @@ mod tests {
         let j2 = status_json_from(&repo2, json!([]), json!([]), &default_lanes(false));
         assert_eq!(j2["ready_to_publish"].as_array().unwrap().len(), 0, "Should have no proposed beads");
         let _ = std::fs::remove_dir_all(&d2);
+    }
+
+    #[test]
+    fn a_busy_lane_carries_its_session_tail() {
+        let d = crate::config::scratch("session-tail");
+        let repo = crate::config::test_repo(&d, &["a"]);
+        let mut content = String::new();
+        for n in 1..=7 {
+            content += &format!("{{\"type\":\"text\",\"part\":{{\"text\":\"line {n}\"}}}}\n");
+        }
+        content += "{\"type\":\"step_start\"}\n";
+        crate::util::write_file(&repo.rs.join("logs").join("t-1.20260925T000000.worker.jsonl"), &content);
+        let tail = session_tail(&repo, "t-1", 5);
+        assert_eq!(tail, vec!["> line 3", "> line 4", "> line 5", "> line 6", "> line 7"]);
+        let empty_tail = session_tail(&repo, "t-9", 5);
+        assert!(empty_tail.is_empty());
+        let _ = std::fs::remove_dir_all(&d);
     }
 }
