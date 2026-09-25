@@ -422,6 +422,9 @@ fn reconcile_open(repo: &Repo, id: &str, f: &std::path::Path, url: &str, view: &
                         &format!("{url} has been green for {} min and the pipeline has not merged it", (now() - since) / 60),
                     );
                 }
+            } else if repo.merge == "external" {
+                // Not ours to merge or to time: no hold, no note. The page shows the age.
+                say(id, format!("{}: {id}: green, merge is external, awaiting the maintainer: {url}", repo.slug));
             } else {
                 say(id, format!("{}: {id}: green, merge is manual, waiting for you: {url}", repo.slug));
                 held_in_merge(repo, id, &format!("{url} is green; merge is manual, so it is yours to merge"));
@@ -449,24 +452,31 @@ fn reconcile_open(repo: &Repo, id: &str, f: &std::path::Path, url: &str, view: &
             }
         }
         "nocheck" => {
-            if !repo.mark(id, "nocheck").exists() {
-                bd_note(
-                    repo,
-                    id,
-                    &format!(
-                        "bead-loop: {url} reports no CI checks, so nothing proves it green; merge it yourself or set merge = \"manual\""
-                    ),
-                );
-                touch(&repo.mark(id, "nocheck"));
-                log(&format!("{}: {id}: no checks on {url}", repo.slug));
+            if repo.merge == "external" {
+                // Their CI is their business: no note, no hold, whatever it reports.
+                say(id, format!("{}: {id}: no checks on {url}, merge is external, awaiting the maintainer", repo.slug));
+            } else {
+                if !repo.mark(id, "nocheck").exists() {
+                    bd_note(
+                        repo,
+                        id,
+                        &format!(
+                            "bead-loop: {url} reports no CI checks, so nothing proves it green; merge it yourself or set merge = \"manual\""
+                        ),
+                    );
+                    touch(&repo.mark(id, "nocheck"));
+                    log(&format!("{}: {id}: no checks on {url}", repo.slug));
+                }
+                held_in_merge(repo, id, &format!("{url} reports no CI checks; merge it yourself or set merge = \"manual\""));
             }
-            held_in_merge(repo, id, &format!("{url} reports no CI checks; merge it yourself or set merge = \"manual\""));
         }
         _ => {
             say(id, format!("{}: {id}: CI pending on {url}", repo.slug));
-            let since = mtime(f);
-            if since > 0 && now() - since >= CI_TIMEOUT {
-                held_in_merge(repo, id, &format!("CI on {url} has been pending for {} h; is the agent up?", (now() - since) / 3600));
+            if repo.merge != "external" {
+                let since = mtime(f);
+                if since > 0 && now() - since >= CI_TIMEOUT {
+                    held_in_merge(repo, id, &format!("CI on {url} has been pending for {} h; is the agent up?", (now() - since) / 3600));
+                }
             }
         }
     }

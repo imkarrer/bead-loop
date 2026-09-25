@@ -157,6 +157,7 @@ Every row is a case in `test/run.sh`.
 | CI green, `merge = "auto"` | closed with the PR url | squash-merged by the watcher, branch deleted |
 | CI green, `merge = "pipeline"` | closed once the pipeline has merged; **held** if it has not after 30 min | labelled `automerge` at open; the pipeline merges |
 | CI green, `merge = "manual"` | **held**: yours to merge | PR left open for you |
+| CI green / no checks / pending, `merge = "external"` | no hold, no note; the page shows how long | PR left open, awaiting the maintainer |
 | CI green, GitHub refuses the merge (branch protection) | **held** with GitHub's state | PR left open |
 | CI red | note with the failing checks, +1 failure; dev queue | kept; the next round's push updates the PR |
 | CI red on an adopted PR | one note, **held** | left open for whoever opened it |
@@ -233,6 +234,7 @@ The watcher looks at every `inflight/ID` on each pass.
 | merge | green, `pipeline`, not merged within 30 min (`PIPELINE_TIMEOUT`) | merge (held) | — | — |
 | merge | green, `manual` | merge (held: yours to merge) | — | — |
 | merge | no checks reported | merge (held; one note) | — | — |
+| merge | green / no checks / pending, `merge = "external"` | **merge (external): awaiting maintainer** — no hold, no note, age shown on the page; exits the same as any merge-queue PR: `MERGED`, `CLOSED` unmerged, red, or conflict | — | — |
 | merge | the `pipeline` label cannot be added | merge (held; one note) | — | — |
 | merge | pending longer than 2 h (`CI_TIMEOUT`) | merge (held: is the agent up?), still polled | — | — |
 | merge | `gh pr view` fails | merge (held: gh's words), still polled | — | — |

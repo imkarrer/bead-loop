@@ -199,6 +199,8 @@ pub fn status_json_from(repo: &Repo, open: Value, inprog: Value, specs: &[crate:
             m.insert("failures".into(), json!(repo.failures_of(id)));
             m.insert("title".into(), json!(byid.get(id).and_then(|b| b.get("title")).and_then(|t| t.as_str()).unwrap_or("")));
             m.insert("held".into(), repo.held_why(id).map(|w| json!({"why": w, "since": repo.held_since(id)})).unwrap_or(Value::Null));
+            m.insert("merge_mode".into(), json!(repo.for_id(id).merge));
+            m.insert("awaiting_since".into(), json!(mtime(&repo.inflight_path(id))));
             Value::Object(m)
         })
         .collect();
@@ -367,6 +369,17 @@ pub fn age(since: i64) -> String {
     }
 }
 
+/// "awaiting the maintainer, N days" — hours under a day, since a maintainer's queue is
+/// counted in days, not minutes.
+fn awaiting(since: i64) -> String {
+    let d = (now() - since).max(0);
+    if d < 86400 {
+        format!("awaiting the maintainer, {} h", d / 3600)
+    } else {
+        format!("awaiting the maintainer, {} days", d / 86400)
+    }
+}
+
 fn s<'a>(v: &'a Value, k: &str) -> &'a str {
     v.get(k).and_then(|x| x.as_str()).unwrap_or("")
 }
@@ -428,12 +441,18 @@ pub fn status_text(j: &Value) -> String {
     let merge = j["queues"]["merge"].as_array().cloned().unwrap_or_default();
     out.push_str(&format!("  merge queue ({}):{}\n", merge.len(), if merge.is_empty() { "  —" } else { "" }));
     for p in &merge {
+        let awaiting_tag = if s(p, "merge_mode") == "external" && !p["red"].as_bool().unwrap_or(false) {
+            format!("  [{}]", awaiting(p["awaiting_since"].as_i64().unwrap_or(0)))
+        } else {
+            String::new()
+        };
         out.push_str(&format!(
-            "    {} {}{}{}\n",
+            "    {} {}{}{}{}\n",
             pad(s(p, "id"), 14),
             s(p, "url"),
             if p["red"].as_bool().unwrap_or(false) { "  [red]" } else { "" },
-            if p["adopted"].as_bool().unwrap_or(false) { "  [adopted]" } else { "" }
+            if p["adopted"].as_bool().unwrap_or(false) { "  [adopted]" } else { "" },
+            awaiting_tag
         ));
     }
     let parked = j["parked"].as_array().cloned().unwrap_or_default();
@@ -649,7 +668,7 @@ mod tests {
 
     #[test]
     fn status_json_lays_out_the_queues() {
-        let (d, _repo, j) = laid_out("status-queues");
+        let (d, repo, j) = laid_out("status-queues");
         let ids = |v: &Value| v.as_array().unwrap().iter().map(|b| b["id"].as_str().unwrap().to_string()).collect::<Vec<_>>();
         assert_eq!(j["slug"], "repo");
         assert_eq!(j["stages"][0]["worker"], "stub/worker");
@@ -675,7 +694,8 @@ mod tests {
         assert_eq!(j["queues"]["review"][0]["title"], "Fourth");
         assert_eq!(
             j["queues"]["merge"][0],
-            json!({"id":"t-1","url":"https://github.com/example/repo/pull/7","red":true,"adopted":false,"failures":2,"title":"First","held":null})
+            json!({"id":"t-1","url":"https://github.com/example/repo/pull/7","red":true,"adopted":false,"failures":2,"title":"First","held":null,
+                "merge_mode":"auto","awaiting_since":mtime(&repo.inflight_path("t-1"))})
         );
         assert!(j["queues"]["merge"][0].get("stage").is_none(), "merge rows carry no stage");
         assert_eq!(ids(&j["parked"]), vec!["t-5"], "parked = in_progress minus the queues and lanes");

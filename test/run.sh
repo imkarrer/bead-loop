@@ -309,6 +309,48 @@ case_ci_red() {
   assert_file "$BEAD_LOOP_STATE/repo/inflight/t-1" "back in the merge queue"
   assert_eq "$(git -C "$T/origin.git" rev-list --count main..bead/t-1)" 2 "the fix is on the branch"
 }
+case_external_green() {
+  # merge = "external": someone else merges. Green sits in the queue, polled, never
+  # held and never merged by the loop — the maintainer's call, on their own time.
+  setup true external; sup work "$REPO"; set_checks '[{"context":"ci","state":"SUCCESS"}]'; sup reconcile "$REPO"
+  assert_eq "$(jq -r .state "$TEST_CTRL/pr.json")" OPEN "green: not merged"
+  assert_eq "$(bead .status)" in_progress "green: bead waits, not closed"
+  assert_nofile "$BEAD_LOOP_STATE/repo/held/t-1" "no hold"
+  ! grep -q 'pr merge' "$TEST_CTRL/gh.log" && ok || bad "no merge call"
+  sup reconcile "$REPO"  # a second poll: still nothing
+  assert_eq "$(jq -r .state "$TEST_CTRL/pr.json")" OPEN "still open after a second poll"
+  assert_nofile "$BEAD_LOOP_STATE/repo/held/t-1" "still no hold"
+  ! grep -q 'pr merge' "$TEST_CTRL/gh.log" && ok || bad "still no merge call"
+  assert_file "$BEAD_LOOP_STATE/repo/inflight/t-1" "stays in the merge queue"
+  awaiting=$(sup --json status "$REPO" | jq -r '.queues.merge[0].awaiting_since')
+  [ "$awaiting" -gt 0 ] 2>/dev/null && ok || bad "awaiting_since: expected a positive epoch, got [$awaiting]"
+  assert_eq "$(sup --json status "$REPO" | jq -r '.queues.merge[0].merge_mode')" external "merge_mode carried too"
+}
+case_external_nocheck() {
+  # Contrast with case_merge_queue_holds' "no checks reported" under auto: external
+  # never holds on it, their CI is their business.
+  setup true external; sup work "$REPO"; sup reconcile "$REPO"
+  assert_eq "$(jq -r .state "$TEST_CTRL/pr.json")" OPEN "no checks: not merged"
+  assert_nofile "$BEAD_LOOP_STATE/repo/held/t-1" "not held"
+  ! grep -q 'no CI checks' <<<"$(bead .notes)" && ok || bad "no note either"
+  assert_file "$BEAD_LOOP_STATE/repo/inflight/t-1" "stays in the merge queue"
+}
+case_external_merged() {
+  setup true external; sup work "$REPO"
+  jq '.state="MERGED"' "$TEST_CTRL/pr.json" >"$TEST_CTRL/pr.tmp" && mv "$TEST_CTRL/pr.tmp" "$TEST_CTRL/pr.json"
+  sup reconcile "$REPO"
+  assert_eq "$(bead .status)" closed "MERGED closes the bead, same as any other merge mode"
+  assert_nofile "$BEAD_LOOP_STATE/repo/inflight/t-1" "out of the merge queue"
+  assert_nofile "$BEAD_LOOP_STATE/repo/target/t-1" "target cleared too"
+}
+case_external_red() {
+  setup true external; sup work "$REPO"
+  set_checks '[{"context":"ci","state":"FAILURE"}]'; sup reconcile "$REPO"
+  assert_eq "$(bead .status)" open "red: back in the dev queue, same as any other merge mode"
+  assert_match "$(bead .notes)" "CI red on https://github.com/example/repo/pull/7: ci" "the failing check named"
+  assert_eq "$(cat "$BEAD_LOOP_STATE/repo/failures/t-1")" 1 "one failure, +1 as today"
+  assert_nofile "$BEAD_LOOP_STATE/repo/inflight/t-1" "out of the merge queue"
+}
 case_merge_pipeline() {
   setup true pipeline; sup work "$REPO"
   assert_match "$(cat "$TEST_CTRL/gh.log")" "pr edit https://github.com/example/repo/pull/7 --add-label automerge" "labelled as soon as the PR opens"
@@ -1160,6 +1202,18 @@ case_target() {
   assert_eq "$(bead3 .status)" closed "merged: closed"
   assert_nofile "$BEAD_LOOP_STATE/repo/inflight/t-3" "inflight cleared"
   assert_nofile "$BEAD_LOOP_STATE/repo/target/t-3" "target/t-3 removed with inflight/t-3"
+}
+case_target_external_merge_mode() {
+  # The repo merges on green (auto); its target t is merged by the maintainer (external).
+  # The merge row carries the PR's own mode, so the page (prChips reads p.merge_mode, not
+  # the repo's merge) shows t-3 as awaiting the maintainer, and the loop does not merge it.
+  setup_target
+  echo 'merge = "external"' >>"$REPO/.bead-loop.toml"   # inside [targets.t], the last table
+  sup work "$REPO" t-3; set_checks '[{"context":"ci","state":"SUCCESS"}]'; sup reconcile "$REPO"
+  assert_eq "$(jq -r .state "$TEST_CTRL/pr.json")" OPEN "green on an external target: not merged"
+  j=$(sup --json status "$REPO")
+  assert_eq "$(jq -r .merge <<<"$j")" auto "the repo's own merge"
+  assert_eq "$(jq -r '.queues.merge[0].merge_mode' <<<"$j")" external "the PR's merge mode is its target's"
 }
 case_target_unknown() {
   # work:NAME naming no [targets.NAME] (or two work: labels) is a config mistake, not the
