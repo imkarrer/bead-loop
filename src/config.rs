@@ -470,6 +470,11 @@ impl Repo {
                 approvals: Approvals::All,
             });
         }
+        for (i, s) in stages.iter().enumerate() {
+            if s.worker.is_empty() {
+                die(&format!("{slug}: stage {} names no worker; set model or [[stages]]", i + 1));
+            }
+        }
         let base_remote = cfg.str("base_remote", "origin");
         let mut base = cfg.str("base", "");
         if base.is_empty() {

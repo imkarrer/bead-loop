@@ -1,7 +1,6 @@
 ---
 description: Post-mortems one failed round for the next round's work order, without editing or reading anything beyond its prompt.
 mode: primary
-model: acbox/utility
 temperature: 0.1
 steps: 40
 tools:

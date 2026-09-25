@@ -1,7 +1,6 @@
 ---
 description: Writes the brief for a bead the bead-loop supervisor has parked — what each round tried, why it was sent back, and the question its owner has to answer — without editing. Ends with QUESTION.
 mode: primary
-model: acbox/coder
 temperature: 0.1
 permission:
   edit: deny

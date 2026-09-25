@@ -1,7 +1,6 @@
 ---
 description: Works one bead to a commit on the current branch, non-interactively, for the bead-loop supervisor. Ends with DONE or BLOCKED.
 mode: primary
-model: devbox/coder
 temperature: 0.1
 tools:
   todowrite: false

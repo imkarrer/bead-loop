@@ -1,7 +1,6 @@
 ---
 description: Pre-checks one bead's round for the senior reviewer, before it sees it, without editing. Ends with PASS or SEND BACK.
 mode: primary
-model: acbox/utility
 temperature: 0.1
 steps: 40
 tools:
