@@ -9,7 +9,7 @@
 //! server never answered). `stats` reads both and sums them over four windows.
 //!
 //! What the numbers mean: *landed* is a bead the loop merged and closed; *first try*
-//! landed with no send-back; *local* landed on a stage whose worker is not claude/*;
+//! landed with no send-back; *local* landed on a stage whose worker's provider is not metered;
 //! *rounds per landed* counts send-backs plus the round that landed; *time to land*
 //! runs from the first claim to the merge. Send-backs are split by the reason the
 //! note gives and by the model that was working. Model time is the sum of the
@@ -265,6 +265,8 @@ struct Bead {
     failures: u64,
     /// the worker of the stage that count lands on
     worker: String,
+    /// the worker's provider costs money: `cost = "metered"`
+    metered: bool,
     events: Vec<Event>,
     /// `bead-loop: URL was closed without merging` — no date on that note; the bead's updated_at
     closed_unmerged: Option<i64>,
@@ -293,6 +295,7 @@ fn bead_of(repo: &Repo, b: &Value) -> Option<Bead> {
     let noted = events.iter().filter_map(|e| if let Event::SendBack { round, .. } = e { Some(*round) } else { None }).max().unwrap_or(0);
     let failures = if repo.rs.join("failures").join(&id).exists() { repo.failures_of(&id) } else { noted };
     let worker = repo.stage_for(failures).map(|st| st.model).unwrap_or_else(|| "exhausted".into());
+    let metered = repo.resolve(&worker).provider.cost == "metered";
     let closed_unmerged = if notes.contains("was closed without merging") { parse_iso(s("updated_at")).or(closed) } else { None };
     Some(Bead {
         id,
@@ -304,6 +307,7 @@ fn bead_of(repo: &Repo, b: &Value) -> Option<Bead> {
         url,
         failures,
         worker,
+        metered,
         events,
         closed_unmerged,
     })
@@ -430,7 +434,7 @@ fn window_json(beads: &[Bead], rounds: &[(String, LogRound)], from: i64, now: i6
                     if n == 0 {
                         first_try += 1;
                     }
-                    if !b.worker.starts_with("claude/") {
+                    if !b.metered {
                         local += 1;
                     }
                     bump(&mut landed_by, &b.worker);
