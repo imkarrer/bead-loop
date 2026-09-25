@@ -153,6 +153,7 @@ Every row is a case in `test/run.sh`.
 | Gate passes | in_progress; review queue | kept, in its worktree |
 | Reviewer `REJECT:` (any verdict that is not `APPROVE:`) | note with the rejection, +1 failure; dev queue — the worker fixes in place | kept |
 | Reviewer `APPROVE:` | in_progress, comment with the url; merge queue | pushed; PR opened, or the existing one updated |
+| The same `REJECT:` twice running (first REJECT line equal, whitespace aside) | note with the rejection and "the same REJECT twice: escalated to <worker>", the failure count jumps to the next stage with a different worker (parked as exhausted if there is none); dev queue | kept |
 | Push or `gh pr create` refused | **held** in the review queue with gh's words | pushed / not |
 | CI green, `merge = "auto"` | closed with the PR url | squash-merged by the watcher, branch deleted |
 | CI green, `merge = "pipeline"` | closed once the pipeline has merged; **held** if it has not after 30 min | labelled `automerge` at open; the pipeline merges |
