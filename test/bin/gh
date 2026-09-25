@@ -12,9 +12,11 @@ if [ "$1" = auth ] && [ "$2" = status ]; then
 fi
 [ "$1" = pr ] || { echo "stub gh: only pr" >&2; exit 2; }
 primary_url() { [ -e "$TEST_CTRL/pr.json" ] && jq -r .url "$TEST_CTRL/pr.json" 2>/dev/null || true; }
-# The primary PR (pr.json) or an extra one (extra-prs.json), by its url — or, still, a
-# bare number, for anything that has not moved off it.
-is_primary() { [ "$1" = 7 ] || [ "$1" = "$(primary_url)" ]; }
+primary_head() { [ -e "$TEST_CTRL/pr.json" ] && jq -r '.head // empty' "$TEST_CTRL/pr.json" 2>/dev/null || true; }
+# The primary PR (pr.json) or an extra one (extra-prs.json), by its url, its head branch
+# (the conflict round's `gh pr view BRANCH`, which has no url once dev's own inflight
+# file is gone) — or, still, a bare number, for anything that has not moved off it.
+is_primary() { [ "$1" = 7 ] || [ "$1" = "$(primary_url)" ] || { [ -n "$1" ] && [ "$1" = "$(primary_head)" ]; }; }
 case $2 in
   create)
     head=; repo=; while [ $# -gt 0 ]; do case $1 in --head) head=$2;; --repo) repo=$2;; esac; shift; done
