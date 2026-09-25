@@ -13,9 +13,11 @@ on_exhaust = "repeat"                  # repeat: cycle the stages until it lands
 # conflict_worker = "claude/sonnet"    # who rebases a PR that conflicts with the base (default: the last stage's worker)
 # brief_model = "claude/sonnet"        # who writes the brief when a bead is parked for you — what each round tried, why it
                                        # failed, the question to answer (default: the last stage's worker; "none" for no brief)
-# research_model = "acbox/reviewer"    # who reads the repo for a bead before its first worker round and writes the brief — Files / Shape / Check / Pitfalls, at most sixty lines — that every worker prompt then carries (agent `bead-researcher`, read-only). Its round runs on the lane whose models match it, reviews first, so on this box the 80B on `acbox` researches while the GPU implements. A worker lane with nothing briefed to take takes a bead without a brief rather than wait. `BLOCKED:` from the researcher parks the bead before any edit. Research never counts a failure
-# research = "first"                   # `first`: one brief per bead · `every`: a send-back sets the brief aside and the next research round refines it with the round's note
-# research_timeout = 900               # seconds a research round may run, capped by the stage's `timeout`; past it the worker goes without a brief. A bead labelled `harness:aider` gets no research round at all: whoever filed it already named its files
+# research_model = "acbox/reviewer"    # who writes the research brief before the first worker round (default: off)
+# research = "first"                   # first: one brief per bead · every: refined after each send-back
+# research_timeout = 900               # seconds a research round may run, capped by the stage's `timeout`; past it the
+                                       # worker goes without a brief. A bead labelled `harness:aider` gets no research
+                                       # round at all: whoever filed it already named its files
 # adopt = true                         # open bead/* PRs from anyone join the loop and merge on green
 # max_inflight = 2                     # PRs in the merge queue before the dev lane pauses; unset = no cap, bd's
                                        # dependencies are the only gate (the queues absorb the rest)
@@ -25,7 +27,8 @@ on_exhaust = "repeat"                  # repeat: cycle the stages until it lands
                                        # in it -- a read/compaction loop, not the model at work (0 disables)
 # stall_steps = 60                      # opencode sessions only: abort a session past this many tool calls
                                        # since its last edit/write/patch call (0 disables)
-# precheck_model = "acbox/reviewer"    # runs after the gate, before the review queue; SEND BACK is a failure, anything else is not
+# precheck_model = "acbox/reviewer"    # runs after the gate, before the review queue; SEND BACK is a failure,
+                                       # anything else is not
 # model = "devbox/coder"               # the worker when no [[stages]] table applies
 # attach = "http://localhost:8080"     # an opencode server url; sessions run there and stream in its web UI
 
