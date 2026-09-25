@@ -458,9 +458,38 @@ pub fn rebase_order(base_remote: &str, base: &str) -> String {
     )
 }
 
+/// The researcher's prompt: the bead and the base; after a send-back under `research =
+/// "every"`, the brief the worker had and the note it was sent back with, to refine.
+#[allow(dead_code)] // wired by bl-iej.11
+pub fn research_prompt(json: &Value, base: &str, previous: &str, last_note: &str) -> String {
+    let refine = if previous.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "\n\nA worker already tried this bead with the brief under <previous-research> and was sent back with the note under <send-back>. Refine the brief so the next round does not fail the same way; keep what was right, do not start over.\n\n<previous-research>\n{}\n</previous-research>\n\n<send-back>\n{}\n</send-back>",
+            previous.trim_end(),
+            last_note.trim_end()
+        )
+    };
+    format!(
+        "Research the bead below in this repository, a fresh worktree of {base}, for the smaller model that will implement it next.\n\n<bead>\n{}\n</bead>{refine}\n\nAnswer under the four headings Files / Shape / Check / Pitfalls, in at most sixty lines, every path from the repository root as it is on disk. If a claim in the bead is false and it cannot be done as written, end instead with one line: BLOCKED: <the false claim, with file:line>.",
+        render_bead(json)
+    )
+}
+
 /// The worker's prompt: the bead, the branch and whether it is resumed, the rebase order
-/// of a conflict round, and the notes of the rounds sent back before (the last three).
-pub fn dev_prompt(json: &Value, branch: &str, base: &str, resumed: bool, gate: &str, rebase: &str, hist: &str) -> String {
+/// of a conflict round, the research brief when one was written, and the notes of the
+/// rounds sent back before (the last three).
+#[allow(clippy::too_many_arguments)]
+pub fn dev_prompt(json: &Value, branch: &str, base: &str, resumed: bool, gate: &str, rebase: &str, research: &str, hist: &str) -> String {
+    let research_block = if research.trim().is_empty() {
+        String::new()
+    } else {
+        format!(
+            "\n\nA researcher read the repository for this bead before you; its brief follows. Start from its Files and prove the change with its Check; where it and the bead disagree, the bead wins.\n\n<research>\n{}\n</research>",
+            research.trim_end()
+        )
+    };
     let history_block = if hist.is_empty() {
         String::new()
     } else {
@@ -474,7 +503,7 @@ pub fn dev_prompt(json: &Value, branch: &str, base: &str, resumed: bool, gate: &
         format!(" The gate this branch must pass before review: `{gate}`. Run it before you write DONE:.")
     };
     format!(
-        "Work the bead below in this repository, following the bead-workflow skill.\n\n<bead>\n{}\n</bead>\n\nYou are on branch {branch}{}.{gate_block} Commit your work on this branch and leave .beads/ untouched. End your turn with one line: DONE: <evidence> or BLOCKED: <note>.{rebase}{history_block}",
+        "Work the bead below in this repository, following the bead-workflow skill.\n\n<bead>\n{}\n</bead>\n\nYou are on branch {branch}{}.{gate_block} Commit your work on this branch and leave .beads/ untouched. End your turn with one line: DONE: <evidence> or BLOCKED: <note>.{rebase}{research_block}{history_block}",
         render_bead(json),
         if resumed {
             ", which already carries your earlier commit(s) for this bead: fix them in place rather than starting over".to_string()
@@ -737,7 +766,8 @@ pub fn dev_one(repo: &Repo, opts: &Opts, id: Option<&str>, last_id: &mut Option<
     // A branch left from an earlier round (sent back by review or CI) is resumed, not
     // restarted: the worker fixes its commit. A dev-side failure deleted the branch.
     let resumed = branch_exists(repo, &branch);
-    let prompt = dev_prompt(&json, &branch, &repo.base, resumed, &repo.gate, &rebase, &hist);
+    let research = repo.research_of(&id).unwrap_or_default();
+    let prompt = dev_prompt(&json, &branch, &repo.base, resumed, &repo.gate, &rebase, &research, &hist);
     // A worker session of this bead still running on the server since the last process
     // (recover found it): the round is that session, waited on, not a new one — and the
     // worktree it works in is left alone. Without the worktree there is nothing to rejoin.
@@ -1235,13 +1265,13 @@ mod tests {
     #[test]
     fn dev_prompt_says_fresh_or_resumed_and_carries_the_history() {
         let j: Value = serde_json::json!([{"id":"t-1","title":"T","description":"D"}]);
-        let fresh = dev_prompt(&j, "bead/t-1", "main", false, "", "", "");
+        let fresh = dev_prompt(&j, "bead/t-1", "main", false, "", "", "", "");
         assert!(fresh.contains("<bead>\nid: t-1\n"), "the bead rendered into the prompt");
         assert!(fresh.contains("You are on branch bead/t-1, a fresh worktree of main."));
         assert!(!fresh.contains("<previous-attempts>"), "first attempt has no history");
         assert!(!fresh.contains("The gate this branch must pass"), "no gate line when the gate is empty");
         assert!(fresh.ends_with("DONE: <evidence> or BLOCKED: <note>."));
-        let gated = dev_prompt(&j, "bead/t-1", "main", false, "cargo test", "", "");
+        let gated = dev_prompt(&j, "bead/t-1", "main", false, "cargo test", "", "", "");
         assert!(
             gated.contains("You are on branch bead/t-1, a fresh worktree of main. The gate this branch must pass before review: `cargo test`. Run it before you write DONE:."),
             "the gate line follows the branch sentence"
@@ -1251,16 +1281,39 @@ mod tests {
             "gate line comes before the DONE line"
         );
         let hist = "round 1 (stub/fast): worker made no commit\nround 2 (stub/fast): review (r) rejected: REJECT: work.txt:1 For the worker: - What is wrong: x";
-        let again = dev_prompt(&j, "bead/t-1", "main", true, "", "", hist);
+        let again = dev_prompt(&j, "bead/t-1", "main", true, "", "", "", hist);
         assert!(
             again.contains("which already carries your earlier commit(s) for this bead: fix them in place rather than starting over"),
             "told to fix, not restart"
         );
         assert!(again.contains("a work order from the senior reviewer"), "told to act on it");
         assert!(again.contains(&format!("<previous-attempts>\n{hist}\n</previous-attempts>")), "the notes verbatim");
-        let rebase = dev_prompt(&j, "bead/t-1", "main", true, "", &rebase_order("origin", "main"), "");
+        let rebase = dev_prompt(&j, "bead/t-1", "main", true, "", &rebase_order("origin", "main"), "", "");
         assert!(rebase.contains("Your job this round is the rebase, not new work. Run: git fetch origin && git rebase origin/main"));
         assert!(rebase.find("rebase origin/main").unwrap() > rebase.find("</bead>").unwrap(), "the order comes after the bead");
+    }
+    #[test]
+    fn research_prompt_carries_bead_and_previous_brief() {
+        let j: Value = serde_json::json!([{"id":"t-1","title":"T","description":"Edit work.txt"}]);
+        let first = research_prompt(&j, "main", "", "");
+        assert!(first.contains("<bead>\nid: t-1\n"), "the bead rendered");
+        assert!(first.contains("a fresh worktree of main"));
+        assert!(first.contains("Files / Shape / Check / Pitfalls") && first.contains("at most sixty lines"));
+        assert!(first.ends_with("BLOCKED: <the false claim, with file:line>."));
+        assert!(!first.contains("<previous-research>"), "nothing to refine the first time");
+        let again = research_prompt(&j, "main", "Files:\n- work.txt\n", "round 1 (stub/worker): worker made no commit\n");
+        assert!(again.contains("<previous-research>\nFiles:\n- work.txt\n</previous-research>"));
+        assert!(again.contains("<send-back>\nround 1 (stub/worker): worker made no commit\n</send-back>"));
+        assert!(again.contains("Refine the brief") && again.contains("do not start over"));
+        assert!(again.find("</bead>").unwrap() < again.find("<previous-research>").unwrap(), "the bead first");
+    }
+    #[test]
+    fn dev_prompt_carries_the_research_before_the_history() {
+        let j: Value = serde_json::json!([{"id":"t-1","title":"T","description":"D"}]);
+        let p = dev_prompt(&j, "bead/t-1", "main", false, "", "", "Files:\n- work.txt\n", "round 1 (x): y");
+        assert!(p.contains("<research>\nFiles:\n- work.txt\n</research>"), "the brief verbatim");
+        assert!(p.find("</research>").unwrap() < p.find("<previous-attempts>").unwrap(), "before the history");
+        assert!(!dev_prompt(&j, "bead/t-1", "main", false, "", "", "  \n", "").contains("<research>"), "a blank brief is none");
     }
     #[test]
     fn gate_fix_prompt_feeds_the_gate_back() {

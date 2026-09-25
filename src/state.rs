@@ -9,6 +9,8 @@
 //!   file says what. Shown in the human queue, polled, cleared when the reason goes.
 //! - `parked/ID`   the record of a parking: reason, stage, question, brief
 //! - `rejoin/ID`   `SID worker|reviewer`, a session to wait on after a restart
+//! - `research/ID` the brief a research round wrote, for the worker prompt; `.prev` the one
+//!   a send-back cleared under `research = "every"`, for the next research round to refine
 //! - `target/ID`   the `[targets.NAME]` name `for_bead` resolved at claim, when it is not
 //!   the default target — read back by `Repo::for_id` so the review lane, the merge
 //!   watcher, `open`, `answer` and `escalate` act on the same checkout; goes with
@@ -90,6 +92,28 @@ impl Repo {
     }
     pub fn clear_target(&self, id: &str) {
         let _ = std::fs::remove_file(self.target_path(id));
+    }
+    /// `$RS/research/ID`: the brief the research round wrote, carried by the bead's
+    /// worker prompt. Absent (with `research_model` set) is what makes the next pick a
+    /// research round.
+    pub fn research_path(&self, id: &str) -> PathBuf {
+        self.rs.join("research").join(id)
+    }
+    /// `$RS/research/ID.prev`: the brief a send-back cleared under `research = "every"`,
+    /// handed to the next research round to refine.
+    #[allow(dead_code)] // wired by bl-iej.11
+    pub fn research_prev_path(&self, id: &str) -> PathBuf {
+        self.rs.join("research").join(format!("{id}.prev"))
+    }
+    pub fn research_of(&self, id: &str) -> Option<String> {
+        read_to_string(&self.research_path(id))
+    }
+    /// The brief and any earlier one go: the bead closed, parked, or its research is to
+    /// run again from nothing.
+    #[allow(dead_code)] // wired by bl-iej.11
+    pub fn research_clear(&self, id: &str) {
+        let _ = std::fs::remove_file(self.research_path(id));
+        let _ = std::fs::remove_file(self.research_prev_path(id));
     }
     pub fn wt(&self, id: &str) -> PathBuf {
         self.rs.join("wt").join(id)
@@ -285,6 +309,19 @@ mod tests {
     use super::*;
     fn st(w: &str, r: &str, f: u64) -> Stage {
         Stage { worker: w.into(), reviewer: r.into(), failures: f, timeout: None }
+    }
+    #[test]
+    fn research_file_is_read_and_cleared() {
+        let d = crate::config::scratch("research");
+        let repo = crate::config::test_repo(&d, &["a"]);
+        assert_eq!(repo.research_of("t-1"), None, "no brief yet");
+        write_file(&repo.research_path("t-1"), "Files:\n- work.txt\n");
+        write_file(&repo.research_prev_path("t-1"), "old\n");
+        assert_eq!(repo.research_of("t-1").as_deref(), Some("Files:\n- work.txt\n"));
+        repo.research_clear("t-1");
+        assert_eq!(repo.research_of("t-1"), None, "the brief goes");
+        assert!(!repo.research_prev_path("t-1").exists(), "and the earlier one");
+        let _ = std::fs::remove_dir_all(&d);
     }
     #[test]
     fn stages_by_failure_count() {
