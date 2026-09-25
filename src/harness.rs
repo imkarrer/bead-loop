@@ -1,4 +1,4 @@
-//! `run_agent`: one non-interactive session, in the harness the model name selects —
+//! `run_agent`: one non-interactive session, in the harness `Repo::resolve` names for the model —
 //! `claude/<alias>` is Claude Code (`claude -p`, the agent file's body as its system
 //! prompt, tools by role), `aider:<provider>/<model>` is aider on the opencode provider's
 //! server (the dev lane only), anything else is an opencode agent. Prints the last text
@@ -126,14 +126,15 @@ pub fn run_agent(
     let mut never_answered = false;
     let mut errors = String::new();
     let mut stalled = None;
-    if let Some(rest) = model.strip_prefix("aider:") {
+    let r = repo.resolve(model);
+    if r.harness == "aider" {
         // Aider explores nothing: it edits the files it is handed, so the files are the
         // ones the bead's DESCRIPTION names that exist in the worktree. The server is the
         // provider's baseURL in opencode's config, spoken as openai/<model>; local servers
         // ignore the key. Aider's scratch (.aider*) leaves the worktree, or settle_worktree
         // would commit it; the chat goes beside the log.
-        let provider = rest.split('/').next().unwrap_or("");
-        let model_name = rest.split_once('/').map(|(_, m)| m).unwrap_or(rest);
+        let provider = r.provider.via.as_str();
+        let model_name = r.model.as_str();
         let (base, key) = opencode_provider(provider);
         if base.is_empty() {
             log(&format!(
@@ -176,7 +177,8 @@ pub fn run_agent(
         rc = run_to_files(&mut c, stdout, stderr);
         clean_aider(dir);
         full = read_to_string(logf).unwrap_or_default();
-    } else if let Some(alias) = model.strip_prefix("claude/") {
+    } else if r.harness == "claude-code" {
+        let alias = r.model.as_str();
         // The worker edits; the reviewer and the briefer only read.
         let tools = if agent != "bead-worker" {
             "Read,Glob,Grep,Bash(git *),Bash(cat *),Bash(ls *),Bash(rg *),Bash(grep *)"
