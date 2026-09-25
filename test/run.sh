@@ -18,6 +18,9 @@ SUP=${SUP:-$HERE/../target/debug/bead-supervisor}   # the Rust binary; SUP=... t
 export REAL_CURL=${REAL_CURL:-$(command -v curl || true)}
 export PATH=$HERE/bin:$PATH
 export GIT_AUTHOR_NAME=test GIT_AUTHOR_EMAIL=t@example.com GIT_COMMITTER_NAME=test GIT_COMMITTER_EMAIL=t@example.com
+# The suite may itself run as aider's lint inside a loop round, which exports the provider for
+# aider: the cases' own aider stub must see only what each case sets.
+unset OPENAI_API_BASE OPENAI_API_KEY
 # A lane with nothing to do looks at the other lane three times, LANE_WAIT apart, before
 # it leaves a tick: 10 s in production, where the pause is what makes the check cheap;
 # here it would be 20 s of nothing per idle lane. A case about the wait sets its own.
