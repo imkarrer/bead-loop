@@ -102,6 +102,8 @@ fn reason_of(text: &str) -> &'static str {
         "gate"
     } else if t.starts_with("review (") {
         "review"
+    } else if t.starts_with("precheck (") {
+        "precheck"
     } else if t.starts_with("CI red") {
         "CI red"
     } else if t.starts_with("worker exited 124") {
@@ -368,11 +370,69 @@ pub fn log_rounds(repo: &Repo) -> Vec<LogRound> {
     out
 }
 
+/// What a `bead-prechecker` session's log says it decided.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum PrecheckOutcome {
+    Pass,
+    /// already the note's `precheck` reason (`reason_of`, via the bead's send-back count):
+    /// counted there, not again here
+    SentBack,
+    /// no verdict line, or the server never answered
+    Skipped,
+}
+
+/// One `bead-prechecker` session from the state dir's logs/.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PrecheckRound {
+    start: i64,
+    outcome: PrecheckOutcome,
+}
+
+/// The sessions under `logs/` named `ID.STAMP.precheck.jsonl`: not a worker or review
+/// round (`log_rounds` skips them, so they never touch model_time), but the scoreboard's
+/// pre-check line wants to know how many passed or gave no verdict at all. Read the
+/// way `log_rounds` reads `empty`: its last non-empty line, not the JSON inside it.
+pub fn precheck_rounds(repo: &Repo) -> Vec<PrecheckRound> {
+    let mut out = Vec::new();
+    let rd = match std::fs::read_dir(repo.rs.join("logs")) {
+        Ok(rd) => rd,
+        Err(_) => return out,
+    };
+    for e in rd.flatten() {
+        let name = match e.file_name().into_string() {
+            Ok(n) => n,
+            Err(_) => continue,
+        };
+        let stem = match name.strip_suffix(".precheck.jsonl") {
+            Some(s) => s,
+            None => continue,
+        };
+        let stamp = match stem.rsplit_once('.') {
+            Some((_, stamp)) => stamp,
+            None => continue,
+        };
+        let start = match parse_stamp(stamp) {
+            Some(t) => t,
+            None => continue,
+        };
+        let raw = read_to_string(&e.path()).unwrap_or_default();
+        let last = raw.lines().map(str::trim).rfind(|l| !l.is_empty());
+        let outcome = match last {
+            Some(l) if l.starts_with("PASS:") => PrecheckOutcome::Pass,
+            Some(l) if l.starts_with("SEND BACK:") => PrecheckOutcome::SentBack,
+            _ => PrecheckOutcome::Skipped,
+        };
+        out.push(PrecheckRound { start, outcome });
+    }
+    out
+}
+
 /// One repo's raw material for the scoreboard.
 pub struct Input<'a> {
     pub repo: &'a Repo,
     pub beads: Vec<Value>,
     pub rounds: Vec<LogRound>,
+    pub prechecks: Vec<PrecheckRound>,
 }
 
 /// The windows, longest last: `all` is everything since the first event.
@@ -404,7 +464,7 @@ fn counts(m: &BTreeMap<String, u64>) -> Value {
 }
 
 /// The scoreboard for one window: events at or after `from`.
-fn window_json(beads: &[Bead], rounds: &[(String, LogRound)], from: i64, now: i64, since: i64) -> Value {
+fn window_json(beads: &[Bead], rounds: &[(String, LogRound)], prechecks: &[PrecheckRound], from: i64, now: i64, since: i64) -> Value {
     let inside = |t: i64| t >= from && t <= now;
     let mut landed = 0u64;
     let mut first_try = 0u64;
@@ -495,6 +555,15 @@ fn window_json(beads: &[Bead], rounds: &[(String, LogRound)], from: i64, now: i6
             review_rounds += 1;
         }
     }
+    let precheck_sent_back = *by_reason.get("precheck").unwrap_or(&0);
+    let (mut precheck_passed, mut precheck_skipped) = (0u64, 0u64);
+    for p in prechecks.iter().filter(|p| inside(p.start)) {
+        match p.outcome {
+            PrecheckOutcome::Pass => precheck_passed += 1,
+            PrecheckOutcome::Skipped => precheck_skipped += 1,
+            PrecheckOutcome::SentBack => {}
+        }
+    }
     let span = if from == i64::MIN { (now - since).max(0) } else { (now - from).min((now - since).max(0)) };
     json!({
         "span_s": span,
@@ -508,6 +577,7 @@ fn window_json(beads: &[Bead], rounds: &[(String, LogRound)], from: i64, now: i6
             "by_reason": counts(&by_reason),
             "by_model": Value::Object(by_model.iter().map(|(m, (n, r))| (m.clone(), json!({"total": n, "by_reason": counts(r)}))).collect()),
         },
+        "precheck": {"sent_back": precheck_sent_back, "passed": precheck_passed, "skipped": precheck_skipped},
         "holds": holds, "rebases": rebases, "escalations": escalations, "answers": answers, "interrupted": interrupted,
         "model_time": {"worker_s": worker_s, "review_s": review_s, "worker_usd": worker_usd, "review_usd": review_usd, "worker_rounds": worker_rounds, "review_rounds": review_rounds, "empty_rounds": empty},
         "by_repo": Value::Object(by_repo.iter().map(|(s, (l, sb, w))| (s.clone(), json!({"landed": l, "send_backs": sb, "worked": w.len()}))).collect()),
@@ -518,9 +588,11 @@ fn window_json(beads: &[Bead], rounds: &[(String, LogRound)], from: i64, now: i6
 pub fn stats_from(inputs: &[Input], now: i64) -> Value {
     let mut beads: Vec<Bead> = Vec::new();
     let mut rounds: Vec<(String, LogRound)> = Vec::new();
+    let mut prechecks: Vec<PrecheckRound> = Vec::new();
     for inp in inputs {
         beads.extend(inp.beads.iter().filter_map(|b| bead_of(inp.repo, b)));
         rounds.extend(inp.rounds.iter().map(|r| (inp.repo.slug.clone(), r.clone())));
+        prechecks.extend(inp.prechecks.iter().cloned());
     }
     let since = beads
         .iter()
@@ -531,7 +603,7 @@ pub fn stats_from(inputs: &[Input], now: i64) -> Value {
     let mut windows = Map::new();
     for (name, len) in WINDOWS {
         let from = if len == i64::MAX { i64::MIN } else { now - len };
-        windows.insert(name.into(), window_json(&beads, &rounds, from, now, since));
+        windows.insert(name.into(), window_json(&beads, &rounds, &prechecks, from, now, since));
     }
     // Every bead the loop finished, newest first: what the page lists under the tiles.
     let mut finished: Vec<&Bead> = beads.iter().filter(|b| b.how != How::Open).collect();
@@ -574,7 +646,7 @@ pub fn stats_json(repos: &[Repo]) -> Value {
                     beads.extend(a);
                 }
             }
-            Input { repo, beads, rounds: log_rounds(repo) }
+            Input { repo, beads, rounds: log_rounds(repo), prechecks: precheck_rounds(repo) }
         })
         .collect();
     stats_from(&inputs, now())
@@ -621,6 +693,14 @@ pub fn stats_text(j: &Value) -> String {
         if let Some(r) = reasons.filter(|r| !r.is_empty()) {
             out.push_str(&format!("       send-backs by reason: {r}\n"));
         }
+        let (sent_back, passed, skipped) = (
+            w["precheck"]["sent_back"].as_u64().unwrap_or(0),
+            w["precheck"]["passed"].as_u64().unwrap_or(0),
+            w["precheck"]["skipped"].as_u64().unwrap_or(0),
+        );
+        if sent_back + passed + skipped > 0 {
+            out.push_str(&format!("       pre-check: {sent_back} sent back, {passed} passed, {skipped} skipped\n"));
+        }
     }
     out
 }
@@ -663,7 +743,42 @@ mod tests {
         assert_eq!(reason_of("worker exited 124 (timeout=3600 s). Log: /x"), "timed out");
         assert_eq!(reason_of("worker exited 1 (timeout=3600 s). Log: /x"), "crashed");
         assert_eq!(reason_of("reviewer exited 2. Log: /x"), "crashed");
+        assert_eq!(reason_of("precheck (acbox/coder) sent back:\nSEND BACK: no test"), "precheck");
         assert_eq!(reason_of("something new"), "other");
+    }
+
+    #[test]
+    fn precheck_sendbacks_count_apart_from_review_beside_pass_and_skip_from_the_logs() {
+        let landed = "bead-loop: https://x/pull/1 merged; checks at merge: ci=SUCCESS";
+        let beads = vec![bead(
+            "t-1",
+            "closed",
+            "2026-09-19T00:00:00Z",
+            "2026-09-19T20:00:00Z",
+            landed,
+            "bead-loop round 1 (fast) 2026-09-19T01:00+00:00: precheck (fast) sent back:\nSEND BACK: x\n\
+                 bead-loop round 2 (fast) 2026-09-19T02:00+00:00: precheck (fast) sent back:\nSEND BACK: y\n\
+                 bead-loop round 3 (fast) 2026-09-19T03:00+00:00: review (fast) rejected:\nREJECT: z\n",
+        )];
+        let d = crate::config::scratch("stats-precheck");
+        let repo = crate::config::test_repo(&d, &["fast:rev:2"]);
+        let now = parse_iso("2026-09-20T00:00:00Z").unwrap();
+        let h = |n: i64| now - n * 3600;
+        let prechecks = vec![
+            PrecheckRound { start: h(20), outcome: PrecheckOutcome::Pass },
+            PrecheckRound { start: h(19), outcome: PrecheckOutcome::Pass },
+            PrecheckRound { start: h(18), outcome: PrecheckOutcome::Pass },
+            PrecheckRound { start: h(17), outcome: PrecheckOutcome::Skipped },
+            PrecheckRound { start: 100, outcome: PrecheckOutcome::Pass }, // outside every window: not 3d ago
+        ];
+        let j = stats_from(&[Input { repo: &repo, beads, rounds: Vec::new(), prechecks }], now);
+        let w7 = &j["windows"]["7d"];
+        assert_eq!(w7["send_backs"]["by_reason"], json!({"precheck": 2, "review": 1}));
+        assert_eq!(w7["precheck"], json!({"sent_back": 2, "passed": 3, "skipped": 1}));
+        let text = stats_text(&j);
+        assert!(text.contains("send-backs by reason: precheck 2, review 1"), "{text}");
+        assert!(text.contains("pre-check: 2 sent back, 3 passed"), "{text}");
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     #[test]
@@ -750,7 +865,7 @@ mod tests {
                 cost_usd: 1.0,
             },
         ];
-        let j = stats_from(&[Input { repo: &repo, beads, rounds }], now);
+        let j = stats_from(&[Input { repo: &repo, beads, rounds, prechecks: Vec::new() }], now);
         let w7 = &j["windows"]["7d"];
         assert_eq!(w7["landed"], 2, "t-1 and t-2; t-3 is older, t-4 was by hand");
         assert_eq!(w7["landed_first_try"], 1);
