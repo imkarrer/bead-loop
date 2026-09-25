@@ -178,8 +178,17 @@ impl Repo {
         v.sort();
         v
     }
+    /// The whole merge queue, every target together — `status`'s count; the two
+    /// `max_inflight` gates (round.rs, lanes.rs) want `inflight_count_for` instead.
+    #[allow(dead_code)]
     pub fn inflight_count(&self) -> u64 {
         self.inflight_ids().iter().filter(|id| !self.mark(id, "adopted").exists()).count() as u64
+    }
+    /// `inflight_count`, restricted to the beads claimed on `target` (`target_of`; `""`
+    /// is the default target) — so a PR waiting on a foreign repo's CI does not count
+    /// against this repo's own `max_inflight` (docs/design-targets.md).
+    pub fn inflight_count_for(&self, target: &str) -> u64 {
+        self.inflight_ids().iter().filter(|id| !self.mark(id, "adopted").exists() && self.target_of(id) == target).count() as u64
     }
 
     // ---- stages -----------------------------------------------------------------
@@ -355,6 +364,18 @@ mod tests {
         touch(&repo.mark("t-1.2", "red"));
         assert_eq!(repo.inflight_ids(), vec!["t-1.2", "x-1"], "the markers are not PRs");
         assert_eq!(repo.inflight_count(), 1, "a dotted id counts; an adopted PR does not");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+    #[test]
+    fn inflight_count_for_is_per_target() {
+        let d = crate::config::scratch("inflight-target");
+        let repo = crate::config::test_repo(&d, &["a"]);
+        write_file(&repo.inflight_path("t-1"), "url\n");
+        write_file(&repo.inflight_path("t-2"), "url\n");
+        repo.set_target("t-2", "t");
+        assert_eq!(repo.inflight_count_for("t"), 1);
+        assert_eq!(repo.inflight_count_for(""), 1);
+        assert_eq!(repo.inflight_count(), 2);
         let _ = std::fs::remove_dir_all(&d);
     }
     #[test]

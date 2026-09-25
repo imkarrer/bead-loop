@@ -356,6 +356,19 @@ case_inflight_limits_tick() {
   assert_eq "$(calls)" "" "max_inflight = 1: no new bead while a PR is open"
   assert_eq "$(jq -r '.[]|select(.id=="t-2")|.status' "$BD_STATE/issues.json")" open "t-2 untouched"
 }
+case_inflight_limits_per_target() {
+  # max_inflight counts per target (docs/design-targets.md): a work:t PR already in the
+  # merge queue does not stop the default target's own beads, only a second work:t one.
+  setup_target true auto stub/reviewer 'max_inflight = 1'
+  mkdir -p "$BEAD_LOOP_STATE/repo/inflight" "$BEAD_LOOP_STATE/repo/target"
+  echo https://github.com/example/repo/pull/9 >"$BEAD_LOOP_STATE/repo/inflight/t-9"
+  echo t >"$BEAD_LOOP_STATE/repo/target/t-9"
+  sup work "$REPO"
+  assert_eq "$(calls)" "bead-worker bead-reviewer" "default-target t-1 still gets a round: t's queue is full, not the default's"
+  : >"$TEST_CTRL/calls"
+  sup work "$REPO" t-3
+  assert_eq "$(calls)" "" "a second work:t bead does not: t's max_inflight is already spent"
+}
 case_nothing_ready() {
   setup; jq '.[0].labels=[]' "$BD_STATE/issues.json" >"$BD_STATE/i.tmp" && mv "$BD_STATE/i.tmp" "$BD_STATE/issues.json"
   sup --once tick; assert_eq "$(calls)" "" "label filter respected"

@@ -159,8 +159,12 @@ fn queued_work(ctx: &Ctx) -> bool {
             if l.reviewer && crate::round::pick_runnable(&repo, "review", Some(l)).is_some() {
                 return true;
             }
-            if l.worker && repo.inflight_count() < repo.max_inflight && crate::round::pick_runnable(&repo, "dev", Some(l)).is_some() {
-                return true;
+            if l.worker {
+                if let Some(id) = crate::round::pick_runnable(&repo, "dev", Some(l)) {
+                    if repo.inflight_count_for(&repo.target_of(&id)) < repo.max_inflight {
+                        return true;
+                    }
+                }
             }
         }
     }

@@ -574,13 +574,6 @@ pub fn dev_one(repo: &Repo, opts: &Opts, id: Option<&str>, last_id: &mut Option<
             // The two idle lines: every pass in a tick (the bash did), once per change in
             // the resident loop, which passes every heartbeat.
             let name = lane.map(|l| l.name.as_str()).unwrap_or("dev");
-            if repo.inflight_count() >= repo.max_inflight {
-                crate::merge::say(
-                    &format!("{}/{name}-idle", repo.slug),
-                    format!("{}: {name}: {} in flight (max {}); waiting on CI", repo.slug, repo.inflight_count(), repo.max_inflight),
-                );
-                return Pass::Nothing;
-            }
             match pick_and_reserve(repo, "dev", lane) {
                 Some(i) => i,
                 None => {
@@ -628,6 +621,21 @@ pub fn dev_one(repo: &Repo, opts: &Opts, id: Option<&str>, last_id: &mut Option<
         }
     };
     let repo = &repo;
+    // Per target, not the whole merge queue: a PR waiting on a foreign repo's CI does not
+    // stop this repo's own beads (docs/design-targets.md).
+    let name = lane.map(|l| l.name.as_str()).unwrap_or("dev");
+    if repo.inflight_count_for(&repo.target) >= repo.max_inflight {
+        crate::merge::say(
+            &format!("{}/{name}-idle", repo.slug),
+            format!(
+                "{}: {name}: {} in flight (max {}); waiting on CI",
+                repo.slug,
+                repo.inflight_count_for(&repo.target),
+                repo.max_inflight
+            ),
+        );
+        return Pass::Nothing;
+    }
     let title = json.get(0).and_then(|b| b.get("title")).and_then(|t| t.as_str()).unwrap_or("").to_string();
     apply_harness_label(repo, &id, &json, &mut model);
     let branch = format!("bead/{id}");
