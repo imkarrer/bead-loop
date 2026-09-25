@@ -557,10 +557,18 @@ pub fn running_session(repo: &Repo, dir: &Path) -> Option<String> {
 /// The round a session's title says it is, for this bead: `ID · worker · …` (a round or its
 /// gate fix), `ID · reviewer · …`, `ID · research · …`. `None` for another bead's session or
 /// one that is not a round (the brief, the post-mortem). The title is the one record of a
-/// session's kind that survives a restart: the stop deletes the lane markers.
+/// session's kind that survives a plain stop: a plain stop deletes the lane markers, a
+/// restart keeps them.
 pub fn session_kind(id: &str, title: &str) -> Option<&'static str> {
     let rest = title.strip_prefix(id)?.strip_prefix(" · ")?;
     ["worker", "reviewer", "research"].into_iter().find(|k| rest == *k || rest.starts_with(&format!("{k} ·")))
+}
+
+/// The N in a title's `round N` segment (`ID · worker · round N`, `… · round N · gate fix`,
+/// `… · round N · seat 2`). `None` when no segment parses, including the gate fix's own
+/// title (`ID · worker · gate fix`, no round of its own) and the brief.
+pub fn session_round(title: &str) -> Option<u64> {
+    title.split(" · ").find_map(|seg| seg.strip_prefix("round ")?.parse().ok())
 }
 
 /// `GET /session/SID`'s title; `None` when the server does not say.
@@ -570,29 +578,58 @@ pub fn session_title(repo: &Repo, sid: &str) -> Option<String> {
     v.get("title").and_then(|t| t.as_str()).map(str::to_string)
 }
 
-/// Whether the session a rejoin marker names is the KIND of round about to wait on it. A
+/// Whether the session a rejoin marker names is the round about to wait on it — this
+/// bead, this kind, this round number, and (when the server says) this round's model. A
 /// session the server titles as some other round (a research round rejoined as the
 /// worker's, 25 Sep: bl-tka.2's worker round read the researcher's transcript and was
-/// charged "no commit") is aborted and not rejoined; the round starts its own. No title
-/// from the server: trusted, as before titles were read.
-pub fn rejoin_fits(repo: &Repo, id: &str, sid: &str, kind: &str) -> bool {
-    let Some(title) = session_title(repo, sid) else { return true };
-    if session_kind(id, &title) == Some(kind) {
-        return true;
+/// charged "no commit") is aborted and not rejoined; the round starts its own. So is a
+/// round whose model runs outside opencode (claude-code, aider) — that round's own client
+/// died with the process at the stop, so any session under its worktree is some other
+/// round's, opencode's own. A missing title or model from the server is trusted, as
+/// before either was read.
+pub fn rejoin_fits(repo: &Repo, id: &str, sid: &str, kind: &str, round: u64, model: &str) -> bool {
+    let slug = &repo.slug;
+    let abort = || crate::shell::curl_post(&format!("{}/session/{sid}/abort", repo.attach), 5);
+    let harness = repo.resolve(model).harness;
+    if harness != "opencode" {
+        log(&format!(
+            "{slug}: {id}: session {sid} is not this round's: {model} runs under {harness}, not opencode; aborting it rather than rejoining"
+        ));
+        abort();
+        return false;
     }
-    log(&format!("{}: {id}: session {sid} is \"{title}\", not a {kind} round; aborting it rather than rejoining", repo.slug));
-    crate::shell::curl_post(&format!("{}/session/{sid}/abort", repo.attach), 5);
-    false
+    let body = crate::shell::curl_get(&format!("{}/session/{sid}", repo.attach), None, 5).unwrap_or_default();
+    let v: Value = serde_json::from_str(&body).unwrap_or(Value::Null);
+    if let Some(title) = v.get("title").and_then(|t| t.as_str()) {
+        if session_kind(id, title) != Some(kind) {
+            log(&format!("{slug}: {id}: session {sid} is \"{title}\", not a {kind} round; aborting it rather than rejoining"));
+            abort();
+            return false;
+        }
+        if session_round(title) != Some(round) {
+            log(&format!("{slug}: {id}: session {sid} is \"{title}\", not round {round}; aborting it rather than rejoining"));
+            abort();
+            return false;
+        }
+    }
+    if let (Some(p), Some(m)) = (v.pointer("/model/providerID").and_then(|x| x.as_str()), v.pointer("/model/id").and_then(|x| x.as_str())) {
+        if format!("{p}/{m}") != model {
+            log(&format!("{slug}: {id}: session {sid} ran {p}/{m}, not {model}; aborting it rather than rejoining"));
+            abort();
+            return false;
+        }
+    }
+    true
 }
 
 /// A session that said DONE (or APPROVE) between the stop and this start: not busy now,
 /// so `running_session` misses it, but its result is sitting on the server unread. From
 /// `GET /session?directory=DIR` (newest first): the newest one, if its title is this
-/// bead's `ID · KIND` (`· worker · round N` or `· worker · gate fix`; `· reviewer · round
-/// N`) and it was updated after `cutoff` (the dev/review lane marker's mtime at the stop,
-/// epoch seconds) — the round that was running when the marker was written, not some
-/// older session the worktree happens to still carry.
-pub fn finished_session(repo: &Repo, id: &str, dir: &Path, kind: &str, cutoff: i64) -> Option<String> {
+/// round's (`session_kind` is `kind` and `session_round` is `round`) and it was updated
+/// after `cutoff` (the lane marker's mtime at the stop, epoch seconds) — the round that
+/// was running when the marker was written, not some older session the worktree happens
+/// to still carry.
+pub fn finished_session(repo: &Repo, id: &str, dir: &Path, kind: &str, round: u64, cutoff: i64) -> Option<String> {
     let attach = repo.attach.as_str();
     if attach.is_empty() || !crate::util::have("curl") {
         return None;
@@ -602,10 +639,10 @@ pub fn finished_session(repo: &Repo, id: &str, dir: &Path, kind: &str, cutoff: i
     let list: Value = serde_json::from_str(&body).ok()?;
     let newest = list.as_array()?.first()?;
     let title = newest.get("title").and_then(|t| t.as_str()).unwrap_or("");
-    if !title.starts_with(&format!("{id} · {kind}")) {
+    if session_kind(id, title) != Some(kind) || session_round(title) != Some(round) {
         return None;
     }
-    let updated = newest.pointer("/time/updated").and_then(|t| t.as_i64()).unwrap_or(0);
+    let updated = newest.pointer("/time/updated").and_then(|t| t.as_f64()).unwrap_or(0.0) as i64;
     if updated < cutoff * 1000 {
         return None;
     }
@@ -838,6 +875,15 @@ mod tests {
         assert_eq!(session_kind("t-1", "t-1 · brief"), None, "not a round");
         assert_eq!(session_kind("t-1", "t-10 · worker · round 1"), None, "another bead's");
         assert_eq!(session_kind("bl-tka.2", "bl-tka.2 · research · round 1"), Some("research"));
+    }
+
+    #[test]
+    fn session_round_reads_round_n() {
+        assert_eq!(session_round("t-1 · reviewer · round 2"), Some(2));
+        assert_eq!(session_round("t-1 · worker · round 3 · gate fix"), Some(3));
+        assert_eq!(session_round("t-1 · reviewer · round 3 · seat 2"), Some(3), "bl-iej.8.2's seat title");
+        assert_eq!(session_round("t-1 · worker · gate fix"), None, "no round of its own");
+        assert_eq!(session_round("t-1 · brief"), None);
     }
 
     #[test]

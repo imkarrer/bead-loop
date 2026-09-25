@@ -888,7 +888,7 @@ fn research_one(repo: &Repo, opts: &Opts, id: &str, lane: Option<&LaneSpec>, las
         .filter(|(_, kind)| kind == "research")
         .map(|(sid, _)| sid)
         .filter(|_| wt.is_dir())
-        .filter(|sid| opts.dry_run || crate::harness::rejoin_fits(repo, id, sid, "research"));
+        .filter(|sid| opts.dry_run || crate::harness::rejoin_fits(repo, id, sid, "research", n + 1, &model));
     repo.rejoin_clear(id);
     let mut resumed = branch_exists(repo, &branch);
     // An empty branch never pushed, with no session to rejoin on it, is an earlier research
@@ -1171,7 +1171,7 @@ pub fn dev_one(repo: &Repo, opts: &Opts, id: Option<&str>, last_id: &mut Option<
         .filter(|(_, kind)| kind == "worker")
         .map(|(sid, _)| sid)
         .filter(|_| wt.is_dir())
-        .filter(|sid| opts.dry_run || crate::harness::rejoin_fits(repo, &id, sid, "worker"));
+        .filter(|sid| opts.dry_run || crate::harness::rejoin_fits(repo, &id, sid, "worker", n + 1, &model));
     repo.rejoin_clear(&id);
     log(&format!(
         "{}: dev: bead {id} — {title} ({n} failures, worker {model}, reviewer {}{}{}{})",
@@ -1315,8 +1315,17 @@ pub fn dev_one(repo: &Repo, opts: &Opts, id: Option<&str>, last_id: &mut Option<
         let gate_out = tail_lines(&read_to_string(&gate_log).unwrap_or_default(), 40);
         let fix_prompt = gate_fix_prompt(&prompt, &repo.gate, &gate_out);
         let fix_log = std::path::PathBuf::from(format!("{}.worker-gate.jsonl", logf.display()));
-        let r2 =
-            run_agent(repo, "bead-worker", &model, &wt, &fix_log, &fix_prompt, &format!("{id} · worker · gate fix"), timeout, Some(&json));
+        let r2 = run_agent(
+            repo,
+            "bead-worker",
+            &model,
+            &wt,
+            &fix_log,
+            &fix_prompt,
+            &format!("{id} · worker · round {} · gate fix", n + 1),
+            timeout,
+            Some(&json),
+        );
         cut_short(repo, &id);
         if r2.empty && r2.rc != 124 {
             // The fix round never reached the model either: held. The round's commit stays
@@ -1479,7 +1488,7 @@ pub fn review_one(repo: &Repo, opts: &Opts, id: Option<&str>, lane: Option<&Lane
             .rejoin_of(&id)
             .filter(|(_, kind)| kind == "reviewer")
             .map(|(sid, _)| sid)
-            .filter(|sid| crate::harness::rejoin_fits(repo, &id, sid, "reviewer"));
+            .filter(|sid| crate::harness::rejoin_fits(repo, &id, sid, "reviewer", n + 1, &review_model));
         repo.rejoin_clear(&id);
         log(&format!(
             "{}: review: {id} by {review_model} ({n} failures{})",

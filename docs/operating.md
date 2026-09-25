@@ -173,7 +173,12 @@ waits on that session instead of starting one). A session that instead *finished
 gap between the stop and the start — the model said DONE while no process was
 listening — is rejoined too: `recover` asks the server what ran under the worktree
 (`GET /session?directory=`), and a session titled by this bead's round is rejoined the
-same way, so its result is read rather than the bead reopened as interrupted. Every start **recovers** first: stale
+same way, so its result is read rather than the bead reopened as interrupted. A restart
+leaves the lane markers and a plain stop clears them. `recover` rejoins a finished session
+only when a marker named the bead, the session's title names this round (`ID · KIND ·
+round N`, N = failures + 1), and it was updated after the marker. A lane rejoins no
+session for a round whose model runs outside opencode (claude-code or aider, which die
+with the process), nor a session whose model is not the round's. Every start **recovers** first: stale
 lane markers go, orphan sessions are aborted (or rejoined), and a dev round a stop cut
 short is back in the dev queue with no failure charged. The binary also watches its own
 path, and re-execs itself at the next moment every lane is idle when the file there has

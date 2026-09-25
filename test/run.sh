@@ -742,6 +742,7 @@ case_restart_rejoins_the_worker_session() {
   assert_match "$(cat "$T/sup.log")" "restart: 1 session(s) left running on the server for the next process to rejoin" "a restart keeps the session"
   ! grep -q abort "$TEST_CTRL/curl.log" && ok || bad "no abort on a restart: $(grep abort "$TEST_CTRL/curl.log")"
   assert_nofile "$BEAD_LOOP_STATE/restart" "the marker is consumed"
+  assert_file "$BEAD_LOOP_STATE/repo/lane.dev" "a restart leaves the lane marker for recover"
   R=$BEAD_LOOP_STATE/repo
   sup recover "$REPO"
   assert_match "$(cat "$T/sup.log")" "t-1: worker session ses_live still running on the server after the stop; rejoining it" "recover found it"
@@ -770,8 +771,50 @@ case_restart_rejoins_the_worker_session() {
   sleep 0.3
   kill -TERM -- -"$pid"; wait "$pid" 2>/dev/null || true
   assert_match "$(cat "$TEST_CTRL/curl.log")" "session/ses_live/abort" "a plain stop aborts"
+  assert_nofile "$BEAD_LOOP_STATE/repo/lane.dev" "a plain stop clears it"
 }
 
+case_restart_rejoins_no_older_rounds_session() {
+  # 25 Sep 14:39: a restart cut short round 3 (claude/sonnet) of a bead whose round 2
+  # review (stub/reviewer) had already finished and APPROVEd. recover must not rejoin
+  # round 2's finished session as round 3's — the round, not just the freshness cutoff,
+  # is what has to match — and a round whose model does not run under opencode (its own
+  # client died with the process at the stop) rejoins no session at all.
+  setup true auto stub/reviewer "$(printf 'attach = "http://oc.test:4096"\n%s' "$(stages stub/worker:stub/reviewer:2 claude/sonnet:claude/sonnet:1)")"
+  R=$BEAD_LOOP_STATE/repo; mkdir -p "$R/wt" "$R/review" "$R/beads/t-1" "$R/rejoin"
+  jq '.[0].status="in_progress"' "$BD_STATE/issues.json" >"$BD_STATE/i.tmp" && mv "$BD_STATE/i.tmp" "$BD_STATE/issues.json"
+  echo 2 >"$R/beads/t-1/failures"
+  git -C "$REPO" fetch -q origin main
+  git -C "$REPO" worktree add -q -b bead/t-1 "$R/wt/t-1" origin/main
+  echo work >"$R/wt/t-1/work.txt"; git -C "$R/wt/t-1" add -A; git -C "$R/wt/t-1" commit -qm work
+  echo "DONE: work.txt written" >"$R/review/t-1"
+  jq -n '[{id:"ses_old", parentID:null, agent:"bead-reviewer", model:{providerID:"stub",id:"reviewer"}, title:"t-1 · reviewer · round 2", time:{created:0, updated:(now*1000|floor)}}]' >"$TEST_CTRL/sessions.json"
+  jq -cn '[{info:{role:"assistant"},parts:[{type:"text",text:"APPROVE: round 2 looked fine"}]}]' >"$TEST_CTRL/messages.json"
+  # (i) no lane marker at all: nothing to rejoin.
+  sup recover "$REPO"
+  assert_nofile "$R/rejoin/t-1" "no marker, nothing to rejoin"
+  # (ii) a marker, older than the session, so the cutoff lets it through — but the session
+  # is round 2's and this is round 3: only the round can refuse it.
+  echo t-1 >"$R/lane.claude"; touch -d '-1 minute' "$R/lane.claude"
+  sup recover "$REPO"
+  assert_nofile "$R/rejoin/t-1" "round 2's session is not round 3's to rejoin"
+  ! grep -q 'finished between the stop and the start' "$T/sup.log" && ok || bad "not rejoined"
+  # (iii) the control: the same session, titled as round 3, is rejoined — what refused it
+  # in (ii) was the round, not the cutoff.
+  jq -n '[{id:"ses_old", parentID:null, agent:"bead-reviewer", model:{providerID:"stub",id:"reviewer"}, title:"t-1 · reviewer · round 3", time:{created:0, updated:(now*1000|floor)}}]' >"$TEST_CTRL/sessions.json"
+  echo t-1 >"$R/lane.claude"; touch -d '-1 minute' "$R/lane.claude"
+  sup recover "$REPO"
+  assert_eq "$(cat "$R/rejoin/t-1" 2>/dev/null)" "ses_old reviewer" "round 3's session is rejoined"
+  assert_match "$(cat "$T/sup.log")" "t-1: reviewer session ses_old finished between the stop and the start" "recover found it"
+  # (iv) title and round agree, so only the harness can refuse it: claude/sonnet dies with
+  # the process at the stop, so opencode's ses_old is not this round's to rejoin.
+  echo "t-1 · reviewer · round 3" >"$TEST_CTRL/session-title"
+  sup --once tick
+  assert_match "$(cat "$T/sup.log")" "session ses_old is not this round's: claude/sonnet runs under claude-code" "the harness refuses it"
+  assert_match "$(cat "$TEST_CTRL/curl.log")" "session/ses_old/abort" "aborted, not rejoined"
+  assert_match "$(cat "$TEST_CTRL/calls")" "^bead-reviewer .* claude/sonnet claude$" "its own reviewer round instead"
+  assert_file "$R/inflight/t-1" "its own APPROVE reached a PR"
+}
 case_restart_rejoins_the_reviewer_session() {
   # The same for a reviewer round: review/ID survives the stop, recover finds the
   # session under the worktree, the review lane waits on it and takes its APPROVE.
