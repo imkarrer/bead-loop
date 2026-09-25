@@ -180,6 +180,7 @@ Every row is a case in `test/run.sh`.
 | CI red | note with the failing checks, +1 failure; dev queue | kept; the next round's push updates the PR |
 | CI red on an adopted PR | one note, **held** | left open for whoever opened it |
 | CI pending for over two hours | **held**, still polled: is the agent up? | waits |
+| A status from a build CI skipped (Buildkite's `Build #N skipped`, state error) | not a result, no failure: its check reads as the newest status from a build that was not skipped, pending while none has reported | waits |
 | No checks reported, five minutes after the PR opened (sooner, its CI has not registered: pending) | one note, **held**: merge it yourself or set `manual` | waits |
 | `gh` cannot read the PR | **held** with gh's words, still polled | waits |
 | PR conflicts with the base | note, **no failure**; dev queue — the next round is a rebase by `conflict_worker`, told to keep both sides | kept; the push updates the PR |
@@ -255,6 +256,7 @@ The watcher looks at every `inflight/ID` on each pass.
 | merge | green / no checks / pending, `merge = "external"` | **merge (external): awaiting maintainer** — no hold, no note, age shown on the page; exits the same as any merge-queue PR: `MERGED`, `CLOSED` unmerged, red, or conflict | — | — |
 | merge | the `pipeline` label cannot be added | merge (held; one note) | — | — |
 | merge | pending longer than 2 h (`CI_TIMEOUT`) | merge (held: is the agent up?), still polled | — | — |
+| merge | a check's status came from a skipped build (`Build #N skipped`) | merge: that check reads as the newest status from a build that was not skipped, pending if none; every other row reads that view | — | — |
 | merge | `gh pr view` fails | merge (held: gh's words), still polled | — | — |
 | merge | sent back red, then the stages run out | human (parked); the PR stays open, `.fixing` stays, so `adopt` leaves it to the next round | — | kept |
 
