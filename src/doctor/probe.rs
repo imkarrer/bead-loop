@@ -170,7 +170,19 @@ mod tests {
     use super::*;
 
     fn stage(worker: &str, reviewer: &str) -> Stage {
-        Stage { name: String::new(), worker: worker.into(), reviewer: reviewer.into(), failures: 1, timeout: None }
+        Stage {
+            name: String::new(),
+            worker: worker.into(),
+            seats: if reviewer.is_empty() {
+                Vec::new()
+            } else {
+                vec![crate::config::Seat { model: reviewer.into(), agent: String::new() }]
+            },
+            reviewer: reviewer.into(),
+            failures: 1,
+            timeout: None,
+            approvals: crate::config::Approvals::All,
+        }
     }
 
     #[test]
