@@ -1778,6 +1778,17 @@ case_research_worker_does_not_wait() {
   assert_match "$(cat "$T/sup.log")" "no brief yet; the worker goes without" "said so"
   assert_branch bead/t-1 "and pushed"
 }
+case_research_skips_an_aider_bead() {
+  # harness:aider: whoever filed the bead named its files; no research round holds the
+  # lane, the brief is empty, and the worker round runs at once.
+  setup true auto stub/reviewer 'research_model = "stub/researcher"'
+  jq '(.[] | select(.id=="t-1") | .labels) += ["harness:aider"]' "$BD_STATE/issues.json" >"$BD_STATE/i.tmp" && mv "$BD_STATE/i.tmp" "$BD_STATE/issues.json"
+  OPENCODE_CONFIG=$T/none.json sup work "$REPO"
+  ! grep -q '^bead-researcher' "$TEST_CTRL/calls" && ok || bad "no research round"
+  assert_match "$(sed -n 1p "$TEST_CTRL/calls")" " aider$" "straight to the worker, under aider"
+  assert_file "$BEAD_LOOP_STATE/repo/research/t-1" "an empty brief marks it done"
+  assert_match "$(cat "$T/sup.log")" "harness:aider names its files; no research round" "said so"
+}
 case_research_lane_feeds_the_worker_lane() {
   # Lanes side by side in order: the research lane briefs both beads, the worker lane
   # works each with its brief.
