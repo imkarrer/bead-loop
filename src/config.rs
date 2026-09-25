@@ -1403,45 +1403,41 @@ mod tests {
         let docs = include_str!("../docs/config.md");
         let example = include_str!("../bead-loop.example.toml");
 
-        // Check that all keys appear in the docs table
+        // Every key is a row in the config reference table.
         for key in KEYS {
-            // Skip repos and lanes as they are special
-            if *key == "repos" || *key == "lanes" {
-                continue;
-            }
-
-            // For stages and lanes, check for [[stages]] and [[lanes]] patterns
-            let key_pattern = if *key == "stages" || *key == "lanes" { format!("| `[[{key}]]` |") } else { format!("| `{key}` |") };
-
-            if !docs.contains(&key_pattern) {
-                panic!("Key `{key}` missing from docs/config.md table (pattern: {key_pattern})");
+            let pattern = if *key == "stages" || *key == "lanes" { format!("| `[[{key}]]` |") } else { format!("| `{key}` |") };
+            if !docs.contains(&pattern) {
+                panic!("key `{key}` missing from the config reference (docs/config.md): expected `{pattern}`");
             }
         }
 
-        // Check that all keys (except repos and lanes) appear in the example config file
+        // Every key but the two global-only ones has an example line.
         for key in KEYS {
-            // Skip repos and lanes as they are global only and exempt from example checking
             if *key == "repos" || *key == "lanes" {
                 continue;
             }
-
-            // Check if the key appears in the example config file (allowing for comments)
-            let mut found = false;
-            for line in example.lines() {
-                // Check if the line contains key = (allowing for comments at the start)
-                if line.contains(&format!("{} = ", key)) || line.contains(&format!("{} =\"", key)) {
-                    found = true;
-                    break;
-                }
-                // Also check for [[stages]] and [[lanes]] patterns
-                if line.starts_with(&format!("[[{key}]]")) {
-                    found = true;
-                    break;
-                }
-            }
-
+            let bare = format!("{key} =");
+            let bracketed = format!("[[{key}]]");
+            let found = example.lines().any(|line| {
+                let line = line.strip_prefix("# ").unwrap_or(line);
+                line.starts_with(&bare) || line.starts_with(&bracketed)
+            });
             if !found {
-                panic!("Key `{key}` missing from bead-loop.example.toml (expected at start of line)");
+                panic!("key `{key}` missing from bead-loop.example.toml: expected `{bare}` or `{bracketed}` at the start of a line");
+            }
+        }
+
+        // And nothing in the table's rows is undocumented in KEYS.
+        for line in docs.lines() {
+            if line.starts_with("## ") {
+                break;
+            }
+            if let Some(rest) = line.strip_prefix("| `") {
+                let cell = rest.split('`').next().unwrap_or("");
+                let key = cell.trim_start_matches("[[").trim_end_matches("]]");
+                if !KEYS.contains(&key) {
+                    panic!("docs/config.md documents `{key}`, which is not in KEYS");
+                }
             }
         }
     }
