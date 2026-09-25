@@ -245,6 +245,9 @@ const js = (v) => esc(JSON.stringify(v));
 const lit = (o) => `{${Object.entries(o || {}).map(([k, v]) => `${k}:${js(v)}`).join(',')}}`;
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const ago = (t, now) => { const d = Math.max(0, now - t); return d < 90 ? `${d}s` : d < 5400 ? `${Math.floor(d / 60)}m` : `${Math.floor(d / 3600)}h${String(Math.floor((d % 3600) / 60)).padStart(2, '0')}`; };
+// merge = "external": awaiting the maintainer, counted in days (hours under a day) —
+// their queue, not ours to nag about in minutes.
+const awaiting = (since, now) => { const d = Math.max(0, now - since); return d < 86400 ? `${Math.floor(d / 3600)} h` : `${Math.floor(d / 86400)} days`; };
 const clock = (t) => new Date(t * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
 // systemd prints "Sat 2026-09-19 03:50:00 UTC"; Date.parse wants the weekday gone.
 const systemdTime = (s) => { if (!s) return null; const d = Date.parse(s.replace(/^\w+ /, '')); return Number.isNaN(d) ? null : Math.floor(d / 1000); };
@@ -524,10 +527,11 @@ function prChips(p, now, r) {
   else if (g) {
     const bad = g.checks.filter((c) => /FAIL|ERROR|CANCEL/i.test(c.state)), pending = g.checks.filter((c) => /PENDING|IN_PROGRESS|QUEUED|EXPECTED/i.test(c.state));
     out.push(bad.length ? `<span class="chip bad">CI red</span> <span class="muted">${esc(bad.map((c) => c.name).join(', '))} · back to dev on the watcher's next look</span>`
+      : r.merge === 'external' ? `<span class="chip">awaiting the maintainer, ${awaiting(p.awaiting_since, now)}</span>`
       : g.checks.length === 0 ? '<span class="chip">no checks yet</span>'
       : pending.length ? `<span class="chip busy">CI running</span> <span class="muted">${pending.length}/${g.checks.length} pending</span>`
       : `<span class="chip ok">CI green</span> <span class="muted">${r.merge === 'auto' ? 'merges on the watcher\'s next look' : r.merge === 'pipeline' ? 'the pipeline merges it' : 'yours to merge'}</span>`);
-  } else out.push(p.red ? '<span class="chip bad">CI red</span>' : '<span class="chip">waiting on CI</span>');
+  } else out.push(p.red ? '<span class="chip bad">CI red</span>' : r.merge === 'external' ? `<span class="chip">awaiting the maintainer, ${awaiting(p.awaiting_since, now)}</span>` : '<span class="chip">waiting on CI</span>');
   if (p.adopted) out.push('<span class="chip warn" title="opened by someone else, adopted by the loop">adopted</span>');
   if (p.held) out.push(`<span class="chip warn" title="${esc(p.held.why)}">held · ${esc(p.held.why.slice(0, 80))}</span>`);
   return out.join(' ');
