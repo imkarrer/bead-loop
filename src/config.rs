@@ -47,6 +47,61 @@ pub struct Target {
     pub pr_style: Option<String>,
 }
 
+/// One `[providers.NAME]` table in the global file: a model endpoint — how its sessions
+/// run, how many at once, what they cost (docs/design-providers.md, "Providers"). A model
+/// is `NAME/model`; a model naming no table gets an implicit one (`Provider::implicit`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Provider {
+    pub name: String,
+    /// `opencode` · `claude-code` · `aider` · `command`
+    pub harness: String,
+    pub parallel: u64,
+    /// `local` · `metered`
+    pub cost: String,
+    pub probe: String,
+    /// for `aider`: the opencode provider whose baseURL and key it speaks to
+    pub via: String,
+    pub attach: String,
+    pub command: String,
+    pub model_flag: String,
+}
+
+impl Provider {
+    /// The provider a model gets when no `[providers.NAME]` names it: `claude` is the
+    /// Claude Code subscription, anything else an opencode provider, one slot, local.
+    pub fn implicit(name: &str) -> Provider {
+        let claude = name == "claude";
+        Provider {
+            name: name.to_string(),
+            harness: if claude { "claude-code" } else { "opencode" }.into(),
+            parallel: 1,
+            cost: if claude { "metered" } else { "local" }.into(),
+            probe: String::new(),
+            via: String::new(),
+            attach: String::new(),
+            command: String::new(),
+            model_flag: String::new(),
+        }
+    }
+}
+
+/// A model name resolved: its provider, the harness its session runs under, and the
+/// model as that harness wants it spelled.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Resolved {
+    pub provider: Provider,
+    pub harness: String,
+    pub model: String,
+}
+
+/// The provider a model names: the text before the first `/`, after an `aider:` prefix
+/// is stripped; the whole string when there is no `/`. `aider:devbox/coder` is devbox's:
+/// the prefix picks a harness, not a server.
+pub fn provider_name(model: &str) -> &str {
+    let m = model.strip_prefix("aider:").unwrap_or(model);
+    m.split('/').next().unwrap_or(m)
+}
+
 /// `toml_json FILE`: the file as one JSON object ({} when absent or empty); a parse error
 /// is a loud stop naming the file.
 pub fn toml_json(path: &Path) -> Value {
@@ -144,6 +199,44 @@ impl Layers {
                 timeout: s.get("timeout").and_then(|v| v.as_u64()),
             })
             .collect()
+    }
+
+    /// `[providers.NAME]` tables, global file only: providers describe the machine, not the
+    /// repo. A harness or cost the loop does not know stops the run, naming the provider.
+    pub fn providers(&self) -> Vec<Provider> {
+        self.try_providers().unwrap_or_else(|e| die(&e))
+    }
+
+    pub fn try_providers(&self) -> Result<Vec<Provider>, String> {
+        let Some(Value::Object(map)) = self.global.get("providers") else { return Ok(Vec::new()) };
+        let mut out = Vec::new();
+        for (name, v) in map {
+            let Value::Object(_) = v else { continue };
+            let mut p = Provider::implicit(name);
+            let s = |k: &str| v.get(k).map(scalar);
+            if let Some(h) = s("harness") {
+                if !["opencode", "claude-code", "aider", "command"].contains(&h.as_str()) {
+                    return Err(format!("[providers.{name}]: harness = \"{h}\": one of opencode, claude-code, aider, command"));
+                }
+                p.harness = h;
+            }
+            if let Some(c) = s("cost") {
+                if c != "local" && c != "metered" {
+                    return Err(format!("[providers.{name}]: cost = \"{c}\": local or metered"));
+                }
+                p.cost = c;
+            }
+            if let Some(n) = v.get("parallel").and_then(|x| x.as_u64().or_else(|| x.as_str().and_then(|t| t.trim().parse().ok()))) {
+                p.parallel = n.max(1);
+            }
+            p.probe = s("probe").unwrap_or_default();
+            p.via = s("via").unwrap_or_default();
+            p.attach = s("attach").unwrap_or_default();
+            p.command = s("command").unwrap_or_default();
+            p.model_flag = s("model_flag").unwrap_or_default();
+            out.push(p);
+        }
+        Ok(out)
     }
 
     /// `[targets.NAME]` tables, repo file only — a target's configuration lives beside the
@@ -253,6 +346,12 @@ pub struct Repo {
     pub brief_model: String,
     /// who pre-checks a round's diff before the senior reviewer sees it; `""` is off
     pub precheck_model: String,
+    /// who writes the research brief before a bead's worker round; `""` is off
+    pub research_model: String,
+    /// `first` (once, before round 1) or `every` (again after each send-back)
+    pub research: String,
+    /// the `[providers.NAME]` tables of the global file
+    pub providers: Vec<Provider>,
     pub adopt: bool,
     pub max_inflight: u64,
     pub worker_timeout: u64,
@@ -330,6 +429,9 @@ impl Repo {
             conflict_worker: cfg.str("conflict_worker", ""),
             brief_model: cfg.str("brief_model", ""),
             precheck_model: cfg.str("precheck_model", ""),
+            research_model: cfg.str("research_model", ""),
+            research: cfg.str("research", "first"),
+            providers: cfg.providers(),
             adopt: cfg.bool("adopt", true),
             max_inflight: cfg.u64("max_inflight", u64::MAX),
             worker_timeout: cfg.u64("worker_timeout", 3600),
@@ -458,13 +560,35 @@ impl Repo {
             None => branch.to_string(),
         }
     }
+
+    /// A model name as a provider, a harness and the name that harness takes. The
+    /// provider is the `[providers.NAME]` table `provider_name` names, else the implicit
+    /// one. `aider:P/M` is aider on P's server (`via` = P): the prefix overrides the
+    /// harness, not the provider, so the round stays on P's lane. opencode takes `P/M`
+    /// whole; claude-code, aider and a command take the `M` after the slash.
+    // No caller until the harness bead (bl-iej.2) routes run_agent through it.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn resolve(&self, model: &str) -> Resolved {
+        let name = provider_name(model);
+        let provider = self.providers.iter().find(|p| p.name == name).cloned().unwrap_or_else(|| Provider::implicit(name));
+        let bare = model.strip_prefix("aider:");
+        let after_slash = |m: &str| m.split_once('/').map(|(_, m)| m.to_string()).unwrap_or_else(|| m.to_string());
+        if let Some(m) = bare {
+            let mut provider = provider;
+            provider.via = name.to_string();
+            return Resolved { provider, harness: "aider".into(), model: after_slash(m) };
+        }
+        let harness = provider.harness.clone();
+        let model = if harness == "opencode" { model.to_string() } else { after_slash(model) };
+        Resolved { provider, harness, model }
+    }
 }
 
 /// The repo's state directories, and the older `attempts/` carried into `failures/`:
 /// same counter, file by file (a status run may have made failures/ first), then the
 /// old directory goes.
 pub fn make_state_dirs(rs: &Path) {
-    for d in ["inflight", "logs", "wt", "review", "failures", "held", "parked", "rejoin", "target", "proposed"] {
+    for d in ["inflight", "logs", "wt", "review", "failures", "held", "parked", "rejoin", "target", "proposed", "research"] {
         let _ = std::fs::create_dir_all(rs.join(d));
     }
     let old = rs.join("attempts");
@@ -517,6 +641,9 @@ pub fn test_repo(root: &Path, stages: &[&str]) -> Repo {
         conflict_worker: String::new(),
         brief_model: String::new(),
         precheck_model: String::new(),
+        research_model: String::new(),
+        research: "first".into(),
+        providers: Vec::new(),
         adopt: true,
         max_inflight: u64::MAX,
         worker_timeout: 60,
@@ -805,6 +932,56 @@ mod tests {
         let g: toml::Table = global.parse().unwrap();
         let r: toml::Table = repo.parse().unwrap();
         Layers { global: serde_json::to_value(g).unwrap(), repo: serde_json::to_value(r).unwrap() }
+    }
+
+    #[test]
+    fn providers_parse_and_default() {
+        let l = layers(
+            "[providers.claude]\nharness = \"claude-code\"\nparallel = 2\ncost = \"metered\"\n[providers.devbox]\nprobe = \"http://127.0.0.1:8100/health\"",
+            "[providers.ignored]\nharness = \"aider\"",
+        );
+        let p = l.providers();
+        assert_eq!(p.len(), 2, "the global file only: providers describe the machine");
+        let claude = p.iter().find(|p| p.name == "claude").unwrap();
+        assert_eq!((claude.harness.as_str(), claude.parallel, claude.cost.as_str()), ("claude-code", 2, "metered"));
+        let devbox = p.iter().find(|p| p.name == "devbox").unwrap();
+        assert_eq!(devbox.probe, "http://127.0.0.1:8100/health");
+        assert_eq!((devbox.harness.as_str(), devbox.parallel, devbox.cost.as_str()), ("opencode", 1, "local"), "the defaults");
+        assert!(devbox.via.is_empty() && devbox.command.is_empty() && devbox.attach.is_empty() && devbox.model_flag.is_empty());
+        let err = layers("[providers.x]\nharness = \"ollama\"", "").try_providers().unwrap_err();
+        assert!(err.contains("[providers.x]") && err.contains("ollama"), "names the provider and the harness: {err}");
+        let err = layers("[providers.y]\ncost = \"free\"", "").try_providers().unwrap_err();
+        assert!(err.contains("[providers.y]"), "an unknown cost too: {err}");
+        assert!(layers("", "").providers().is_empty());
+    }
+
+    #[test]
+    fn implicit_providers_keep_todays_spellings() {
+        assert_eq!(provider_name("devbox/coder"), "devbox");
+        assert_eq!(provider_name("aider:devbox/coder"), "devbox");
+        assert_eq!(provider_name("claude/sonnet"), "claude");
+        assert_eq!(provider_name("bare"), "bare", "no slash: the whole string");
+        let c = Provider::implicit("claude");
+        assert_eq!((c.harness.as_str(), c.cost.as_str(), c.parallel), ("claude-code", "metered", 1));
+        let d = Provider::implicit("devbox");
+        assert_eq!((d.harness.as_str(), d.cost.as_str(), d.parallel), ("opencode", "local", 1));
+    }
+
+    #[test]
+    fn resolve_names_the_harness_and_the_model() {
+        let d = scratch("resolve");
+        let mut r = test_repo(&d, &["m"]);
+        let x = r.resolve("devbox/coder");
+        assert_eq!((x.provider.name.as_str(), x.harness.as_str(), x.model.as_str()), ("devbox", "opencode", "devbox/coder"));
+        let x = r.resolve("claude/opus");
+        assert_eq!((x.harness.as_str(), x.provider.cost.as_str(), x.model.as_str()), ("claude-code", "metered", "opus"));
+        let x = r.resolve("aider:devbox/coder");
+        assert_eq!((x.provider.name.as_str(), x.harness.as_str(), x.model.as_str()), ("devbox", "aider", "coder"));
+        assert_eq!(x.provider.via, "devbox", "aider speaks to the provider it is prefixed onto");
+        r.providers = layers("[providers.acbox]\nparallel = 3\ncost = \"metered\"", "").providers();
+        let x = r.resolve("acbox/coder");
+        assert_eq!((x.provider.parallel, x.provider.cost.as_str(), x.model.as_str()), (3, "metered", "acbox/coder"), "the table's");
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     #[test]
