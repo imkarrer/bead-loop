@@ -20,6 +20,7 @@ bd label add <id> harness:aider
 Aider is handed the files and edits them; it explores nothing. The loop's logs say where opencode rounds die on the small model: a path outside the worktree, the 32k context spent before the first edit. Both are exploration, and an aider round has none. So:
 
 - **harness:aider** when the DESCRIPTION can name every file to touch, each exists on the base branch, and the repo's gate proves the change (the gate runs as aider's lint after every edit). A one-file fix; a rename across callers you have listed; a test and the code it covers.
+- **The context budget.** Aider hands the model every file the DESCRIPTION names, and the model quotes long SEARCH blocks back. Each named file must be under ~8k tokens (`wc -c` / 4, about 32 KB), and all of them under ~20k together. On 25 Sep, four files came to 46k against a 32k model, and `src/round.rs` alone (21k) hit 38k. A bead that edits a bigger file stays in opencode, which reads in line ranges.
 - **no label** (opencode) when the model must find its files, create one, run a test the bead names, or might need to stop with `BLOCKED:` and a reason. Anything with two possible shapes.
 - The Claude stage ignores the label. `harness:opencode` on a bead takes it out of a stage whose worker is `aider:...`.
 
@@ -27,8 +28,8 @@ Aider is handed the files and edits them; it explores nothing. The loop's logs s
 
 Aider gets every token of the DESCRIPTION with a `/` or a `.` in it that is a file in the worktree, and nothing else:
 
-- Each path from the repo root, as on disk: `src/round.rs`, `test/run.sh`. A bare `round.rs` or `harness_for` is not a file. Name the files to change and the files to read; both go to aider.
-- State the change as an edit: what to find and what it becomes, in which file. Aider runs only the gate; the reviewer proves the acceptance criteria afterwards, so an aider bead's gate should cover them (a test the gate runs, a grep the reviewer can run).
+- Each path from the repo root, as on disk: `src/round.rs`, `test/run.sh`. A bare `round.rs` or `harness_for` is not a file. Name the files to change and the files to read; both go to aider. A path you mention only for reference counts against the budget too. So does a URL: aider fetches it.
+- State the change as an edit: what to find and what it becomes, in which file. Anchor it on one short, exact line. "Right after `fn pr_body(...) {...}`" makes the model quote the whole function. Aider runs only the gate; the reviewer proves the acceptance criteria afterwards, so an aider bead's gate should cover them (a test the gate runs, a grep the reviewer can run).
 - A zero exit with a diff is done; there is no `DONE:` line and no `BLOCKED:`. A bead aider cannot do burns a round and moves on, so a doubtful bead stays in opencode.
 
 # Before the label lands
