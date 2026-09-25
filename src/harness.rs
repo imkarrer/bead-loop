@@ -239,7 +239,21 @@ pub fn run_agent(
         if rc != 0 && !signals::stopping() && stalled.is_none() {
             abort_sessions(repo, dir);
         }
-        let t = parse_transcript(&read_to_string(logf).unwrap_or_default());
+        let raw = read_to_string(logf).unwrap_or_default();
+        let mut t = parse_transcript(&raw);
+        // The client can exit as the session finishes, before the reply's text reaches the
+        // log (bl-tka.2's reviews on 25 Sep: a step_start, then exit 0; the server had a
+        // whole REJECT). With events but no text, ask the server for the last reply.
+        if t.texts.is_empty() && rc == 0 && !repo.attach.is_empty() {
+            let reply = session_id_of(&raw)
+                .and_then(|sid| crate::shell::curl_get(&format!("{}/session/{sid}/message", repo.attach), None, 5))
+                .and_then(|body| serde_json::from_str::<Value>(&body).ok())
+                .and_then(|v| last_reply_text(&v));
+            if let Some(text) = reply {
+                log(&format!("{}: {title}: the client lost the reply's text; taken from the server", repo.slug));
+                t.texts.push(text);
+            }
+        }
         full = t.texts.join("\n");
         never_answered = t.never_answered();
         errors = t.errors.join("; ");
@@ -491,6 +505,32 @@ pub fn abort_sessions_on(attach: &str, slug: &str, dir: &Path) {
     }
 }
 
+/// The session a `--format json` transcript belongs to: the first event's `sessionID`.
+fn session_id_of(raw: &str) -> Option<String> {
+    raw.lines()
+        .filter_map(|l| serde_json::from_str::<Value>(l).ok())
+        .find_map(|v| v.get("sessionID").and_then(|s| s.as_str()).map(str::to_string))
+}
+
+/// The text of the last assistant message in `GET /session/SID/message`, its text parts
+/// joined; `None` when there is none or it is blank.
+fn last_reply_text(messages: &Value) -> Option<String> {
+    let last = messages.as_array()?.iter().rev().find(|m| m.pointer("/info/role").and_then(|r| r.as_str()) == Some("assistant"))?;
+    let text: Vec<&str> = last
+        .get("parts")?
+        .as_array()?
+        .iter()
+        .filter(|p| p.get("type").and_then(|t| t.as_str()) == Some("text"))
+        .filter_map(|p| p.get("text").and_then(|t| t.as_str()))
+        .collect();
+    let joined = text.join("\n");
+    if joined.trim().is_empty() {
+        None
+    } else {
+        Some(joined)
+    }
+}
+
 /// The sessions the server is running under `dir`, from `GET /session/status`
 /// (`{"ses_x": {"type": "busy"}}` per running one), sorted.
 fn sessions_on(attach: &str, dir: &Path) -> Vec<String> {
@@ -706,6 +746,25 @@ mod tests {
         );
         assert!(files_named(None, &d).is_empty());
         let _ = std::fs::remove_dir_all(&d);
+    }
+    #[test]
+    fn a_lost_reply_is_found_on_the_server() {
+        let raw = "{\"type\":\"step_start\",\"sessionID\":\"ses_a\",\"part\":{}}\n{\"type\":\"step_start\",\"sessionID\":\"ses_a\"}";
+        assert_eq!(session_id_of(raw), Some("ses_a".into()), "the first event's session");
+        assert_eq!(session_id_of("not json\n"), None);
+        let msgs = serde_json::json!([
+            {"info": {"role": "user"}, "parts": [{"type": "text", "text": "Review this"}]},
+            {"info": {"role": "assistant"}, "parts": [{"type": "text", "text": "reading"}]},
+            {"info": {"role": "assistant"}, "parts": [{"type": "step-start"}, {"type": "reasoning", "text": "hm"}, {"type": "text", "text": "REJECT: x.rs:1"}, {"type": "text", "text": "For the worker: y"}]}
+        ]);
+        assert_eq!(
+            last_reply_text(&msgs),
+            Some("REJECT: x.rs:1\nFor the worker: y".into()),
+            "the last assistant message's text parts, not its reasoning"
+        );
+        let blank = serde_json::json!([{"info": {"role": "assistant"}, "parts": [{"type": "step-start"}]}]);
+        assert_eq!(last_reply_text(&blank), None, "no text: nothing recovered");
+        assert_eq!(last_reply_text(&serde_json::json!({})), None);
     }
     #[test]
     fn aider_ignore_hides_all_but_the_named_files() {
