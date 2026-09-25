@@ -711,16 +711,22 @@ pub fn pr_body(id: &str, title: &str, ac: &str, worker_line: &str, reviewer_line
     )
 }
 
-/// The PR's title: the style, id, and title.
+/// The PR's title: `plain` style is just the title; any other style keeps the id prefix.
 #[cfg_attr(not(test), allow(dead_code))]
 pub fn pr_title(style: &str, id: &str, title: &str) -> String {
-    format!("{style}: {id} {title}")
+    if style == "plain" {
+        title.to_string()
+    } else {
+        format!("{id}: {title}")
+    }
 }
 
-/// A plain PR body: the id, description, acceptance criteria, and worker line.
+/// A plain PR body: the description, how to verify, the worker's last words, and the bead marker.
+/// No "Opened by bead-loop" line, no reviewer line.
 #[cfg_attr(not(test), allow(dead_code))]
 pub fn pr_body_plain(id: &str, description: &str, ac: &str, worker_line: &str) -> String {
-    format!("Bead `{id}`\n\n{description}\n\n> {ac}\n\nWorker: {worker_line}\n")
+    let worker_line = worker_line.strip_prefix("DONE: ").unwrap_or(worker_line);
+    format!("{description}\n\n## How to verify\n{ac}\n\n{worker_line}\n\n<!-- bead: {id} -->\n")
 }
 
 /// `dev_one [ID]`
@@ -1692,8 +1698,15 @@ mod tests {
     }
     #[test]
     fn a_plain_pr_reads_as_a_contribution() {
-        let b = pr_body_plain("t-1", "Do the thing", "a\nb", "DONE: did it");
-        assert_eq!(b, "Bead `t-1`\n\nDo the thing\n\n> a\nb\n\nWorker: DONE: did it\n");
+        let b = pr_body_plain("t-1", "Fix the parser.", "cargo test passes", "DONE: fixed it");
+        assert!(b.contains("Fix the parser."));
+        assert!(b.contains("## How to verify\ncargo test passes"));
+        assert!(b.contains("fixed it"));
+        assert!(b.ends_with("<!-- bead: t-1 -->\n") || b.ends_with("<!-- bead: t-1 -->"));
+        assert!(!b.contains("bead-loop"));
+        assert!(!b.contains("DONE:"));
+        assert_eq!(pr_title("plain", "t-1", "Fix it"), "Fix it");
+        assert_eq!(pr_title("loop", "t-1", "Fix it"), "t-1: Fix it");
     }
     #[test]
     fn a_round_the_model_never_answered_holds_with_the_harness_words() {
