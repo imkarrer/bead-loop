@@ -367,9 +367,7 @@ pub fn status_json_from(repo: &Repo, open: Value, inprog: Value, specs: &[crate:
         .into_iter()
         .map(|id| {
             let mut m = bead_json(repo, &byid, &id);
-            let proposal = read_to_string(&repo.proposed_path(&id))
-                .and_then(|s| serde_json::from_str(&s).ok())
-                .unwrap_or(Value::Null);
+            let proposal = read_to_string(&repo.proposed_path(&id)).and_then(|s| serde_json::from_str(&s).ok()).unwrap_or(Value::Null);
             m.insert("proposal".into(), proposal);
             Value::Object(m)
         })
