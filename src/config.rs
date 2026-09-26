@@ -1396,6 +1396,7 @@ mod tests {
             "research_model",
             "research",
             "research_timeout",
+            "research_aider",
             "merge",
             "merge_label",
             "adopt",

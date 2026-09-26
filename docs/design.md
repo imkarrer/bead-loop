@@ -66,5 +66,6 @@ The reviewer is never aider: a review reads, it does not edit.
 A bead can pick its worker's harness over the stage's, by label: `harness:aider` puts the
 stage's opencode model under aider (`devbox/coder` runs as `aider:devbox/coder`),
 `harness:opencode` takes an `aider:` model out of it. A `claude/*` stage is not touched by
-either. The dev lane logs the harness it chose and the label that chose it, once per
-round; the stage's reviewer and failure count are the same either way.
+either. The reviewer is never aider: a review reads, it does not edit. When `research_aider` is true (the default),
+a bead with a research brief whose Files all exist runs under aider; `harness:opencode` keeps a bead in opencode
+when the change needs exploration after all.
