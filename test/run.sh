@@ -1417,6 +1417,20 @@ case_review_lane_waits_for_dev_to_claim() {
   assert_branch bead/t-1 "and pushed"
 }
 
+case_slow_pickers_leave_the_tick() {
+  # setup's three lanes, two of which pick slowly (dev and claude both ask bd ready: 0.3 s a
+  # pass, longer than LANE_WAIT), and a hand-held review lock, so the tick goes round again
+  # once dev has filled the review queue. A lane whose last pass found nothing no longer
+  # shows as mid-pass, so both leave within a few checks; before, each kept finding the
+  # other mid-pass until timing jitter parted them (11-870 s on CI in this shape).
+  setup; echo 0.3 >"$TEST_CTRL/slow-ready"; mkdir -p "$BEAD_LOOP_STATE"
+  ( exec 8>"$BEAD_LOOP_STATE/lock.review"; flock 8; for _ in $(seq 100); do grep -q 'another review lane holds' "$T/sup.log" 2>/dev/null && break; sleep 0.05; done ) &
+  sleep 0.1; since=$(date +%s); LANE_WAIT=0.1 sup tick; wait; took=$(( $(date +%s) - since ))
+  assert_eq "$(calls)" "bead-worker bead-reviewer" "reviewed within the same tick"
+  assert_match "$(cat "$T/sup.log")" "lanes done but work is queued; going round again" "the tick went round again"
+  [ "$took" -lt 20 ] && ok || bad "the tick took ${took} s: two slow pickers held each other"
+}
+
 case_escalate_to_the_last_stage() {
   # "Work with Claude": a parked bead goes to the last stage and back into the dev queue,
   # ahead of its failure count; the next round runs there.
