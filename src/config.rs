@@ -409,6 +409,8 @@ pub struct Repo {
     pub research_model: String,
     /// `first` (once, before round 1) or `every` (again after each send-back)
     pub research: String,
+    /// a brief whose Files all exist puts an opencode worker under aider
+    pub research_aider: bool,
     /// seconds a research round may run (capped by the stage's timeout); default 900
     pub research_timeout: u64,
     /// the `[providers.NAME]` tables of the global file
@@ -440,8 +442,6 @@ pub struct Repo {
     /// `$STATE_DIR/<slug>`
     pub rs: PathBuf,
     pub state_dir: PathBuf,
-    /// when true, research rounds switch to aider harness if brief has files
-    pub research_aider: bool,
 }
 
 impl Repo {
@@ -499,6 +499,7 @@ impl Repo {
             precheck_model: cfg.str("precheck_model", ""),
             research_model: cfg.str("research_model", ""),
             research: cfg.str("research", "first"),
+            research_aider: cfg.bool("research_aider", true),
             research_timeout: cfg.u64("research_timeout", 900),
             providers: cfg.providers(),
             adopt: cfg.bool("adopt", true),
@@ -524,7 +525,6 @@ impl Repo {
             beads,
             rs,
             state_dir,
-            research_aider: cfg.bool("research_aider", true),
         };
         for s in &r.stages {
             for m in std::iter::once(&s.worker).chain(s.seats.iter().map(|x| &x.model)) {
@@ -776,6 +776,7 @@ pub fn test_repo(root: &Path, stages: &[&str]) -> Repo {
         precheck_model: String::new(),
         research_model: String::new(),
         research: "first".into(),
+        research_aider: true,
         research_timeout: 900,
         providers: Vec::new(),
         adopt: true,
@@ -800,7 +801,6 @@ pub fn test_repo(root: &Path, stages: &[&str]) -> Repo {
         repo,
         rs,
         state_dir,
-        research_aider: false,
     }
 }
 
