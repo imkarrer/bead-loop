@@ -50,6 +50,13 @@ exists in the worktree) and the `gate` as its `--lint-cmd`. Aider explores nothi
 commits nothing: the loop commits what it edited, a zero exit with a diff is done, a
 non-zero exit is a failure, and there is no `DONE:` line.
 
+A provider with `harness = "command"` and `command = "..."` (and optional `model_flag`,
+`{model}` replaced) runs the command with the prompt on stdin and `BEAD_ROLE`,
+`BEAD_MODEL`, `BEAD_AGENT_PROMPT`, `BEAD_TIMEOUT` in the environment. Its stdout is the
+model's words: a non-zero exit is the harness failing, an empty stdout is a round the
+model never answered (held, no failure). A read-only role (reviewer, researcher) is the
+command's own promise.
+
 Aider is the better choice for a small model on a file-scoped bead with a runnable gate:
 the edit format is stricter than tool calls, the files are given, and the gate runs after
 each edit inside aider's own loop. Opencode is the better choice when the bead needs the

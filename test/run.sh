@@ -705,6 +705,32 @@ case_aider_stage() {
   assert_match "$(cat "$T/sup.log")" "no baseURL for opencode provider stub" "said so"
   assert_branch bead/t-1 "still worked"
 }
+
+case_command_harness() {
+  # A harness = "command" provider runs `sh -c command`, the prompt on stdin, and the four
+  # BEAD_* variables in the environment; stdout is the model's answer.
+  setup true auto '' "$(stages cmd/any:cmd/any:1)"
+  printf '[providers.cmd]\nharness = "command"\ncommand = "%s/harness.sh"\n' "$T" >>"$BEAD_LOOP_CONFIG/config.toml"
+  cat >"$T/harness.sh" <<'EOF'
+#!/bin/sh
+set -eu
+cat >"$TEST_CTRL/cmd.prompt"
+echo "$BEAD_ROLE $BEAD_MODEL" >>"$TEST_CTRL/cmd.calls"
+[ -n "$BEAD_AGENT_PROMPT" ] || exit 3
+if [ "$BEAD_ROLE" = worker ]; then
+  echo work >work.txt
+  git add work.txt && git commit -qm work
+  echo "DONE: wrote work.txt"
+elif [ "$BEAD_ROLE" = reviewer ]; then
+  echo "APPROVE: fine"
+fi
+EOF
+  chmod +x "$T/harness.sh"
+  sup work "$REPO"
+  assert_eq "$(cat "$TEST_CTRL/cmd.calls" | tr '\n' '|')" "worker any|reviewer any|" "the command gets the model after the slash"
+  assert_match "$(cat "$TEST_CTRL/cmd.prompt")" "<bead>" "the bead is the message"
+  assert_branch bead/t-1 "pushed"
+}
 case_harness_label() {
   # A bead's label picks its worker's harness over the stage's: harness:opencode takes an
   # aider: model out of aider, harness:aider puts an opencode model under it; claude/* is not touched.
