@@ -104,6 +104,38 @@ fn error_line(e: &Value) -> String {
     e.to_string()
 }
 
+/// What a `claude -p` round can use. `--tools` is the tool set itself: a tool it leaves out
+/// (Monitor, WebFetch, Task, ...) the model never sees. `--allowedTools` only says what runs
+/// without asking, and a -p session has no one to ask, so anything else is refused at call
+/// time. `--strict-mcp-config`, with no --mcp-config, drops the claude.ai connectors' tools.
+/// The worker keeps Skill for the repo's skills, not the loop's own (agents/bead-worker.md
+/// denies the same four): the Skill tool still lists them, and a call is refused.
+/// Every other agent (reviewer, pre-checker, researcher, briefer, post-mortem) only reads,
+/// with git's reading commands.
+fn claude_tool_flags(agent: &str) -> Vec<&'static str> {
+    let mut f = if agent == "bead-worker" {
+        vec![
+            "--tools",
+            "Read,Edit,Write,Glob,Grep,Bash,Skill",
+            "--allowedTools",
+            "Read,Edit,Write,Glob,Grep,Bash,Skill",
+            "--disallowedTools",
+            "Skill(bead-workflow),Skill(beads),Skill(delegate),Skill(workstation)",
+        ]
+    } else {
+        vec![
+            "--tools",
+            "Read,Glob,Grep,Bash",
+            "--allowedTools",
+            "Read,Glob,Grep,Bash(git diff *),Bash(git log *),Bash(git show *),Bash(git status *),Bash(git grep *),\
+             Bash(git blame *),Bash(git ls-files *),Bash(git rev-parse *),Bash(git merge-base *),\
+             Bash(cat *),Bash(ls *),Bash(rg *),Bash(grep *)",
+        ]
+    };
+    f.push("--strict-mcp-config");
+    f
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn run_agent(
     repo: &Repo,
@@ -182,16 +214,15 @@ pub fn run_agent(
         full = read_to_string(logf).unwrap_or_default();
     } else if r.harness == "claude-code" {
         let alias = r.model.as_str();
-        // The worker edits; the reviewer and the briefer only read.
-        let tools = if agent != "bead-worker" {
-            "Read,Glob,Grep,Bash(git *),Bash(cat *),Bash(ls *),Bash(rg *),Bash(grep *)"
-        } else {
-            "Read,Edit,Write,Glob,Grep,Bash"
-        };
         let sys = agent_body(agent);
         let mut c = cmd("timeout");
         c.args(["--foreground", &timeout_s, "claude", "-p", prompt, "--model", alias, "--output-format", "json"]);
-        c.args(["--allowedTools", tools, "--append-system-prompt", &sys, "--no-session-persistence"]);
+        c.args(claude_tool_flags(agent));
+        c.args(["--append-system-prompt", &sys, "--no-session-persistence"]);
+        // No background jobs: a -p session ends when the model stops, and a job it left
+        // running is orphaned (bl-5v2's third Sonnet round started an `opencode run` in the
+        // background, said it would pick it back up, and ended).
+        c.env("CLAUDE_CODE_DISABLE_BACKGROUND_TASKS", "1");
         c.current_dir(dir);
         rc = run_to_files(&mut c, stdout, stderr, None);
         let raw = read_to_string(logf).unwrap_or_default();
@@ -928,6 +959,20 @@ mod tests {
         assert!(real.contains("delegated developer for one bead"), "the worker agent's body is the system prompt");
         let real = agent_body_of(&std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/agents/bead-reviewer.md")).unwrap());
         assert!(real.contains("senior reviewer"));
+    }
+    #[test]
+    fn a_claude_round_sees_only_its_tools() {
+        let w = claude_tool_flags("bead-worker").join(" ");
+        assert!(w.starts_with("--tools Read,Edit,Write,Glob,Grep,Bash,Skill --allowedTools "), "{w}");
+        assert!(w.contains("--disallowedTools Skill(bead-workflow),Skill(beads),Skill(delegate),Skill(workstation)"), "{w}");
+        assert!(w.ends_with(" --strict-mcp-config"), "{w}");
+        for a in ["bead-reviewer", "bead-prechecker", "bead-researcher", "bead-briefer"] {
+            let r = claude_tool_flags(a).join(" ");
+            assert!(r.starts_with("--tools Read,Glob,Grep,Bash --allowedTools Read,Glob,Grep,Bash(git diff *),"), "{a}: {r}");
+            assert!(!r.contains("Edit") && !r.contains("Write") && !r.contains("Skill"), "{a} only reads: {r}");
+            assert!(!r.contains("Bash(git *)"), "{a}: git's reading commands only: {r}");
+            assert!(r.ends_with(" --strict-mcp-config"), "{a}: {r}");
+        }
     }
     #[test]
     fn count_stall_counts_compactions_and_tool_calls_since_the_last_edit() {
