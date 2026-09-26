@@ -61,3 +61,10 @@ stage's opencode model under aider (`devbox/coder` runs as `aider:devbox/coder`)
 `harness:opencode` takes an `aider:` model out of it. A `claude/*` stage is not touched by
 either. The dev lane logs the harness it chose and the label that chose it, once per
 round; the stage's reviewer and failure count are the same either way.
+
+A provider with `harness = "command"` and `command = "..."` (and optional `model_flag`, `{model}` replaced)
+runs the command with the prompt on stdin, and the four environment variables
+(`BEAD_ROLE`, `BEAD_MODEL`, `BEAD_AGENT_PROMPT`, `BEAD_TIMEOUT`) set in the environment.
+The command's stdout is the model's words. A non-zero exit is the harness failing, an empty stdout
+is a round the model never answered (held, no failure). A read-only role (reviewer, researcher)
+is the command's own promise.
