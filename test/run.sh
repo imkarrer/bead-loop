@@ -684,45 +684,33 @@ case_aider_stage() {
   echo base >"$REPO/work.txt"; git -C "$REPO" add -A && git -C "$REPO" commit -qm "work.txt" && git -C "$REPO" push -q origin main
   OPENCODE_CONFIG=$T/none.json sup work "$REPO"
   assert_eq "$(sed -n 1p "$TEST_CTRL/aider.args")" "base=unset key=unused" "no base, a dummy key"
-
+  assert_match "$(cat "$T/sup.log")" "no baseURL for opencode provider stub" "said so"
+  assert_branch bead/t-1 "still worked"
 }
 
 case_command_harness() {
-  # A harness with 'harness = "command"' and 'command = "..."' runs the command with the
-  # prompt on stdin, the four environment variables, and stdout as the model's words.
-  # For role worker it writes work.txt in $PWD and commits it. For role reviewer it prints
-  # "APPROVE: fine".
+  # A harness = "command" provider runs `sh -c command`, the prompt on stdin, and the four
+  # BEAD_* variables in the environment; stdout is the model's answer.
   setup true auto '' "$(stages cmd/any:cmd/any:1)"
   printf '[providers.cmd]\nharness = "command"\ncommand = "%s/harness.sh"\n' "$T" >>"$BEAD_LOOP_CONFIG/config.toml"
-  # Create the harness script with a quoted heredoc and make it executable
   cat >"$T/harness.sh" <<'EOF'
-#!/bin/bash
-set -euo pipefail
-# Save stdin to TEST_CTRL/cmd.prompt
-cat > "$TEST_CTRL/cmd.prompt"
-# Append "$BEAD_ROLE $BEAD_MODEL" to TEST_CTRL/cmd.calls
-echo "$BEAD_ROLE $BEAD_MODEL" >> "$TEST_CTRL/cmd.calls"
-# Exit 3 if BEAD_AGENT_PROMPT is empty
-if [ -z "${BEAD_AGENT_PROMPT:-}" ]; then
-  exit 3
-fi
-# For role worker, write work.txt and commit it
-if [ "$BEAD_ROLE" = "worker" ]; then
-  echo "work" > work.txt
+#!/bin/sh
+set -eu
+cat >"$TEST_CTRL/cmd.prompt"
+echo "$BEAD_ROLE $BEAD_MODEL" >>"$TEST_CTRL/cmd.calls"
+[ -n "$BEAD_AGENT_PROMPT" ] || exit 3
+if [ "$BEAD_ROLE" = worker ]; then
+  echo work >work.txt
   git add work.txt && git commit -qm work
   echo "DONE: wrote work.txt"
-# For role reviewer, print APPROVE: fine
-elif [ "$BEAD_ROLE" = "reviewer" ]; then
+elif [ "$BEAD_ROLE" = reviewer ]; then
   echo "APPROVE: fine"
 fi
 EOF
   chmod +x "$T/harness.sh"
   sup work "$REPO"
-  # Assert calls are in the right order
-  assert_eq "$(cat "$TEST_CTRL/cmd.calls" | tr '\n' '|' | sed 's/|$//')" "worker any|reviewer any"
-  # Assert that the prompt contains <bead>
-  assert_match "$(cat "$TEST_CTRL/cmd.prompt")" "<bead>"
-  # Assert branch exists
+  assert_eq "$(cat "$TEST_CTRL/cmd.calls" | tr '\n' '|')" "worker any|reviewer any|" "the command gets the model after the slash"
+  assert_match "$(cat "$TEST_CTRL/cmd.prompt")" "<bead>" "the bead is the message"
   assert_branch bead/t-1 "pushed"
 }
 case_harness_label() {
