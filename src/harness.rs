@@ -16,7 +16,7 @@ use crate::util::{cmd, log, output, read_to_string, stdout_str, tail_lines, writ
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::Path;
-use std::sync::Mutex;
+use std::sync::{Arc, Condvar, Mutex};
 
 pub struct AgentRun {
     /// the last text the agent wrote (the bash printed it; callers grep DONE:/BLOCKED:/APPROVE:)
@@ -162,6 +162,9 @@ pub fn run_agent(
     let mut errors = String::new();
     let mut stalled = None;
     let r = repo.resolve(model);
+    let Some(_slot) = provider_slot(&repo.slug, &r.provider.name, r.provider.parallel) else {
+        return AgentRun { text: String::new(), full: String::new(), rc: 143, empty: true, error: String::new(), stalled: None };
+    };
     if r.harness == "aider" {
         // Aider explores nothing: it edits the files it is handed, so the files are the
         // ones the bead's DESCRIPTION names that exist in the worktree. The server is the
@@ -906,6 +909,48 @@ pub fn rejoin_session(repo: &Repo, sid: &str, dir: &Path, logf: &Path, timeout: 
 static CLAUDE_OK: Mutex<Option<(i64, bool)>> = Mutex::new(None);
 static PROBES: Mutex<Option<HashMap<String, (i64, bool)>>> = Mutex::new(None);
 
+// A provider's `parallel` bounds how many sessions run on it at once — lane rounds and
+// inline calls (brief, pre-check, post-mortem) alike, so two lanes over one provider, or
+// a burst of inline calls, never stack on a one-slot model.
+#[allow(clippy::type_complexity)]
+static SLOTS: Mutex<Option<HashMap<String, Arc<(Mutex<u64>, Condvar)>>>> = Mutex::new(None);
+
+/// Holds one of a provider's slots; `Drop` frees it and wakes the next waiter.
+pub struct SlotGuard(Arc<(Mutex<u64>, Condvar)>);
+
+impl Drop for SlotGuard {
+    fn drop(&mut self) {
+        let (count, cv) = &*self.0;
+        *count.lock().unwrap() -= 1;
+        cv.notify_one();
+    }
+}
+
+/// A slot on `name`, once fewer than `parallel` sessions hold one; `None` as soon as a
+/// stop lands while waiting.
+fn provider_slot(slug: &str, name: &str, parallel: u64) -> Option<SlotGuard> {
+    let pair = {
+        let mut g = SLOTS.lock().unwrap();
+        g.get_or_insert_with(HashMap::new).entry(name.to_string()).or_insert_with(|| Arc::new((Mutex::new(0), Condvar::new()))).clone()
+    };
+    let (count, cv) = &*pair;
+    let mut n = count.lock().unwrap();
+    let mut warned = false;
+    while *n >= parallel {
+        if signals::stopping() {
+            return None;
+        }
+        if !warned {
+            log(&format!("{slug}: waiting for a slot on {name} ({parallel} busy)"));
+            warned = true;
+        }
+        let (guard, _timed_out) = cv.wait_timeout(n, std::time::Duration::from_secs(1)).unwrap();
+        n = guard;
+    }
+    *n += 1;
+    Some(SlotGuard(pair.clone()))
+}
+
 pub fn claude_ok() -> bool {
     let now = crate::util::now();
     let mut g = CLAUDE_OK.lock().unwrap();
@@ -1188,5 +1233,28 @@ mod tests {
             .push(crate::config::Provider { probe: "http://127.0.0.1:1/health".into(), ..crate::config::Provider::implicit("down") });
         assert!(!runnable(&repo, "down/m"));
         assert!(why_not(&repo, "down/m").contains("down — its probe"));
+    }
+    #[test]
+    fn a_provider_semaphore_admits_parallel_at_once() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let inside = Arc::new(AtomicUsize::new(0));
+        let max_seen = Arc::new(AtomicUsize::new(0));
+        let handles: Vec<_> = (0..3)
+            .map(|_| {
+                let inside = inside.clone();
+                let max_seen = max_seen.clone();
+                std::thread::spawn(move || {
+                    let _guard = provider_slot("t", "test-sem", 2).expect("no stop");
+                    let now = inside.fetch_add(1, Ordering::SeqCst) + 1;
+                    max_seen.fetch_max(now, Ordering::SeqCst);
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                    inside.fetch_sub(1, Ordering::SeqCst);
+                })
+            })
+            .collect();
+        for h in handles {
+            h.join().unwrap();
+        }
+        assert_eq!(max_seen.load(Ordering::SeqCst), 2, "parallel bounds how many run at once");
     }
 }

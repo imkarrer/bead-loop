@@ -2134,7 +2134,9 @@ case_lane_with_two_slots() {
   # at once — its own marker, its own worktree — never both on one; status shows each.
   # Then both beads run to their PRs; and pause stub stops both slots.
   twobeads() {
-    printf '[[lanes]]\nname = "stub"\nmodels = ["*"]\nparallel = 2\n' >>"$BEAD_LOOP_CONFIG/config.toml"
+    # the provider's own parallel bounds concurrent sessions too (bl-iej.6): as wide as
+    # the lane, or the second slot would wait on the first's stub/worker session.
+    printf '[[lanes]]\nname = "stub"\nmodels = ["*"]\nparallel = 2\n[providers.stub]\nparallel = 2\n' >>"$BEAD_LOOP_CONFIG/config.toml"
     jq '. + [{id:"t-2", title:"Second", description:"y", status:"open", priority:3, labels:["delegate:local"]}]' "$BD_STATE/issues.json" >"$BD_STATE/i.tmp" && mv "$BD_STATE/i.tmp" "$BD_STATE/issues.json"
   }
   NO_DEFAULT_LANES=1 setup true auto stub/reviewer 'max_inflight = 3'; echo hang >"$TEST_CTRL/worker"; twobeads
