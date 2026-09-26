@@ -2193,6 +2193,30 @@ case_research_round_before_the_worker() {
   assert_match "$(cat "$BEAD_LOOP_STATE/repo/beads/t-1/brief")" "Pitfalls:" "to the end"
   assert_match "$(bead .notes)" "wrote the brief (40 lines)" "counted whole"
 }
+case_researched_bead_runs_under_aider() {
+  # research_aider (default true): once the brief's Files all exist, the worker moves from
+  # opencode to aider on its own, no harness label needed.
+  setup true auto stub/reviewer 'research_model = "stub/researcher"'
+  echo base >"$REPO/work.txt"; git -C "$REPO" add -A && git -C "$REPO" commit -qm "work.txt" && git -C "$REPO" push -q origin main
+  jq -n '{provider:{stub:{options:{baseURL:"http://stub.test/v1", apiKey:"not-needed"}}}}' >"$T/opencode.json"
+  OPENCODE_CONFIG=$T/opencode.json sup work "$REPO"
+  assert_eq "$(calls)" "bead-researcher bead-worker bead-reviewer" "researcher, then worker, then reviewer"
+  assert_match "$(cut -d' ' -f1,3,4 "$TEST_CTRL/calls")" "bead-worker openai/worker aider" "the worker moved to aider"
+  assert_match "$(sed -n 2p "$TEST_CTRL/aider.args")" " work.txt$" "the file the brief names"
+  assert_match "$(cat "$T/sup.log")" "research brief names 1 files that exist" "why it moved"
+}
+case_harness_opencode_keeps_a_researched_bead_in_opencode() {
+  # harness:opencode on the bead overrides the move to aider: the research brief still names
+  # only files that exist, but the label keeps the worker in opencode.
+  setup true auto stub/reviewer 'research_model = "stub/researcher"'
+  jq '.[0].labels = ["delegate:local", "harness:opencode"]' "$BD_STATE/issues.json" >"$BD_STATE/i.tmp" && mv "$BD_STATE/i.tmp" "$BD_STATE/issues.json"
+  echo base >"$REPO/work.txt"; git -C "$REPO" add -A && git -C "$REPO" commit -qm "work.txt" && git -C "$REPO" push -q origin main
+  jq -n '{provider:{stub:{options:{baseURL:"http://stub.test/v1", apiKey:"not-needed"}}}}' >"$T/opencode.json"
+  OPENCODE_CONFIG=$T/opencode.json sup work "$REPO"
+  assert_eq "$(calls)" "bead-researcher bead-worker bead-reviewer" "researcher, then worker, then reviewer"
+  assert_match "$(cut -d' ' -f1,3,4 "$TEST_CTRL/calls")" "bead-worker stub/worker none" "the worker stayed in opencode"
+  assert_nofile "$TEST_CTRL/aider.args" "aider never ran"
+}
 case_research_blocked_parks() {
   # The researcher's BLOCKED:, upheld by the second opinion (the brief model reading the bead
   # again with the first reply in hand), parks the bead before a single edit. The brief is
