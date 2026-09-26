@@ -68,4 +68,4 @@ stage's opencode model under aider (`devbox/coder` runs as `aider:devbox/coder`)
 `harness:opencode` takes an `aider:` model out of it. A `claude/*` stage is not touched by
 either. The reviewer is never aider: a review reads, it does not edit. When `research_aider` is true (the default),
 a bead with a research brief whose Files all exist runs under aider; `harness:opencode` keeps a bead in opencode
-when the change needs exploration after all.
+when the change needs exploration after all. A bead need not be scoped to files by hand when research is enabled and the brief's Files exist - the worker runs under aider.
