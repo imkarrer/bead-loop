@@ -714,7 +714,32 @@ pub fn finished_session(repo: &Repo, id: &str, dir: &Path, kind: &str, round: u6
     if updated < cutoff * 1000 {
         return None;
     }
-    newest.get("id").and_then(|v| v.as_str()).map(str::to_string)
+    let sid = newest.get("id").and_then(|v| v.as_str())?;
+    let msgs = crate::shell::curl_get(&format!("{attach}/session/{sid}/message"), None, 10)?;
+    let v: Value = serde_json::from_str(&msgs).ok()?;
+    if !session_done(&v) {
+        return None;
+    }
+    Some(sid.to_string())
+}
+
+/// Whether a session's last assistant message ended: a numeric `info.time.completed`, no
+/// `info.error`, and an `info.finish` that is a string other than `"tool-calls"` (a step
+/// that called a tool expects another step; a missing or null finish is not an ended
+/// step). A session the server died under (bl-grj.1, 25 Sep) is cut off mid-step, not
+/// finished: its last assistant message has `completed` and `finish` both null. `false`
+/// with no assistant message.
+fn session_done(messages: &Value) -> bool {
+    let Some(last) =
+        messages.as_array().into_iter().flatten().rfind(|m| m.pointer("/info/role").and_then(|r| r.as_str()) == Some("assistant"))
+    else {
+        return false;
+    };
+    let info = last.pointer("/info");
+    let completed = info.and_then(|i| i.pointer("/time/completed")).is_some_and(|c| c.is_number());
+    let no_error = info.and_then(|i| i.get("error")).is_none();
+    let finish_ended = info.and_then(|i| i.get("finish")).and_then(|f| f.as_str()).is_some_and(|f| f != "tool-calls");
+    completed && no_error && finish_ended
 }
 
 fn rejoin_poll() -> f64 {
@@ -938,6 +963,35 @@ mod tests {
         assert_eq!(opencode_provider_in(&f, "bare"), (String::new(), String::new()), "a provider without options");
         assert_eq!(opencode_provider_in(&f, "nope"), (String::new(), String::new()));
         let _ = std::fs::remove_dir_all(&d);
+    }
+    #[test]
+    fn a_session_is_done_only_when_its_last_step_ended() {
+        let done = |time: Value, finish: Option<&str>, error: Option<Value>| {
+            let mut info = serde_json::json!({"role": "assistant", "time": time});
+            if let Some(f) = finish {
+                info["finish"] = serde_json::json!(f);
+            }
+            if let Some(e) = error {
+                info["error"] = e;
+            }
+            session_done(&serde_json::json!([{"info": info, "parts": []}]))
+        };
+        assert!(done(serde_json::json!({"created": 1, "completed": 2}), Some("stop"), None));
+        assert!(done(serde_json::json!({"created": 1, "completed": 2}), Some("length"), None));
+        assert!(!done(serde_json::json!({"created": 1}), None, None), "bl-grj.1's session: no completed, no finish");
+        assert!(!done(serde_json::json!({"created": 1, "completed": 2}), None, None), "no finish");
+        assert!(!done(serde_json::json!({"created": 1, "completed": 2}), Some("tool-calls"), None), "expects another step");
+        assert!(
+            !done(
+                serde_json::json!({"created": 1, "completed": 2}),
+                Some("stop"),
+                Some(serde_json::json!({"name": "MessageAbortedError"}))
+            ),
+            "aborted mid-step"
+        );
+        let user_only = serde_json::json!([{"info": {"role": "user"}, "parts": []}]);
+        assert!(!session_done(&user_only));
+        assert!(!session_done(&serde_json::json!([])));
     }
     #[test]
     fn a_session_title_names_its_round() {

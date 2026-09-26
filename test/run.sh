@@ -908,7 +908,7 @@ case_restart_rejoins_no_older_rounds_session() {
   echo work >"$R/wt/t-1/work.txt"; git -C "$R/wt/t-1" add -A; git -C "$R/wt/t-1" commit -qm work
   echo "DONE: work.txt written" >"$R/review/t-1"
   jq -n '[{id:"ses_old", parentID:null, agent:"bead-reviewer", model:{providerID:"stub",id:"reviewer"}, title:"t-1 · reviewer · round 2", time:{created:0, updated:(now*1000|floor)}}]' >"$TEST_CTRL/sessions.json"
-  jq -cn '[{info:{role:"assistant"},parts:[{type:"text",text:"APPROVE: round 2 looked fine"}]}]' >"$TEST_CTRL/messages.json"
+  jq -cn '[{info:{role:"assistant",time:{created:1,completed:2},finish:"stop"},parts:[{type:"text",text:"APPROVE: round 2 looked fine"}]}]' >"$TEST_CTRL/messages.json"
   # (i) no lane marker at all: nothing to rejoin.
   sup recover "$REPO"
   assert_nofile "$R/rejoin/t-1" "no marker, nothing to rejoin"
@@ -1005,7 +1005,7 @@ case_recover_rejoins_a_session_that_finished_in_the_gap() {
   # even runs, its DONE among its messages, its title the round that just ran.
   jq -n '[{id:"ses_live", parentID:null, agent:"bead-worker", model:{providerID:"fast",id:"m"}, title:"t-1 · worker · round 1", time:{created:0, updated:(now*1000)}}]' >"$TEST_CTRL/sessions.json"
   echo '{}' >"$TEST_CTRL/session-status.json"
-  jq -cn '[{info:{role:"assistant"},parts:[{type:"text",text:"DONE: work.txt written"}]}]' >"$TEST_CTRL/messages.json"
+  jq -cn '[{info:{role:"assistant",time:{created:1,completed:2},finish:"stop"},parts:[{type:"text",text:"DONE: work.txt written"}]}]' >"$TEST_CTRL/messages.json"
   echo work >"$R/wt/t-1/work.txt"
   sup recover "$REPO"
   assert_match "$(cat "$T/sup.log")" "t-1: worker session ses_live finished between the stop and the start; rejoining it" "recover found it idle but unread"
@@ -1019,6 +1019,30 @@ case_recover_rejoins_a_session_that_finished_in_the_gap() {
   assert_nofile "$R/rejoin/t-1" "the marker is spent"
 }
 
+case_recover_reopens_a_round_the_server_died_under() {
+  # The opencode server died and came back with nothing to rejoin: with bl-ppk, the
+  # restart leaves lane.dev, so the marker, the cutoff and the title all still let this
+  # session through — only session_done can tell it apart from a session that finished
+  # in the gap. Its last assistant message never got a completed time or a finish: the
+  # server was cut off mid-step (bl-grj.1, 25 Sep), so recover reopens the round instead.
+  setup true auto stub/reviewer 'attach = "http://oc.test:4096"'; echo hang >"$TEST_CTRL/worker"
+  mkdir -p "$BEAD_LOOP_STATE"; touch "$BEAD_LOOP_STATE/restart"
+  setsid "$SUP" --once tick 2>>"$T/sup.log" & pid=$!
+  until grep -q '^bead-worker' "$TEST_CTRL/calls" 2>/dev/null; do sleep 0.1; done
+  echo '{"ses_live":{"type":"busy"}}' >"$TEST_CTRL/session-status.json"   # the server is on it now
+  sleep 0.3
+  kill -TERM -- -"$pid"; rc=0; wait "$pid" || rc=$?
+  assert_eq "$rc" 143 "exits 143 on TERM"
+  R=$BEAD_LOOP_STATE/repo
+  jq -n '[{id:"ses_live", parentID:null, agent:"bead-worker", model:{providerID:"stub",id:"worker"}, title:"t-1 · worker · round 1", time:{created:0, updated:(now*1000|floor)}}]' >"$TEST_CTRL/sessions.json"
+  echo '{}' >"$TEST_CTRL/session-status.json"
+  jq -cn '[{info:{role:"assistant",time:{created:1}},parts:[{type:"text",text:"Let me check the tests first."}]}]' >"$TEST_CTRL/messages.json"
+  sup recover "$REPO"
+  ! grep -q 'finished between the stop and the start' <<<"$(cat "$T/sup.log")" && ok || bad "not taken for finished: its last step never ended"
+  assert_nofile "$R/rejoin/t-1" "nothing to rejoin"
+  assert_match "$(bead .notes)" "round interrupted by a stop; back in the dev queue, no failure charged" "reopened instead"
+  assert_eq "$(cat "$R/beads/t-1/failures" 2>/dev/null || echo 0)" 0 "no failure"
+}
 case_new_attempt_aborts_leftover_session() {
   setup true auto '' 'attach = "http://oc.test:4096"'
   echo '{"ses_old":{"type":"busy"}}' >"$TEST_CTRL/session-status.json"

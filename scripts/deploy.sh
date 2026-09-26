@@ -8,9 +8,12 @@
 # downloaded and checked, install.sh installs it and refreshes the links and units from
 # the clone, and what changed is restarted: the loop always (it is the binary); the
 # opencode server only when the agents, the skills or its unit changed, since the model
-# sessions live in it; the UI only when bin/, ui/ or its unit changed. The loop's restart
-# drops $STATE_DIR/restart first, so it leaves its sessions running on the server and the
-# next process rejoins them (recover): a change to src/ costs no round.
+# sessions live in it; the UI only when bin/, ui/ or its unit changed. When the opencode
+# server does restart, the loop is stopped first (a plain stop, not a restart) and started
+# again once the server is back, so the rounds in flight are reopened with no failure
+# charged; otherwise the loop's restart drops $STATE_DIR/restart first, so it leaves its
+# sessions running on the server and the next process rejoins them (recover): a change to
+# src/ costs no round.
 #
 # What this box needs: git, gh (signed in), flox — no compiler. The binary links the
 # flox env's glibc by store path, and `flox activate` on the clone realizes that env at
@@ -120,12 +123,25 @@ restart() {  # restart UNIT
   fi
 }
 systemctl --user daemon-reload
-if changed agents skills systemd/opencode-web.service; then restart opencode-web.service; else echo "opencode-web.service kept: agents, skills and its unit are as deployed (the sessions live)"; fi
 if changed bin ui systemd/bead-loop-ui.service; then restart bead-loop-ui.service; else echo "bead-loop-ui.service kept: bin, ui and its unit are as deployed"; fi
-# A restart, not a stop: the loop leaves its sessions running on the (kept) server and
-# the next process rejoins them (recover) — the marker says which this is.
-touch "${BEAD_LOOP_STATE:-$HOME/.local/state/bead-loop}/restart"
-restart bead-supervisor.service
+if changed agents skills systemd/opencode-web.service; then
+  # Restarting opencode-web.service kills every session in flight: rejoining a session
+  # that died with the server (not the loop) charges its round a failure that isn't the
+  # worker's (05:03:17 25 Sep, bl-grj.1). So the loop stops first, while the server is
+  # still up to abort its sessions cleanly; recover reopens those rounds with no failure
+  # charged once the new loop starts.
+  rm -f "${BEAD_LOOP_STATE:-$HOME/.local/state/bead-loop}/restart"   # an earlier marker would turn this stop into a restart
+  systemctl --user stop bead-supervisor.service && echo "stopped bead-supervisor.service"
+  restart opencode-web.service
+  for _ in $(seq 30); do curl -s -o /dev/null --max-time 2 http://127.0.0.1:4096/session/status && break; sleep 1; done
+  systemctl --user start bead-supervisor.service && echo "started bead-supervisor.service"
+else
+  echo "opencode-web.service kept: agents, skills and its unit are as deployed (the sessions live)"
+  # A restart, not a stop: the loop leaves its sessions running on the (kept) server and
+  # the next process rejoins them (recover) — the marker says which this is.
+  touch "${BEAD_LOOP_STATE:-$HOME/.local/state/bead-loop}/restart"
+  restart bead-supervisor.service
+fi
 systemctl --user is-active -q bead-supervisor.timer || systemctl --user start bead-supervisor.timer || true
 sleep 2
 systemctl --user --no-pager --lines=0 status opencode-web.service bead-loop-ui.service bead-supervisor.service | grep -E '^\S|Active:' || true

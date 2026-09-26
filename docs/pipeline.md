@@ -61,7 +61,10 @@ past what is deployed — then download the release `main-<sha7>` the pipeline p
 for exactly that commit (the tested binary, byte for byte; no compiler on the box), put
 the clone at the commit, `install.sh` with that binary, and restart what changed: the loop
 always (it rejoins its sessions); the opencode server, where the sessions live, only when
-`agents/`, `skills/` or its unit moved; the UI only when `bin/`, `ui/` or its unit did.
+`agents/`, `skills/` or its unit moved; the UI only when `bin/`, `ui/` or its unit did. When
+the opencode server does restart, the loop is stopped first (a plain stop, not a restart),
+the server restarted, and the loop started again, so the rounds in flight are reopened
+with no failure charged.
 
 The clone is the deploy's alone — nothing else writes there, so a reset is always safe —
 and `~/src/bead-loop`, the project the loop works, is not read by the deploy at all:
