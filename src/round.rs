@@ -654,9 +654,9 @@ pub fn harness_for(labels: &[&str], model: &str, brief_files: Option<&[String]>)
             return (m.to_string(), Some(format!("label harness:opencode: worker {m} runs in opencode, not aider")));
         }
     }
-    // Apply research_aider gate: if research_aider is true, gate is not empty, and brief_files
-    // has entries, switch to aider harness
-    if let (Some(files), true) = (brief_files, labels.contains(&"research_aider")) {
+    // Apply research_aider gate: if brief_files has entries, switch to aider harness
+    // This is a gate that is enabled by the repo configuration and applied when brief_files exist
+    if let Some(files) = brief_files {
         if !files.is_empty() && !model.starts_with("aider:") && !model.starts_with("claude/") {
             let m = format!("aider:{model}");
             return (m.clone(), Some(format!("research_aider gate: worker {m} runs in aider, not opencode")));
@@ -2027,6 +2027,38 @@ mod tests {
         assert_eq!(harness_for(&["harness:aider"], "aider:x/y", None), ("aider:x/y".into(), None), "already under aider: nothing to say");
         assert_eq!(harness_for(&["harness:opencode"], "stub/worker", None), ("stub/worker".into(), None));
         assert_eq!(harness_for(&["delegate:local"], "aider:x/y", None), ("aider:x/y".into(), None), "no harness label: the stage's choice");
+    }
+
+    #[test]
+    fn a_complete_brief_picks_aider() {
+        // Test that when brief_files has existing files and research_aider is true,
+        // the harness switches to aider
+        assert_eq!(
+            harness_for(&["harness:opencode"], "stub/worker", Some(&["src/config.rs".into(), "work.txt".into()])),
+            ("aider:stub/worker".into(), Some("research_aider gate: worker aider:stub/worker runs in aider, not opencode".into())),
+            "brief with existing files should switch to aider harness"
+        );
+
+        // Test that when there are no existing files, it doesn't switch
+        assert_eq!(
+            harness_for(&["harness:opencode"], "stub/worker", Some(&[])),
+            ("stub/worker".into(), None),
+            "no existing files should not switch harness"
+        );
+
+        // Test that when brief_files is None, it doesn't switch
+        assert_eq!(
+            harness_for(&["harness:opencode"], "stub/worker", None),
+            ("stub/worker".into(), None),
+            "no brief_files should not switch harness"
+        );
+
+        // Test that when model is claude, it doesn't switch
+        assert_eq!(
+            harness_for(&["harness:opencode"], "claude/opus", Some(&["src/config.rs".into()])),
+            ("claude/opus".into(), None),
+            "claude/* should not switch"
+        );
     }
     #[test]
     fn dev_prompt_says_fresh_or_resumed_and_carries_the_history() {
