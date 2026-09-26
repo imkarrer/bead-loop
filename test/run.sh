@@ -567,6 +567,20 @@ case_config_layers() {
   rc=0; sup work "$REPO" || rc=$?; assert_eq "$rc" 1 "unparseable config dies"
 }
 
+case_a_stage_with_no_worker_stops() {
+  # bl-iej.15.1: no agent has a model of its own, so a stage with no worker is a config
+  # error, named by the stage's name. An empty global file is the everyday way to get one
+  # when a repo keeps its stages there.
+  setup true auto '' "$(printf '[[stages]]\nname = "lonely"\nreviewer = "stub/reviewer"\n')"
+  rc=0; sup work "$REPO" || rc=$?
+  assert_eq "$rc" 1 "a stage with no worker stops the run"
+  assert_match "$(cat "$T/sup.log")" "stage lonely names no worker" "the stop names the stage"
+  sed -i '/^\[\[stages\]\]/,$d' "$REPO/.bead-loop.toml"; : >"$BEAD_LOOP_CONFIG/config.toml"
+  rc=0; sup work "$REPO" || rc=$?
+  assert_eq "$rc" 1 "an empty global config.toml stops a repo whose worker it named"
+  assert_match "$(cat "$T/sup.log")" "stage 1 names no worker" "the one implied stage"
+}
+
 case_escalation_stages() {
   setup true auto '' "$(stages stub/fast::2 stub/slow:stub/senior:1)"; echo nocommit >"$TEST_CTRL/worker"
   sup --once tick; assert_eq "$(bead .status)" open "round 1 failed: back in the queue"

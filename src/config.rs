@@ -468,9 +468,9 @@ impl Repo {
                 approvals: Approvals::All,
             });
         }
-        for (i, s) in stages.iter().enumerate() {
+        for s in &stages {
             if s.worker.is_empty() {
-                die(&format!("{slug}: stage {} names no worker; set model or [[stages]]", i + 1));
+                die(&format!("{slug}: stage {} names no worker; set its worker, or model when there is no [[stages]]", s.name));
             }
         }
         let base_remote = cfg.str("base_remote", "origin");
@@ -1031,8 +1031,7 @@ impl Layers {
                 name: p.clone(),
                 lane: p.clone(),
                 parallel: width(p),
-                // the first also takes a stage with no model (the agent's default)
-                models: if i == 0 { vec![format!("{p}/*"), p.clone(), String::new()] } else { vec![format!("{p}/*"), p.clone()] },
+                models: vec![format!("{p}/*"), p.clone()],
                 exclude: Vec::new(),
                 worker: true,
                 reviewer: true,
@@ -1041,7 +1040,7 @@ impl Layers {
             })
             .collect();
         if v.is_empty() {
-            // no model named anywhere (every stage on the agent's default): one lane for all
+            // no provider given (a command that runs no lane; main.rs passes none): one lane for all
             v.push(LaneSpec {
                 name: "dev".into(),
                 lane: "dev".into(),
@@ -1094,7 +1093,7 @@ mod tests {
         assert!(v[0].takes("devbox/coder") && !v[0].takes("claude/opus") && v[1].takes("claude/opus"));
         assert!(v.iter().all(|s| s.worker && s.reviewer), "both roles");
         assert!(v[0].parks && v[0].fallback && !v[1].parks && !v[1].fallback, "the first parks and takes no-reviewer rounds");
-        assert!(v[0].takes(""), "the first takes a stage with no model, the agent's default");
+        assert!(!v[0].takes(""), "no lane takes a round with no model: a stage with no worker stops the run (Repo::load)");
         let v = l.lanes(&["stub".into()]);
         assert!(v[0].takes("aider:stub/x"), "an aider round is on its provider's lane");
         assert_eq!(v[0].parallel, 1, "one slot by default");
