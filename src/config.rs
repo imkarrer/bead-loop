@@ -1400,6 +1400,7 @@ mod tests {
             "stall_compactions",
             "stall_steps",
             "attach",
+            "target_label",
         ];
 
         let docs = include_str!("../docs/config.md");

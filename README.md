@@ -90,6 +90,27 @@ GitHub about every PR in flight every 30 seconds. A loop with nothing to do bloc
 last one leaves it. Nothing waits on a clock while there is work, and nothing polls while
 there is none.
 
+Targets are configured in `.bead-loop.toml` under `[targets.NAME]` tables, with keys like
+`path`, `base`, `base_remote`, `push_remote`, `pr_repo`, `setup`, `gate`, `merge`,
+`merge_label`, `adopt`, `max_inflight`, `open_pr` and `pr_style`. A bead with a
+`work:NAME` label picks the target of that name; the default target is the beads repo
+itself. [docs/design-targets.md](docs/design-targets.md) explains the target concept
+and how the PR is opened; [docs/config.md](docs/config.md)'s Targets section lists the
+target keys and their defaults.
+
+Targets are configured in `.bead-loop.toml` under `[targets.NAME]` tables, with keys like
+`path`, `base`, `base_remote`, `push_remote`, `pr_repo`, `setup`, `gate`, `merge`,
+`merge_label`, `adopt`, `max_inflight`, `open_pr` and `pr_style`. A bead with a
+`work:NAME` label picks the target of that name; the default target is the beads repo
+self. [docs/design-targets.md](docs/design-targets.md) explains the target concept
+and how the PR is opened; [docs/config.md](docs/config.md)'s Targets section lists the
+target keys and their defaults.
+
+A bead's target can be configured with `merge = "external"` to let someone else merge
+the PR, and `open_pr = "ask"` to let the operator open the PR. [docs/design-targets.md](docs/design-targets.md) explains
+the target concept and how the PR is opened; [docs/config.md](docs/config.md)'s Targets section lists the
+target keys and their defaults.
+
 Lanes are keyed by **model server**, not role, with `[[lanes]]` in the global config
 (`gpu`, `cpu`, `claude` here): a round on the CPU box never holds the GPU's queue, and a
 bead escalated to Claude runs at once. Infrastructure failing — a server down, setup
@@ -134,6 +155,7 @@ config, and have CI report a status on the repo's PRs with `gh` logged in. Every
 
 ```bash
 bead-supervisor doctor                                  # every dependency probed, red or green, one line each; --json for the page
+bead-supervisor publish REPO ID [--title T] [--body-file F]   # open the PR an open_pr = "ask" round proposed and the merge mode `external` (maintainer merges) is also supported
 ```
 
 The page, **<http://127.0.0.1:4097>**, shows the flow — the workflow as one graph, a band
