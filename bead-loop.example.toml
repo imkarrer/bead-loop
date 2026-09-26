@@ -1,5 +1,6 @@
 # Copy to <repo>/.bead-loop.toml. TOML; every key optional. Any key from the global
 # ~/.config/bead-loop/config.toml may appear here too and wins for this repo.
+# providers are global: ~/.config/bead-loop/config.toml, [providers.NAME]: harness, parallel, cost, probe (docs/config.md, Providers)
 label = "delegate:qwen30b"            # bd ready -l LABEL picks the work           (default "delegate:local")
 base = "master"                        # branch to fork from and PR into           (default: origin's HEAD)
 setup = "npm ci"                       # runs in the fresh worktree before the worker (no node_modules there)
@@ -41,8 +42,10 @@ on_exhaust = "repeat"                  # repeat: cycle the stages until it lands
 # (`attempts` is the older name for `failures` and still reads.)
 [[stages]]
 worker = "devbox/coder"                # an opencode agent on the devbox provider; "aider:devbox/coder" is aider on
-reviewer = "acbox/reviewer"            # the same server, given the files the bead names and the gate as its lint
+name = "local"
+reviewer = ["acbox/reviewer", "claude/sonnet"]   # two-seat reviewer with approvals = all
 failures = 3
+# each seat gives a brief on the round's work, and the PR only lands when all approve
 
 [[stages]]
 worker = "acbox/coder"                 # the 80B implements; the same reviewer judges
