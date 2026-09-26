@@ -103,7 +103,9 @@ function withPrs(repos) {
 }
 // The scoreboard: `bead-supervisor --json stats` reads every bead the loop touched and
 // every session log, a few seconds of bd — so it is refreshed off the request path, once
-// a minute (BEAD_LOOP_UI_STATS_TTL_MS), and the page gets the last one until then.
+// a minute (BEAD_LOOP_UI_STATS_TTL_MS), and the page gets the last one until then. A
+// repo with `precheck_model` set carries a `precheck: {sent_back, passed, skipped}`
+// under each window; the page shows those numbers alongside send-backs, text only.
 const STATS_TTL_MS = Number(process.env.BEAD_LOOP_UI_STATS_TTL_MS || 60000);
 let stats = { at: 0, v: null, running: null };
 function statsNow() {

@@ -65,6 +65,7 @@ worker = "local/coder"
 failures = 2
 # reviewer = ["local/reviewer", "paid/model"]
 # approvals = "all"
+# precheck_model = "acbox/utility"  # the small resident model: pre-check after the gate, post-mortem on a send-back; empty = neither
 # [[lanes]] is optional: unset, one lane per provider the stages name, as wide as its parallel.
 CFG
   echo "config ~/.config/bead-loop/config.toml (set repos)"
