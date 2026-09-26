@@ -131,6 +131,12 @@ impl Repo {
     pub fn seat_clear_running(&self, id: &str, k: usize) {
         let _ = std::fs::remove_file(self.seat_dir(id).join(format!("{k}.running")));
     }
+    /// The seat whose `K.running` marker exists for bead ID, if any — the seat a restart
+    /// caught mid-round, before `seat_clear_all_running` cuts it short.
+    pub fn seat_which_running(&self, id: &str) -> Option<usize> {
+        let rd = std::fs::read_dir(self.seat_dir(id)).ok()?;
+        rd.flatten().find_map(|e| e.file_name().to_string_lossy().strip_suffix(".running")?.parse().ok())
+    }
     /// Every `K.running` marker for bead ID gone: a restart cuts short whichever seats
     /// were running, so none of them holds `pick_seat` back from picking them again.
     pub fn seat_clear_all_running(&self, id: &str) {
@@ -266,28 +272,30 @@ impl Repo {
         read_to_string(&self.lane_path(name)).and_then(|s| s.lines().next().map(|l| l.trim().to_string())).filter(|s| !s.is_empty())
     }
     /// `$RS/rejoin/ID`: a session of this bead still running on the opencode server after
-    /// the loop restarted — `SID worker` or `SID reviewer`. The lane that takes the bead
-    /// waits on that session instead of starting one (harness.rs rejoin_session).
+    /// the loop restarted — `SID worker` or `SID reviewer` (a reviewer entry names its
+    /// seat too: `SID reviewer K`). The lane that takes the bead waits on that session
+    /// instead of starting one (harness.rs rejoin_session).
     pub fn rejoin_path(&self, id: &str) -> PathBuf {
         self.rs.join("rejoin").join(id)
     }
-    pub fn rejoin_set(&self, id: &str, sid: &str, kind: &str) {
-        write_file(
-            &self.rejoin_path(id),
-            &format!(
-                "{sid} {kind}
-"
-            ),
-        );
+    /// `seat` is 1-based and only meaningful for `kind == "reviewer"`; 0 (worker,
+    /// research, or a reviewer with no seat) is not written.
+    pub fn rejoin_set(&self, id: &str, sid: &str, kind: &str, seat: usize) {
+        let line = if seat == 0 { format!("{sid} {kind}") } else { format!("{sid} {kind} {seat}") };
+        write_file(&self.rejoin_path(id), &format!("{line}\n"));
     }
     pub fn rejoin_clear(&self, id: &str) {
         let _ = std::fs::remove_file(self.rejoin_path(id));
     }
-    /// (session id, worker|reviewer), when a session is to be rejoined.
-    pub fn rejoin_of(&self, id: &str) -> Option<(String, String)> {
+    /// (session id, worker|reviewer, seat), when a session is to be rejoined. `seat` is 0
+    /// when the entry names none (a worker, a research round, or an old-style entry).
+    pub fn rejoin_of(&self, id: &str) -> Option<(String, String, usize)> {
         let s = read_to_string(&self.rejoin_path(id))?;
         let mut it = s.split_whitespace();
-        Some((it.next()?.to_string(), it.next().unwrap_or("worker").to_string()))
+        let sid = it.next()?.to_string();
+        let kind = it.next().unwrap_or("worker").to_string();
+        let seat = it.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+        Some((sid, kind, seat))
     }
     pub fn pause_path(&self, name: &str) -> PathBuf {
         self.state_dir.join(format!("pause.{name}"))
@@ -462,6 +470,16 @@ mod tests {
         repo.research_clear("t-1");
         assert_eq!(repo.research_of("t-1"), None, "the brief goes");
         assert!(!repo.research_prev_path("t-1").exists(), "and the earlier one");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+    #[test]
+    fn a_rejoin_names_its_seat() {
+        let d = crate::config::scratch("rejoin_seat");
+        let repo = crate::config::test_repo(&d, &["a"]);
+        repo.rejoin_set("t-1", "ses_x", "reviewer", 2);
+        assert_eq!(repo.rejoin_of("t-1"), Some(("ses_x".to_string(), "reviewer".to_string(), 2)));
+        repo.rejoin_set("t-1", "ses_y", "worker", 0);
+        assert_eq!(repo.rejoin_of("t-1"), Some(("ses_y".to_string(), "worker".to_string(), 0)));
         let _ = std::fs::remove_dir_all(&d);
     }
     #[test]

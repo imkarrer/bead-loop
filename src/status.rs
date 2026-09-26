@@ -23,7 +23,7 @@ pub fn sessions_json(repo: &Repo, dir: &Path) -> Value {
     }
     let d = dir.to_string_lossy().into_owned();
     let bead_id = dir.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
-    let rejoin_sid = repo.rejoin_of(&bead_id).map(|(sid, _)| sid);
+    let rejoin_sid = repo.rejoin_of(&bead_id).map(|(sid, _, _)| sid);
     let busy: Value =
         curl_get(&format!("{}/session/status", repo.attach), Some(&d), 3).and_then(|s| serde_json::from_str(&s).ok()).unwrap_or(json!({}));
     let list: Value =

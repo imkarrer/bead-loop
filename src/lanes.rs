@@ -439,6 +439,13 @@ pub fn recover(ctx: &Ctx) {
                 // back in its queue with a marker, and the lane that takes it waits on the
                 // session instead of starting one — rather than abort it and start over.
                 if in_review || is_inprog {
+                    // Which seat, when it's a review round still running with more than
+                    // one seat: the one whose `K.running` marker names it, read before the
+                    // restart cuts every seat's round short. A lone reviewer is seat 1 on
+                    // disk but carries no seat number in its rejoin entry or its title,
+                    // same as before seats existed.
+                    let multi_seat = repo.stage_for(repo.failures_of(&id)).is_some_and(|st| st.seats.len() > 1);
+                    let seat = if in_review && multi_seat { repo.seat_which_running(&id).unwrap_or(0) } else { 0 };
                     if in_review {
                         repo.seat_clear_all_running(&id);
                     }
@@ -453,7 +460,7 @@ pub fn recover(ctx: &Ctx) {
                             Some(t) => crate::harness::session_kind(&id, &t).map(|k| (sid, k)),
                         });
                     if let Some((sid, kind)) = running {
-                        repo.rejoin_set(&id, &sid, kind);
+                        repo.rejoin_set(&id, &sid, kind, seat);
                         if !in_review {
                             crate::shell::bd_status(&repo, &id, "open");
                         }
@@ -472,7 +479,7 @@ pub fn recover(ctx: &Ctx) {
                         .copied()
                         .and_then(|cutoff| crate::harness::finished_session(&repo, &id, &dir, kind, round, cutoff));
                     if let Some(sid) = finished {
-                        repo.rejoin_set(&id, &sid, kind);
+                        repo.rejoin_set(&id, &sid, kind, seat);
                         if !in_review {
                             crate::shell::bd_status(&repo, &id, "open");
                         }

@@ -321,6 +321,18 @@ case_two_seats_first_reject_sends_back() {
   assert_eq "$(cat "$BEAD_LOOP_STATE/repo/beads/t-1/failures")" 1 "one failure"
   assert_nobranch bead/t-1 "nothing pushed"
 }
+case_seats_any_rule() {
+  # "any": one seat's REJECT does not decide while the other has not voted yet (quorum
+  # stays Pending, so the bead stays in review, no failure charged); an APPROVE from
+  # either seat is enough to push, and both seats' verdicts still make the PR body.
+  setup true auto '' "$(printf '[[stages]]\nworker = "stub/worker"\nreviewer = ["stub/reviewer", "stub/second"]\napprovals = "any"\n')"
+  printf 'reject\napprove\n' >"$TEST_CTRL/review"
+  sup work "$REPO"
+  assert_eq "$(grep -c '^bead-reviewer ' "$TEST_CTRL/calls")" 2 "both seats reviewed"
+  assert_nofile "$BEAD_LOOP_STATE/repo/beads/t-1/failures" "no failure: the reject alone did not decide"
+  assert_branch bead/t-1 "pushed once either seat approves"
+  assert_eq "$(grep -c 'Reviewer (' "$TEST_CTRL/gh.log")" 2 "the PR body lists both seats' lines"
+}
 case_ci_pending_then_green() {
   # The verdict on a check list is a unit test (merge::verdicts); here, what each one
   # does to the PR and the bead: nothing while a check is pending, the merge on green.
@@ -930,6 +942,34 @@ case_restart_rejoins_the_reviewer_session() {
   assert_eq "$(calls)" "bead-worker bead-reviewer" "one reviewer call in all"
   assert_file "$R/inflight/t-1" "to a PR"
   assert_match "$(cat "$T/sup.log")" "t-1: review approved" "its APPROVE taken"
+}
+case_restart_rejoins_a_seat_session() {
+  # As case_restart_rejoins_the_reviewer_session, but with two seats: seat 1 has already
+  # approved when the loop stops mid seat 2's round. recover names the seat that was
+  # running (seat_which_running, read before the restart clears every seat's marker), the
+  # review lane rejoins only that seat's session, and the PR carries both reviewer lines.
+  setup true auto '' "$(printf 'attach = "http://oc.test:4096"\n[[stages]]\nworker = "stub/worker"\nreviewer = ["stub/reviewer", "stub/second"]\n')"
+  printf 'approve\nhang\n' >"$TEST_CTRL/review"
+  sup --once tick   # worker done, seat 1 (stub/reviewer) approves; seat 2 not reached yet
+  assert_eq "$(grep -c '^bead-reviewer' "$TEST_CTRL/calls")" 1 "seat 1 reviewed, not seat 2 yet"
+  R=$BEAD_LOOP_STATE/repo
+  assert_file "$R/review/t-1.seats/1" "seat 1's approval on disk"
+  mkdir -p "$BEAD_LOOP_STATE"; touch "$BEAD_LOOP_STATE/restart"
+  setsid "$SUP" --once tick 2>>"$T/sup.log" & pid=$!
+  until [ "$(grep -c '^bead-reviewer' "$TEST_CTRL/calls" 2>/dev/null)" = 2 ]; do sleep 0.1; done
+  echo '{"ses_rev2":{"type":"busy"}}' >"$TEST_CTRL/session-status.json"   # the server is on it now
+  sleep 0.3
+  kill -TERM -- -"$pid"; rc=0; wait "$pid" || rc=$?
+  assert_eq "$rc" 143 "exits 143 on TERM"
+  assert_file "$R/review/t-1" "still in the review queue"
+  sup recover "$REPO"
+  assert_match "$(cat "$T/sup.log")" "t-1: reviewer session ses_rev2 still running on the server after the stop; rejoining it" "recover found it"
+  assert_eq "$(cat "$R/rejoin/t-1" 2>/dev/null)" "ses_rev2 reviewer 2" "the rejoin marker names the seat"
+  ( sleep 0.6; jq -cn '[{info:{role:"assistant"},parts:[{type:"text",text:"APPROVE: seat 2 checked too"}]}]' >"$TEST_CTRL/messages.json"; echo '{}' >"$TEST_CTRL/session-status.json" ) &
+  BEAD_LOOP_REJOIN_POLL=0.1 sup --once tick; wait
+  assert_match "$(cat "$T/sup.log")" "review: t-1 seat 2 by stub/second (0 failures, rejoining session ses_rev2)" "the round rejoins seat 2, not a fresh one"
+  assert_file "$R/inflight/t-1" "to a PR"
+  assert_eq "$(grep -c 'Reviewer (' "$TEST_CTRL/gh.log")" 2 "both reviewer lines in the PR body"
 }
 case_recover_rejoins_a_session_that_finished_in_the_gap() {
   # A session that said DONE between the stop and the start: not busy, so
