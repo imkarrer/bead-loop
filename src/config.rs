@@ -440,6 +440,8 @@ pub struct Repo {
     /// `$STATE_DIR/<slug>`
     pub rs: PathBuf,
     pub state_dir: PathBuf,
+    /// when true, research rounds switch to aider harness if brief has files
+    pub research_aider: bool,
 }
 
 impl Repo {
@@ -522,6 +524,7 @@ impl Repo {
             beads,
             rs,
             state_dir,
+            research_aider: cfg.bool("research_aider", false),
         };
         for s in &r.stages {
             for m in std::iter::once(&s.worker).chain(s.seats.iter().map(|x| &x.model)) {
@@ -797,6 +800,7 @@ pub fn test_repo(root: &Path, stages: &[&str]) -> Repo {
         repo,
         rs,
         state_dir,
+        research_aider: false,
     }
 }
 
