@@ -1,29 +1,34 @@
 # bead-loop
 
-Work [beads](https://github.com/steveyegge/beads) with local models in any repo. One
-resident supervisor runs lanes side by side — a **dev lane** where the implementor model
-works a bead in its own worktree and a gate proves it, and a **review lane** where the
-reviewer model judges the diff and pushes the PR — over three queues: **dev**, **review**,
-**merge** (CI on GitHub), with a **merge watcher** on the third. Green merges, the bead
-closes. A bead sent back from review or from CI returns to the dev queue with a note and
-one more **failure**; enough failures move it to a stronger stage, the last one Claude
-(Sonnet). No model runs the loop; models do the two jobs that need judgement, and neither
-waits for the other — or for a clock.
+Work [beads](https://github.com/steveyegge/beads) with any models, local or paid, in any
+repo. One resident supervisor runs lanes side by side, one per provider — a **dev lane**
+where the implementor model works a bead in its own worktree and a gate proves it, and a
+**review lane** where reviewer seats judge the diff and push the PR — over three queues:
+**dev**, **review**, **merge** (CI on GitHub), with a **merge watcher** on the third. A
+bead whose files are not yet known can take an optional **research** round first, on a
+model that can afford to read and write a brief; a gate that passes goes through a
+**pre-check** before it spends a review round. Green merges, the bead closes. A bead sent
+back from review or from CI returns to the dev queue with a note and one more
+**failure**; enough failures move it to a stronger stage, the last one a metered provider
+(Claude Code, an API). No model runs the loop; models do the jobs that need judgement,
+and neither waits for the other — or for a clock.
 
 ```mermaid
 flowchart LR
   subgraph run ["bead-supervisor run: one resident process, Rust; three loops on one bell"]
     direction LR
 
-    subgraph devlane ["dev lane: GPU, the fast model"]
+    subgraph devlane ["dev lane: provider A, the worker model"]
       direction TB
-      DQ[["dev queue<br/>bd ready -l LABEL<br/>no open blocker, fewest failures first"]] --> C["claim, worktree<br/>fresh, or the branch sent back"]
+      DQ[["dev queue<br/>bd ready -l LABEL<br/>no open blocker, fewest failures first"]] -- "research_model set, no brief yet" --> RS["research<br/>research_model, once"]
+      RS -- "brief written" --> DQ
+      DQ -- "brief ready, or none needed" --> C["claim, worktree<br/>fresh, or the branch sent back"]
       C --> W["worker<br/>implements, commits"]
       W -- "DONE + commit" --> G["gate<br/>typecheck, lint, test"]
       G -- "fail, once" --> W
     end
 
-    subgraph reviewlane ["review lane: CPU, the strong model"]
+    subgraph reviewlane ["review lane: provider B, the reviewer seats"]
       direction TB
       RQ[["review queue<br/>gate passed"]] --> V["reviewer, read-only<br/>judges the diff"]
       V -- "APPROVE" --> PR["push, PR<br/>or the same PR, updated"]
@@ -47,6 +52,7 @@ flowchart LR
     F["failure +1<br/>note on the bead"] -- "stages left" --> DQ
     F -- "exhausted, or BLOCKED at the last stage" --> H["parked<br/>for you"]
     MQ -. "conflicts: a rebase round, no failure" .-> DQ
+    RS -. "BLOCKED: false claim" .-> H
     W -. "setup failed, harness down" .-> HD
     V -. "harness down" .-> HD
     MQ -. "no checks, protection, pipeline silent, CI stuck" .-> HD
@@ -57,8 +63,8 @@ flowchart LR
   B -.-> reviewlane
   B -.-> watcher
 
-  W -.- GPU[("devbox/coder<br/>Qwen3-Coder-30B<br/>RTX 4080, this box")]
-  V -.- CPU[("acbox/reviewer<br/>gpt-oss-120b<br/>ac-box, CPU")]
+  W -.- GPU[("provider A / worker model")]
+  V -.- CPU[("provider B / reviewer seats")]
 
   classDef model fill:#f3f0ff,stroke:#7c5cff,color:#222
   classDef stop fill:#fff3f0,stroke:#e0503c,color:#222
@@ -70,15 +76,17 @@ flowchart LR
   class DQ,RQ,MQ queue
 ```
 
-| Role | What | Where it runs here |
+| Role | What | Configured by |
 | --- | --- | --- |
-| Supervisor | `bead-supervisor`, one Rust binary (`src/`), resident | `bead-supervisor.service` on this box, kept up by `bead-supervisor.timer` |
-| Implementor | opencode agent `bead-worker` | `devbox/coder` — Qwen3-Coder-30B on the RTX 4080, two rounds; `claude/sonnet` as the last |
-| Reviewer | opencode agent `bead-reviewer`, read-only | `acbox/reviewer` — gpt-oss-120b on ac-box's CPU: a different family from every worker, so it catches what the Qwen models share |
-| Briefer | agent `bead-briefer`, read-only; one call when a bead is parked, and the second opinion (agent `bead-researcher`) on a researcher's `BLOCKED:` | `brief_model`: the last stage's worker (`claude/sonnet` here) |
+| Supervisor | `bead-supervisor`, one Rust binary (`src/`), resident | the global config and each repo's `.bead-loop.toml`; kept up by `bead-supervisor.timer` |
+| Implementor | opencode agent `bead-worker` — or Claude Code, aider, a `command` | `[[stages]].worker`, one provider per stage; `research_model` for the optional research round |
+| Reviewer | opencode agent `bead-reviewer`, read-only (or another harness, per seat) | `[[stages]].reviewer`, one or more seats, with `approvals`; `precheck_model` for the pre-check |
+| Briefer | agent `bead-briefer`, read-only; one call when a bead is parked, and the second opinion (agent `bead-researcher`) on a researcher's `BLOCKED:` | `brief_model` |
 
-The models are opencode providers in `~/.config/opencode/opencode.json`; any
-`provider/model` works in their place.
+Each model is a `[providers.NAME]` in the config, naming how it is reached, how many
+sessions it runs at once and what it costs; `NAME/model` names it everywhere else — a
+stage's `worker`, a seat, `research_model`, `brief_model`. [docs/config.md](docs/config.md)
+lists the provider keys; [Your setup](#your-setup) below shows four of them end to end.
 
 ## How it runs
 
@@ -111,12 +119,16 @@ the PR, and `open_pr = "ask"` to let the operator open the PR. [docs/design-targ
 the target concept and how the PR is opened; [docs/config.md](docs/config.md)'s Targets section lists the
 target keys and their defaults.
 
-Lanes are keyed by **model server**, not role, with `[[lanes]]` in the global config
-(`gpu`, `cpu`, `claude` here): a round on the CPU box never holds the GPU's queue, and a
-bead escalated to Claude runs at once. Infrastructure failing — a server down, setup
-broken, CI silent — is never the bead's failure: the bead is **held** with the reason
-until the world changes. A bead the models cannot land is **parked** for you with a
-written brief: what happened, why, and the question to answer.
+Lanes derive from the providers named by the stages, seats, `research_model` and
+`brief_model`: one lane per provider, as wide as its `parallel`, in the order the
+providers first appear — a round on one provider never holds another's queue, and a bead
+escalated to a wider one runs at once. `[[lanes]]` in the global config groups providers
+under a name of your choosing (`gpu`, `cpu`, `claude` on this box, see
+[docs/examples/homelab.md](docs/examples/homelab.md)) when one lane per provider is not
+the shape you want. Infrastructure failing — a server down, setup broken, CI silent — is
+never the bead's failure: the bead is **held** with the reason until the world changes. A
+bead the models cannot land is **parked** for you with a written brief: what happened,
+why, and the question to answer.
 
 ## Layout
 
@@ -150,6 +162,18 @@ you, says what a bead needs before it goes), copy `bead-loop.example.toml` to `<
 (the base branch, `setup`, `gate`, `merge`), add the repo to `repos` in the global
 config, and have CI report a status on the repo's PRs with `gh` logged in. Every key:
 [docs/config.md](docs/config.md).
+
+## Your setup
+
+- [docs/examples/homelab.md](docs/examples/homelab.md) — this box: two local providers,
+  a `gpu`/`cpu`/`claude` lane each, Claude Code as the last stage.
+- [docs/examples/laptop-ollama.md](docs/examples/laptop-ollama.md) — one local provider
+  through opencode's Ollama support, a metered provider as the reviewer's second seat and
+  the last stage.
+- [docs/examples/api-only.md](docs/examples/api-only.md) — no local model, one metered
+  provider wide enough to run several beads at once.
+- [docs/examples/quorum.md](docs/examples/quorum.md) — three reviewer seats from three
+  families, voting.
 
 ## Run
 
