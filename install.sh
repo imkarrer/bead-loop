@@ -45,20 +45,6 @@ repos = []                       # e.g. ["~/src/inquire-platform"]; each has .be
 worker_timeout = 3600            # seconds per model session
 # max_inflight = 2               # unset: no cap — bd's dependencies are the only gate on the dev lane
 on_exhaust = "park"              # after the last stage: park (for you) | repeat (around again)
-# Escalation, in order; each send-back to dev is a failure, a stage takes the next N.
-# [[stages]]
-# worker = "local/coder"
-# failures = 3
-# The lanes, one per model server; unset: dev + review by role (+ claude when a stage names it).
-# [[lanes]]
-# name = "gpu"
-# models = ["devbox/*"]
-# [[lanes]]
-# name = "cpu"
-# models = ["acbox/*"]
-# [[lanes]]
-# name = "claude"
-# models = ["claude/*"]
 # Provider catalogue (commented shapes):
 # [providers.local]
 # probe = "http://127.0.0.1:8080/health"   # GET answers 2xx, else its rounds wait
