@@ -195,7 +195,7 @@ changed.
 `~/.local/state/bead-loop/<repo>/`: `inflight/<id>` (the PR url, with
 `.<id>.red|nocheck|adopted|fixing|conflict` markers beside it), `logs/<id>.<stamp>.*`
 (setup, worker, gate, reviewer, brief output per round), `wt/<id>` (the worktree while a
-bead is on a lane or waiting for review), `review/<id>` (the review queue: the worker's
+bead is on a lane or waiting for review), `brief/<id>` (a detached checkout of the bead's branch while a parking's brief runs, once `wt/<id>` is gone; removed after it), `review/<id>` (the review queue: the worker's
 last words), `beads/<id>/` (what the loop keeps of one bead between rounds: `failures`
 the count, `rounds.jsonl` the history, one record per send-back with the whole note and
 the round's log files, `brief` the research round's brief), `parked/<id>` (the loop's

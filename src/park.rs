@@ -20,7 +20,7 @@
 use crate::config::Repo;
 use crate::harness::{run_agent, runnable};
 use crate::round::render_bead;
-use crate::shell::{bd_note, bd_show};
+use crate::shell::{bd_note, bd_show, branch_exists, git_ok, local_branch_exists, worktree_remove};
 use crate::util::{append_file, cut_bytes, date_iminutes, first_line, log, now, read_to_string, stamp, tail_lines, write_file};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
@@ -237,6 +237,7 @@ pub fn brief_prompt(repo: &Repo, bead: &Value, reason: &Reason, rounds: &[Value]
         }
         r.push('\n');
     }
+    let base_ref = format!("{}/{}", repo.base_remote, repo.base);
     let mut tails = String::new();
     for (name, tail) in log_tails {
         if !tail.trim().is_empty() {
@@ -253,7 +254,7 @@ pub fn brief_prompt(repo: &Repo, bead: &Value, reason: &Reason, rounds: &[Value]
         _ => String::new(),
     };
     format!(
-        "The automated loop has parked the bead below for its owner: {because}. Write the brief the owner reads before deciding what to do — they have watched none of the rounds.\n\n<bead>\n{}\n</bead>\n\nThe stages, in order: {}\n\n<rounds>\n{}</rounds>\n\n<logs>\n{}</logs>{research}\n\nSay what each round tried and why it was sent back — from the logs, not the notes alone — then the pattern across them and the likeliest cause: a claim in the bead that is false, a criterion the code cannot meet as written, something missing in the environment, or the model. Then the question: what the owner has to decide or supply so that the next round lands, as one to three concrete questions, each with its options and what each would mean. If the answer is plainly \"close the bead\" or \"the bead is wrong about X\", say so. Read any file or log you need; change nothing.\n\nAnswer in exactly this shape, nothing before it:\nWHAT HAPPENED:\n<a paragraph, or one line per round>\nWHY:\n<a paragraph>\nQUESTION:\n<the question or questions>",
+        "The automated loop has parked the bead below for its owner: {because}. Write the brief the owner reads before deciding what to do — they have watched none of the rounds.\n\n<bead>\n{}\n</bead>\n\nThe stages, in order: {}\n\n<rounds>\n{}</rounds>\n\n<logs>\n{}</logs>{research}\n\nSay what each round tried and why it was sent back — from the logs, not the notes alone — then the pattern across them and the likeliest cause: a claim in the bead that is false, a criterion the code cannot meet as written, something missing in the environment, or the model. Then the question: what the owner has to decide or supply so that the next round lands, as one to three concrete questions, each with its options and what each would mean. If the answer is plainly \"close the bead\" or \"the bead is wrong about X\", say so. You run in a checkout of this bead's branch as the loop left it, or of {base_ref} when it has none: `git diff {base_ref}...HEAD` is what the rounds committed. The base is {base_ref}; a bare local branch name is the operator's own and may be far behind. Read any file or log you need; change nothing.\n\nAnswer in exactly this shape, nothing before it:\nWHAT HAPPENED:\n<a paragraph, or one line per round>\nWHY:\n<a paragraph>\nQUESTION:\n<the question or questions>",
         render_bead(bead),
         stages_line(repo),
         r,
@@ -290,6 +291,26 @@ pub fn brief_model(repo: &Repo) -> Option<String> {
     }
 }
 
+/// Where the brief runs once the round's worktree is gone (review_one removes it when the
+/// PR is up, so every CI-red park lands here): a detached checkout of the bead's branch —
+/// local, else push_remote's copy — or of the base's remote copy when there is none, at
+/// rs/brief/ID (not wt/: recover and status read every wt/ entry as a round). None when
+/// git cannot make it. Never repo.repo, the operator's own checkout: on 25 Sep all seven
+/// CI-red briefs ran there, and bl-iej.8.1's blamed a "stale base" that was its local main.
+pub fn brief_checkout(repo: &Repo, id: &str) -> Option<PathBuf> {
+    let dir = repo.rs.join("brief").join(id);
+    worktree_remove(repo, &dir);
+    let branch = format!("bead/{id}");
+    let at = if local_branch_exists(repo, &branch) {
+        branch
+    } else if branch_exists(repo, &branch) {
+        format!("{}/{branch}", repo.push_remote)
+    } else {
+        format!("{}/{}", repo.base_remote, repo.base)
+    };
+    git_ok(&repo.repo, &["worktree", "add", "-q", "--detach", &dir.to_string_lossy(), &at]).then_some(dir)
+}
+
 /// The end of a round's log, rendered: an opencode session as one line per tool call
 /// or text, a Claude Code result as its text, anything else as it is.
 pub fn log_tail(path: &Path, lines: usize) -> String {
@@ -308,8 +329,8 @@ pub fn log_tail(path: &Path, lines: usize) -> String {
     tail_lines(&rendered.join("\n"), lines)
 }
 
-/// `park`: the bead is the owner's now. The brief runs first (the worktree, when the
-/// caller still has one, is where it runs, so `git diff` shows what was tried), then the
+/// `park`: the bead is the owner's now. The brief runs first (in the round's worktree, or a
+/// checkout of its branch made for it, so `git diff` shows what was tried), then the
 /// record is written and the question noted on the bead.
 pub fn park(repo: &Repo, id: &str, reason: Reason, wt: Option<&Path>) {
     let rounds = rounds(repo, id);
@@ -337,25 +358,35 @@ pub fn park(repo: &Repo, id: &str, reason: Reason, wt: Option<&Path>) {
                 })
                 .collect();
             let prompt = brief_prompt(repo, &bead, &reason, &rounds, &tails);
-            let dir: PathBuf = match wt {
-                Some(w) if w.join(".git").exists() => w.to_path_buf(),
-                _ => repo.repo.clone(),
-            };
-            let logf = repo.rs.join("logs").join(format!("{id}.{}.brief.jsonl", stamp()));
-            log(&format!("{}: {id}: brief by {model}", repo.slug));
-            let r = run_agent(repo, "bead-briefer", &model, &dir, &logf, &prompt, &format!("{id} · brief"), BRIEF_TIMEOUT, Some(&bead));
-            brief_log = logf.file_name().map(|f| f.to_string_lossy().into_owned());
-            if r.rc == 0 && !r.full.trim().is_empty() {
-                brief_model_used = Some(model.clone());
-                match parse_brief(&r.full) {
-                    Some((happened, q)) => {
-                        brief = Some(happened);
-                        question = q;
+            // The round's worktree while the caller still has it; else a checkout made for
+            // the brief (brief_checkout) and removed after it — never repo.repo.
+            let made = !matches!(wt, Some(w) if w.join(".git").exists());
+            let dir = if made { brief_checkout(repo, id) } else { wt.map(Path::to_path_buf) };
+            if let Some(dir) = &dir {
+                let logf = repo.rs.join("logs").join(format!("{id}.{}.brief.jsonl", stamp()));
+                log(&format!("{}: {id}: brief by {model}", repo.slug));
+                let r = run_agent(repo, "bead-briefer", &model, dir, &logf, &prompt, &format!("{id} · brief"), BRIEF_TIMEOUT, Some(&bead));
+                brief_log = logf.file_name().map(|f| f.to_string_lossy().into_owned());
+                if r.rc == 0 && !r.full.trim().is_empty() {
+                    brief_model_used = Some(model.clone());
+                    match parse_brief(&r.full) {
+                        Some((happened, q)) => {
+                            brief = Some(happened);
+                            question = q;
+                        }
+                        None => brief = Some(r.full.trim().to_string()),
                     }
-                    None => brief = Some(r.full.trim().to_string()),
+                } else {
+                    log(&format!("{}: {id}: the brief did not come ({model} exited {}); the loop's own question stands", repo.slug, r.rc));
+                }
+                if made {
+                    worktree_remove(repo, dir);
                 }
             } else {
-                log(&format!("{}: {id}: the brief did not come ({model} exited {}); the loop's own question stands", repo.slug, r.rc));
+                log(&format!(
+                    "{}: {id}: no brief — no checkout of bead/{id} or {}/{} to run it in; the loop's own question stands",
+                    repo.slug, repo.base_remote, repo.base
+                ));
             }
         } else {
             log(&format!(
@@ -525,6 +556,7 @@ mod tests {
         assert!(p.contains("--- round 1: t-1.s.gate, the end:\nboom\n"), "{p}");
         assert!(!p.contains("worker.jsonl, the end"), "an empty tail is left out");
         assert!(p.ends_with("QUESTION:\n<the question or questions>"));
+        assert!(p.contains("`git diff origin/main...HEAD` is what the rounds committed"), "the base named by its remote: {p}");
         let p = brief_prompt(&repo, &bead, &Reason::PrClosed("https://x/pull/7".into()), &[], &[]);
         assert!(p.contains("its pull request https://x/pull/7 was closed on GitHub without merging"));
         assert!(!p.contains("<research>"), "no researchers, no research block");
