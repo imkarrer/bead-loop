@@ -41,26 +41,31 @@ if [ ! -f "$HOME/.config/bead-loop/config.toml" ]; then
   cat >"$HOME/.config/bead-loop/config.toml" <<CFG
 # bead-loop global config. A key in a repo's .bead-loop.toml wins over the same key here.
 repos = []                       # e.g. ["~/src/inquire-platform"]; each has .beads/ and a .bead-loop.toml
-model = "devbox/coder"           # worker, when no stages table is set
-# review_model = "acbox/reviewer" # the model that judges the diff before the push -- a different family from the worker
 # attach = "http://127.0.0.1:4096"   # run sessions inside opencode-web.service; watch them live in the browser
 worker_timeout = 3600            # seconds per model session
 # max_inflight = 2               # unset: no cap — bd's dependencies are the only gate on the dev lane
 on_exhaust = "park"              # after the last stage: park (for you) | repeat (around again)
-# Escalation, in order; each send-back to dev is a failure, a stage takes the next N.
-# [[stages]]
-# worker = "devbox/coder"
-# failures = 3
-# The lanes, one per model server; unset: dev + review by role (+ claude when a stage names it).
-# [[lanes]]
-# name = "gpu"
-# models = ["devbox/*"]
-# [[lanes]]
-# name = "cpu"
-# models = ["acbox/*"]
-# [[lanes]]
-# name = "claude"
-# models = ["claude/*"]
+# Provider catalogue (commented shapes):
+# [providers.local]
+# probe = "http://127.0.0.1:8080/health"   # GET answers 2xx, else its rounds wait
+# [providers.paid]
+# parallel = 4
+# cost = "metered"
+# [providers.claude]
+# harness = "claude-code"
+# cost = "metered"
+# [providers.aid]
+# harness = "aider"
+# via = "local"
+# [providers.cmd]
+# harness = "command"
+# command = "my-agent --print"
+[[stages]]
+worker = "local/coder"
+failures = 2
+# reviewer = ["local/reviewer", "paid/model"]
+# approvals = "all"
+# [[lanes]] is optional: unset, one lane per provider the stages name, as wide as its parallel.
 CFG
   echo "config ~/.config/bead-loop/config.toml (set repos)"
 fi
