@@ -82,7 +82,12 @@ const COMMANDS: &[&str] = &[
 
 fn usage_text() -> String {
     let src = include_str!("main.rs");
-    src.lines().take_while(|l| l.starts_with("//!")).map(|l| format!("{}\n", l.trim_start_matches("//!").trim_start_matches(' '))).collect()
+    src.lines()
+        .take_while(|l| l.starts_with("//!"))
+        .map(|l| l.trim_start_matches("//!").trim_start_matches(' '))
+        .collect::<Vec<_>>()
+        .join("\n")
+        + "\n"
 }
 
 fn usage() -> ! {
@@ -127,6 +132,10 @@ fn main() {
             "-h" | "--help" => usage(),
             _ => args.push(a),
         }
+    }
+    if let Some(e) = bad_args(&args) {
+        eprint!("bead-supervisor: {e}\n\n{}", usage_text());
+        std::process::exit(2);
     }
     let cmd = args.first().cloned().unwrap_or_else(|| "tick".to_string());
     if let Some(e) = bad_args(&args) {
