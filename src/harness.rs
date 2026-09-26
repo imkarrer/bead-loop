@@ -182,7 +182,13 @@ pub fn run_agent(
         // before its first edit. The ignore file hides every other file from aider, so
         // the named ones are all it can add or map. Diff edits: a whole-file rewrite of a
         // thousand-line file does not fit the context either.
-        let files = files_named(bead_json, dir);
+        let brief = bead_json
+            .and_then(|j| j.get(0))
+            .and_then(|b| b.get("id"))
+            .and_then(|i| i.as_str())
+            .and_then(|id| repo.research_of(id))
+            .unwrap_or_default();
+        let files = files_named(bead_json, &brief, dir);
         let ignore = logf.with_file_name(format!("{}.aiderignore", logf.file_name().unwrap().to_string_lossy()));
         write_file(&ignore, &aider_ignore(&files));
         let mut c = cmd("timeout");
@@ -535,8 +541,9 @@ fn aider_ignore(files: &[String]) -> String {
 }
 
 /// The files a bead's DESCRIPTION names: every whitespace-separated token with a slash or
-/// a dot, trimmed of punctuation at either end, that exists in the worktree; sorted, unique.
-fn files_named(bead_json: Option<&Value>, dir: &Path) -> Vec<String> {
+/// a dot, trimmed of punctuation at either end, that exists in the worktree; plus the
+/// brief's own Files section ([`brief_files`]); sorted, unique.
+fn files_named(bead_json: Option<&Value>, brief: &str, dir: &Path) -> Vec<String> {
     let desc = bead_json.and_then(|j| j.get(0)).and_then(|b| b.get("description")).and_then(|d| d.as_str()).unwrap_or("");
     let mut files: Vec<String> = desc
         .split_whitespace()
@@ -548,9 +555,79 @@ fn files_named(bead_json: Option<&Value>, dir: &Path) -> Vec<String> {
         .filter(|t| !t.is_empty() && dir.join(t).is_file())
         .map(str::to_string)
         .collect();
+    files.extend(brief_files(brief, dir).0);
     files.sort();
     files.dedup();
     files
+}
+
+/// A line that ends a Files (or any) section: a markdown heading (`#...`), or a line that
+/// is a single word ending in `:` (`Shape:`).
+fn is_section_heading(line: &str) -> bool {
+    let l = line.trim();
+    if l.is_empty() {
+        return false;
+    }
+    if l.starts_with('#') {
+        return true;
+    }
+    let mut words = l.split_whitespace();
+    matches!((words.next(), words.next()), (Some(w), None) if w.ends_with(':'))
+}
+
+/// A line starting the brief's Files section: `Files:` at its start, or a markdown heading
+/// naming Files (`## Files`).
+fn is_files_heading(line: &str) -> bool {
+    let l = line.trim_start();
+    if l.starts_with("Files:") {
+        return true;
+    }
+    l.starts_with('#') && l.trim_start_matches('#').trim_start().starts_with("Files")
+}
+
+/// A list line's first token with its marker (`-`, `*`, `1.`) stripped.
+fn strip_list_marker(line: &str) -> &str {
+    if let Some(rest) = line.strip_prefix('-').or_else(|| line.strip_prefix('*')) {
+        return rest.trim_start();
+    }
+    if let Some(dot) = line.find('.') {
+        if dot > 0 && line[..dot].chars().all(|c| c.is_ascii_digit()) {
+            return line[dot + 1..].trim_start();
+        }
+    }
+    line
+}
+
+/// The brief's Files section (see [`is_files_heading`]), one path per line, split into
+/// (those that exist in `dir`, those that don't); each sorted, unique.
+pub fn brief_files(brief: &str, dir: &Path) -> (Vec<String>, Vec<String>) {
+    let lines: Vec<&str> = brief.lines().collect();
+    let mut files = Vec::new();
+    let mut missing = Vec::new();
+    if let Some(start) = lines.iter().position(|l| is_files_heading(l)) {
+        for line in lines.iter().skip(start + 1) {
+            if is_section_heading(line) {
+                break;
+            }
+            let rest = strip_list_marker(line.trim());
+            let Some(tok) = rest.split_whitespace().next() else { continue };
+            let tok = tok.trim_start_matches(|c: char| !(c.is_ascii_alphanumeric() || "_./".contains(c)));
+            let tok = tok.trim_end_matches(|c: char| !(c.is_ascii_alphanumeric() || "_/-".contains(c)));
+            if tok.is_empty() || !(tok.contains('/') || tok.contains('.')) {
+                continue;
+            }
+            if dir.join(tok).is_file() {
+                files.push(tok.to_string());
+            } else {
+                missing.push(tok.to_string());
+            }
+        }
+    }
+    files.sort();
+    files.dedup();
+    missing.sort();
+    missing.dedup();
+    (files, missing)
 }
 
 /// `abort_sessions DIR`: stop every session the attached server is still running under
@@ -916,11 +993,23 @@ mod tests {
         let bead =
             serde_json::json!([{"description": "Edit work.txt (leave README alone); see docs/none.md, then lib/x.ts: and `work.txt`."}]);
         assert_eq!(
-            files_named(Some(&bead), &d),
+            files_named(Some(&bead), "", &d),
             vec!["lib/x.ts", "work.txt"],
             "sorted, unique, punctuation trimmed; README has no dot or slash"
         );
-        assert!(files_named(None, &d).is_empty());
+        assert!(files_named(None, "", &d).is_empty());
+        let _ = std::fs::remove_dir_all(&d);
+    }
+    #[test]
+    fn research_files_are_the_brief_paths_that_exist() {
+        let d = crate::config::scratch("research-files");
+        std::fs::create_dir_all(d.join("lib")).unwrap();
+        std::fs::write(d.join("work.txt"), "").unwrap();
+        std::fs::write(d.join("lib/x.ts"), "").unwrap();
+        let brief = "Files:\n- work.txt: append one line\n- lib/x.ts\n- docs/none.md: new\n\nShape:\n- other.txt\n";
+        assert_eq!(brief_files(brief, &d), (vec!["lib/x.ts".to_string(), "work.txt".to_string()], vec!["docs/none.md".to_string()]));
+        let bead = serde_json::json!([{"description": "Edit work.txt"}]);
+        assert_eq!(files_named(Some(&bead), brief, &d), vec!["lib/x.ts", "work.txt"]);
         let _ = std::fs::remove_dir_all(&d);
     }
     #[test]
