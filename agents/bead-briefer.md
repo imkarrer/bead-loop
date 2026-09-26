@@ -5,14 +5,22 @@ temperature: 0.1
 permission:
   edit: deny
   bash:
-    "git *": allow
+    "*": deny
+    "git diff *": allow
+    "git log *": allow
+    "git show *": allow
+    "git status *": allow
+    "git grep *": allow
+    "git blame *": allow
+    "git ls-files *": allow
+    "git rev-parse *": allow
+    "git merge-base *": allow
     "cat *": allow
     "ls *": allow
     "grep *": allow
     "rg *": allow
     "tail *": allow
     "head *": allow
-    "*": deny
   webfetch: deny
   doom_loop: deny
   task: deny

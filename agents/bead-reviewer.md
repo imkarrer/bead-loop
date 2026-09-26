@@ -14,12 +14,20 @@ permission:
   edit: deny
   external_directory: allow
   bash:
-    "git *": allow
+    "*": deny
+    "git diff *": allow
+    "git log *": allow
+    "git show *": allow
+    "git status *": allow
+    "git grep *": allow
+    "git blame *": allow
+    "git ls-files *": allow
+    "git rev-parse *": allow
+    "git merge-base *": allow
     "cat *": allow
     "ls *": allow
     "grep *": allow
     "rg *": allow
-    "*": deny
   webfetch: deny
   doom_loop: deny
   task: deny
