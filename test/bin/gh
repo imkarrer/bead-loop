@@ -71,5 +71,11 @@ case $2 in
     if is_primary "$3"; then jq '.state="MERGED"' "$TEST_CTRL/pr.json" >"$TEST_CTRL/pr.json.tmp" && mv "$TEST_CTRL/pr.json.tmp" "$TEST_CTRL/pr.json"
     else echo "$3" >>"$TEST_CTRL/merged-extra"; fi ;;
   update-branch) jq '.mergeStateStatus="CLEAN"' "$TEST_CTRL/pr.json" >"$TEST_CTRL/pr.json.tmp" && mv "$TEST_CTRL/pr.json.tmp" "$TEST_CTRL/pr.json" ;;
+  checks)
+    # --required --json ...: the required checks' name, state, description, link, bucket.
+    # A test plants $TEST_CTRL/checks.json; without it, gh's own behaviour on a base with
+    # no required checks: nothing on stdout, a message on stderr, exit 1.
+    if [ -e "$TEST_CTRL/checks.json" ]; then cat "$TEST_CTRL/checks.json"
+    else echo "no required checks reported on the 'bead/t-1' branch" >&2; exit 1; fi ;;
   *) echo "stub gh: unknown pr $2" >&2; exit 2 ;;
 esac
