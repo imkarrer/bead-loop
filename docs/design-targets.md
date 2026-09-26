@@ -1,7 +1,6 @@
 # Design: targets — the beads in one repo, the work and the PR in another
 
-Status: proposal, beads filed (epic `bl-wbo` in this repo's backlog: `bl-mnt` → `bl-6hg` → `bl-d01`, `bl-tka`, `bl-p4c`, `bl-3x2`, `bl-b1a` → `bl-p5r`; the config side in
-preservation-workbench). Nothing here is built. Written 2026-09-21 from `src/` as it is.
+Status: built — PRs #63, #80, #91, #92, #95, #98, #101, #103, #104 and the pr_style PR; the house-rules bead bl-3x2 last. Written 2026-09-21 from `src/` as it is.
 
 ## What is wrong now
 

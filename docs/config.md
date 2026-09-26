@@ -32,6 +32,7 @@ name. Both are read afresh on every round, so an edit takes effect on the next r
 | `stall_compactions` | `10` | opencode sessions only: past this many compactions in one session, the watchdog aborts it as stalled — a read/compaction loop, not the model at work. `0` disables the check |
 | `stall_steps` | `60` | opencode sessions only: past this many tool calls since the last edit/write/patch call, the watchdog aborts the session as stalled. `0` disables the check |
 | `attach` | none | an opencode server url; sessions run there and stream in its web UI |
+| `target_label` | `"work"` | the label prefix that names a target: a bead's `work:NAME` label sends its round to `[targets.NAME]` (see Targets below) |
 
 ## Lanes per model server
 
@@ -102,6 +103,36 @@ gets only what the local ones could not land.
 A bead labelled `stage:NAME` starts on the stage of that `name` (default its 1-based
 index), its failure count floored to that stage's first count the first time it is
 claimed — the planner's escalate for a bead already known to be beyond the first stage.
+
+## Targets
+
+Vocabulary: a beads repo is an entry in `repos` and has `.beads/` and `.bead-loop.toml`. A
+target is a git checkout the round works in and the GitHub repo its PR goes to. Every beads
+repo has a *default target*: itself, exactly today's behaviour. More come from
+`[targets.NAME]` tables in the beads repo's `.bead-loop.toml`.
+
+A bead picks its target by label: `work:NAME` (the prefix is `target_label`, default
+`"work"`). No such label: the default target. A label naming no configured target, or two
+`work:` labels: the bead is **held** with the reason, no failure — a config mistake is the
+world's, not the bead's.
+
+The keys of a `[targets.NAME]` table, with their defaults as implemented:
+
+| Key | Default | What |
+| --- | --- | --- |
+| `path` | **required** | the checkout; the target's path |
+| `base` | `base_remote`'s HEAD | branch to fork from and PR into |
+| `base_remote` | `upstream` when that remote exists in the checkout, else `origin` | the base is fetched from this remote |
+| `push_remote` | `origin` | where `bead/*` branches are pushed |
+| `pr_repo` | `base_remote`'s GitHub repo | the repo the PR is opened against |
+| `setup` | none | runs in a fresh worktree before the worker (`npm ci`); not again on a branch sent back |
+| `gate` | none (CI is the gate) | runs after the worker, before the review queue; one fix round on failure |
+| `merge` | `"auto"` | `auto`: the watcher merges on green · `pipeline`: the loop labels, CI merges · `manual`: PR only, the bead held for you once green |
+| `merge_label` | `"automerge"` | the label `pipeline` puts on each PR |
+| `adopt` | `true` | open `bead/*` PRs from anyone join the loop: merged on green under `auto`, labelled under `pipeline`, the bead the branch names closed; red or conflicting, held with a note for whoever opened them. They do not count toward `max_inflight` |
+| `max_inflight` | none | a cap on PRs in the merge queue before the dev lane pauses. Unset, there is no cap: bd's dependencies are the only gate on the dev lane, and the queues absorb the rest. Set it for a repo whose CI is the scarce thing |
+| `open_pr` | `auto` when `pr_repo`'s owner is the `gh` login, else `ask` | `auto`: the loop opens the PR · `ask`: the operator opens it |
+| `pr_style` | `plain` when `open_pr` is `ask`, else `loop` | `loop`: the title is `ID: …` and the body ends "Opened by bead-loop" · `plain`: the title is the bead's title, the body is the bead's description and the worker's evidence |
 
 ## The merge, per repo
 
