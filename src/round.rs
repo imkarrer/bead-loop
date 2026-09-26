@@ -1547,7 +1547,15 @@ pub fn create_pr(repo: &Repo, head: &str, title: &str, body: &str) -> Result<Str
 /// The verdict of every seat, `quorum`'s shape: Some(true) approved, Some(false)
 /// rejected, None not in yet.
 fn seat_verdicts(repo: &Repo, id: &str, seats: &[crate::config::Seat]) -> Vec<Option<bool>> {
-    (1..=seats.len()).map(|k| repo.seat_verdict(id, k).map(|v| v.starts_with("APPROVE:"))).collect()
+    (1..=seats.len()).map(|k| repo.seat_verdict(id, k).map(|v| approves(&v))).collect()
+}
+
+/// A reviewer's reply approves when any line of it starts `APPROVE:`, as before seats:
+/// a reply that explains itself first is still an APPROVE. (26 Sep 2026: the seat file
+/// holds the whole reply, and reading only its first line sent bl-vol back "rejected:"
+/// with an empty work order a second after the log said its seat approved.)
+fn approves(reply: &str) -> bool {
+    reply.lines().any(|l| l.starts_with("APPROVE:"))
 }
 
 pub fn review_one(repo: &Repo, opts: &Opts, id: Option<&str>, lane: Option<&LaneSpec>, seat: usize) -> Pass {
@@ -1672,7 +1680,7 @@ pub fn review_one(repo: &Repo, opts: &Opts, id: Option<&str>, lane: Option<&Lane
             return Pass::Worked;
         }
         repo.seat_set_verdict(&id, seat, r.text.trim());
-        let approved = r.text.lines().any(|l| l.starts_with("APPROVE:"));
+        let approved = approves(&r.text);
         log(&format!("{}: {id}: seat {seat} ({review_model}) {}", repo.slug, if approved { "approved" } else { "rejected" }));
     }
 
@@ -2129,6 +2137,14 @@ mod tests {
         assert!(block.ends_with("- How to check: grep -c fixed work.txt prints 1"), "to the end");
         assert!(!block.contains("I looked at it."), "what came before it does not");
         assert_eq!(reject_block("APPROVE: fine"), "", "nothing without a REJECT line");
+    }
+    #[test]
+    fn a_reply_that_explains_itself_first_still_approves() {
+        assert!(approves("APPROVE: checked every criterion"));
+        assert!(approves("I read the diff and ran the check.\n\nAPPROVE: checked every criterion"), "bl-vol's shape");
+        assert!(!approves("I looked at it.\nREJECT: work.txt:1 wrong, fix it\nFor the worker:\n- What to do: fix it"));
+        assert!(!approves("  APPROVE: indented is not the verdict line"));
+        assert!(!approves(""));
     }
     #[test]
     fn precheck_prompt_carries_bead_report_and_diff() {

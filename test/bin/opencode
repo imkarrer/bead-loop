@@ -4,7 +4,8 @@
 #               hang | crash | server-error | stall   (what the implementor leaves behind; stall loops
 #               tool_use/compaction events forever, no edit, until the watchdog or a stop kills it)
 #   abort-delay seconds the server takes for the next abort, once (curl stub): the stop's race
-#   review      one line per round: approve | reject | reject2 | hang | crash | server-error
+#   review      one line per round: approve | explained (a line of reasoning, then APPROVE) | reject | reject2 |
+#               hang | crash | server-error | silent
 #   brief       shape (default: WHAT HAPPENED / WHY / QUESTION) | plain (no shape) | crash
 #   postmortem  plain (three numbered lines, default) | crash | server-error
 #   precheck    one line per round: pass | sendback | crash | server-error
@@ -64,6 +65,7 @@ case $agent in
     v=$(sed -n "${round}p" "$TEST_CTRL/review")
     case $v in
       approve) say "APPROVE: checked every criterion" ;;
+      explained) say "I read the diff and ran the check."; say "APPROVE: checked every criterion" ;;   # its reasoning first (26 Sep: bl-vol)
       hang) say "reading the diff"; sleep 30 ;;   # a stop or the clock ends it
       crash) echo "connection refused" >&2; exit 7 ;;   # the reviewer's server is down
       server-error) server_error ;;   # the server answered an error before the reviewer ran
