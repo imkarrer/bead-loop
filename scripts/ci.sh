@@ -3,7 +3,7 @@
 #
 #   scripts/ci.sh rust      fmt --check, clippy -D warnings, build, unit tests
 #   scripts/ci.sh scripts   syntax, shellcheck, the skills/agents lint
-#   scripts/ci.sh suite     test/run.sh against the binary the rust step built
+#   scripts/ci.sh suite     test/run.sh after cargo build (a no-op after the rust step)
 #   scripts/ci.sh release   main only: the release binary as the GitHub release main-<sha7>
 #
 # The cache: the agent runs `git clean -ffxdq` in the checkout before every job, which
@@ -42,8 +42,11 @@ case ${1:-} in
     test/lint-skills.sh
     ;;
   suite)
-    [ -x "$target/debug/bead-supervisor" ] || { echo "--- :rust: build"; cargo build --quiet; }
-    echo "--- :repeat: the state machine, against $target/debug/bead-supervisor"
+    # Always build: a no-op after this build's own rust step, and the one thing that keeps
+    # the suite on this commit's binary when the job follows another build's rust step on
+    # the agent or is retried on its own (a retry does not rerun the rust step).
+    echo "--- :rust: build"; cargo build --quiet
+    echo "--- :repeat: the state machine, after cargo build (a no-op after the rust step)"
     # SUP for the suite; BEAD_SUPERVISOR for the UI server the suite starts (the binary
     # is in the cache dir here, not under the checkout's target/).
     SUP=$target/debug/bead-supervisor BEAD_SUPERVISOR=$target/debug/bead-supervisor test/run.sh
