@@ -85,7 +85,9 @@ Before the loop parks a bead for you it writes the **brief**: one call to `brief
 (the last stage's worker unless set) that reads every round's note and the end of every
 round's log and answers *what happened*, *why* (the bead is wrong about X; the bead is
 underspecified; the environment; the model) and *the question*, with the options and
-what each would mean. Without a brief (no model, Claude signed out, the call failing) the
+what each would mean. A bead the researcher blocked has no rounds, so its brief reads
+what the researcher and the second opinion answered instead. Without a brief (no model,
+Claude signed out, the call failing) the
 loop's own question stands: the `BLOCKED:` line and what you can do about it, or the
 count of rounds and the last send-back. So what reaches you is a question, not a stack
 of notes. `bead-supervisor answer` and `open` are the page's Answer and the one-line

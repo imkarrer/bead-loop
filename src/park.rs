@@ -39,8 +39,9 @@ pub enum Reason {
     PrClosed(String),
     /// the branch already matches the base: nothing left to rebase or commit
     Delivered,
-    /// the researcher's `BLOCKED:` line: a claim in the bead is false, found before any edit
-    ResearchBlocked(String),
+    /// the researcher's `BLOCKED:` line (the second opinion's, when it blocked too): a claim
+    /// in the bead is false, found before any edit; and what the researchers answered
+    ResearchBlocked(String, String),
     /// held on the same reason for a full day (round.rs hold_stale) — the reason, verbatim
     HoldExpired(String),
 }
@@ -48,7 +49,7 @@ pub enum Reason {
 impl Reason {
     pub fn key(&self) -> &'static str {
         match self {
-            Reason::Blocked | Reason::ResearchBlocked(_) => "blocked",
+            Reason::Blocked | Reason::ResearchBlocked(..) => "blocked",
             Reason::Exhausted => "exhausted",
             Reason::PrClosed(_) => "pr_closed",
             Reason::Delivered => "delivered",
@@ -198,7 +199,7 @@ pub fn question_for(repo: &Repo, reason: &Reason, rounds: &[Value]) -> String {
             "The branch has no diff against {}: the work is already there. Close the bead if it is done, or say what is still missing.",
             repo.base
         ),
-        Reason::ResearchBlocked(line) => format!(
+        Reason::ResearchBlocked(line, _) => format!(
             "The researcher stopped before a single edit: {line} — Fix the bead's text if the claim is false, answer what it needs to know, or take it yourself."
         ),
         Reason::HoldExpired(why) => format!(
@@ -216,7 +217,7 @@ pub fn brief_prompt(repo: &Repo, bead: &Value, reason: &Reason, rounds: &[Value]
         Reason::Exhausted => format!("every stage has had its turn ({} rounds, all sent back)", rounds.len()),
         Reason::PrClosed(url) => format!("its pull request {url} was closed on GitHub without merging"),
         Reason::Delivered => format!("its branch has no diff against {}: nothing left to rebase or commit", repo.base),
-        Reason::ResearchBlocked(_) => "the researcher found a claim in it false before any round ran".to_string(),
+        Reason::ResearchBlocked(..) => "the researcher found a claim in it false before any round ran".to_string(),
         Reason::HoldExpired(why) => format!("it has been held for over a day on the same reason: {}", why.trim()),
     };
     let mut r = String::new();
@@ -242,8 +243,17 @@ pub fn brief_prompt(repo: &Repo, bead: &Value, reason: &Reason, rounds: &[Value]
             tails.push_str(&format!("--- {name}, the end:\n{tail}\n\n"));
         }
     }
+    // A research park has no rounds: what the researchers said is the history. (Until 26
+    // Sep 2026 the brief was handed nothing, and asked the owner for the BLOCKED line.)
+    let research = match reason {
+        Reason::ResearchBlocked(_, replies) if !replies.trim().is_empty() => format!(
+            "\n\nWhat the researchers answered, before any round (a researcher's claim is a reading of the code, and can be wrong: check it):\n<research>\n{}\n</research>",
+            cut_bytes(replies.trim(), 16000)
+        ),
+        _ => String::new(),
+    };
     format!(
-        "The automated loop has parked the bead below for its owner: {because}. Write the brief the owner reads before deciding what to do — they have watched none of the rounds.\n\n<bead>\n{}\n</bead>\n\nThe stages, in order: {}\n\n<rounds>\n{}</rounds>\n\n<logs>\n{}</logs>\n\nSay what each round tried and why it was sent back — from the logs, not the notes alone — then the pattern across them and the likeliest cause: a claim in the bead that is false, a criterion the code cannot meet as written, something missing in the environment, or the model. Then the question: what the owner has to decide or supply so that the next round lands, as one to three concrete questions, each with its options and what each would mean. If the answer is plainly \"close the bead\" or \"the bead is wrong about X\", say so. Read any file or log you need; change nothing.\n\nAnswer in exactly this shape, nothing before it:\nWHAT HAPPENED:\n<a paragraph, or one line per round>\nWHY:\n<a paragraph>\nQUESTION:\n<the question or questions>",
+        "The automated loop has parked the bead below for its owner: {because}. Write the brief the owner reads before deciding what to do — they have watched none of the rounds.\n\n<bead>\n{}\n</bead>\n\nThe stages, in order: {}\n\n<rounds>\n{}</rounds>\n\n<logs>\n{}</logs>{research}\n\nSay what each round tried and why it was sent back — from the logs, not the notes alone — then the pattern across them and the likeliest cause: a claim in the bead that is false, a criterion the code cannot meet as written, something missing in the environment, or the model. Then the question: what the owner has to decide or supply so that the next round lands, as one to three concrete questions, each with its options and what each would mean. If the answer is plainly \"close the bead\" or \"the bead is wrong about X\", say so. Read any file or log you need; change nothing.\n\nAnswer in exactly this shape, nothing before it:\nWHAT HAPPENED:\n<a paragraph, or one line per round>\nWHY:\n<a paragraph>\nQUESTION:\n<the question or questions>",
         render_bead(bead),
         stages_line(repo),
         r,
@@ -358,7 +368,7 @@ pub fn park(repo: &Repo, id: &str, reason: Reason, wt: Option<&Path>) {
     // The stage it stopped on: a send-back has just counted (the round ran one failure
     // ago); a closed PR charged nothing, so the bead is still on the stage its count names.
     let stopped_at =
-        if matches!(reason, Reason::PrClosed(_) | Reason::ResearchBlocked(_) | Reason::HoldExpired(_)) { n } else { n.saturating_sub(1) };
+        if matches!(reason, Reason::PrClosed(_) | Reason::ResearchBlocked(..) | Reason::HoldExpired(_)) { n } else { n.saturating_sub(1) };
     let stage = repo.stage_for(stopped_at).map(|s| json!({"index": s.index, "worker": s.model, "reviewer": s.review}));
     let rec = json!({
         "when": date_iminutes(),
@@ -367,7 +377,7 @@ pub fn park(repo: &Repo, id: &str, reason: Reason, wt: Option<&Path>) {
         "failures": n,
         "stage": stage,
         "stopped_on": match &reason {
-            Reason::ResearchBlocked(line) => Value::String(line.clone()),
+            Reason::ResearchBlocked(line, _) => Value::String(line.clone()),
             _ => rounds.last().and_then(|r| r.get("note")).cloned().unwrap_or(Value::Null),
         },
         "question": question,
@@ -382,7 +392,7 @@ pub fn park(repo: &Repo, id: &str, reason: Reason, wt: Option<&Path>) {
         Reason::Exhausted => format!("stages exhausted after {} rounds", rounds.len()),
         Reason::PrClosed(url) => format!("{url} was closed without merging"),
         Reason::Delivered => format!("its branch already matches {}", repo.base),
-        Reason::ResearchBlocked(_) => "BLOCKED by the researcher".to_string(),
+        Reason::ResearchBlocked(..) => "BLOCKED by the researcher".to_string(),
         Reason::HoldExpired(why) => format!("held over a day: {}", why.trim()),
     };
     bd_note(repo, id, &format!("bead-loop {}: parked ({because}). {}", date_iminutes(), cut_bytes(&question, 2000)));
@@ -517,6 +527,21 @@ mod tests {
         assert!(p.ends_with("QUESTION:\n<the question or questions>"));
         let p = brief_prompt(&repo, &bead, &Reason::PrClosed("https://x/pull/7".into()), &[], &[]);
         assert!(p.contains("its pull request https://x/pull/7 was closed on GitHub without merging"));
+        assert!(!p.contains("<research>"), "no researchers, no research block");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+    #[test]
+    fn a_research_park_hands_the_brief_what_the_researchers_said() {
+        let d = crate::config::scratch("brief-research");
+        let repo = crate::config::test_repo(&d, &["fast:rev:1"]);
+        let bead = json!([{"id":"t-1","title":"T","description":"D"}]);
+        let replies = "research (local/coder):\nI read it.\nBLOCKED: x.rs has no fn y\n\nsecond opinion (claude/sonnet):\nBLOCKED: x.rs:3 has fn z, not y";
+        let reason = Reason::ResearchBlocked("BLOCKED: x.rs:3 has fn z, not y".into(), replies.into());
+        let p = brief_prompt(&repo, &bead, &reason, &[], &[]);
+        assert!(p.contains("the researcher found a claim in it false before any round ran"));
+        assert!(p.contains(&format!("<research>\n{replies}\n</research>")), "both replies, whole: {p}");
+        assert!(p.find("</logs>").unwrap() < p.find("<research>").unwrap(), "after the (empty) rounds and logs");
+        assert_eq!(reason.key(), "blocked");
         let _ = std::fs::remove_dir_all(&d);
     }
     #[test]

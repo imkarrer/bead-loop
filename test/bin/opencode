@@ -8,7 +8,9 @@
 #   brief       shape (default: WHAT HAPPENED / WHY / QUESTION) | plain (no shape) | crash
 #   postmortem  plain (three numbered lines, default) | crash | server-error
 #   precheck    one line per round: pass | sendback | crash | server-error
-#   research    brief (default: Files / Shape / Check / Pitfalls naming work.txt) | blocked | hang | crash
+#   research    one line per research call (a second opinion is the next call), the last line for the
+#               rest: brief (default: Files / Shape / Check / Pitfalls naming work.txt) | long (the
+#               same after a line of reading, with thirty Files lines) | blocked | hang | crash
 #   slow        seconds every run takes before it answers: a round in flight while the test pauses its lane
 #   calls       appended: "<agent> <dir> <model> <attach>" per run, prompt saved to prompt.<n>
 set -euo pipefail
@@ -78,8 +80,12 @@ case $agent in
       *) say "$(printf "WHAT HAPPENED:\nround 1 tried the flag and stopped.\nWHY:\nlib/x.ts has no such flag: the bead is wrong.\nQUESTION:\nIs the flag called --dry-run (add it to the bead), or should the criterion go?")" ;;
     esac ;;
   bead-researcher)
-    case $(cat "$TEST_CTRL/research" 2>/dev/null || echo brief) in
+    round=$(grep -c '^bead-researcher' "$TEST_CTRL/calls")
+    mode=$(sed -n "${round}p" "$TEST_CTRL/research" 2>/dev/null || true)
+    [ -n "$mode" ] || mode=$(tail -1 "$TEST_CTRL/research" 2>/dev/null || true)
+    case ${mode:-brief} in
       blocked) say "I read the bead."; say "BLOCKED: work.txt is not the file the bead means" ;;
+      long) say "Reading work.txt first."; say "$(printf 'Files:\n'; for i in $(seq 30); do printf -- '- work.txt: line %s\n' "$i"; done; printf '\nShape:\nappend a line to work.txt and commit\n\nCheck:\ntest -s work.txt\n\nPitfalls:\nnone found')" ;;
       hang) say "reading"; sleep 30 ;;   # a stop or the clock ends it
       crash) echo "connection refused" >&2; exit 7 ;;
       *) say "$(printf "Files:\n- work.txt: append one line\n\nShape:\nappend a line to work.txt and commit\n\nCheck:\ntest -s work.txt\n\nPitfalls:\nnone found")" ;;

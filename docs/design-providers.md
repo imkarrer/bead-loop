@@ -230,7 +230,11 @@ research_aider = true                 # a brief whose Files all exist puts the w
   model has scoped it, which is where the small model's rounds were being lost.
 - **`BLOCKED:` from the researcher** — a claim in the bead is false, a file it names
   does not exist — parks the bead with that as the question, before a single edit has
-  been tried. The researcher is the cheapest place to find out.
+  been tried. The researcher is the cheapest place to find out. Its claim is checked
+  first: `brief_model` researches the bead again with the first reply in its prompt, and
+  only a `BLOCKED:` of its own parks the bead; otherwise its brief goes to the worker.
+  (Amended 26 Sep 2026: both research parks of 25 Sep were false — a misread bead, and a
+  reply about another bead entirely.)
 - **Failures.** A research round that never answers holds the bead as any round does.
   One that answers without the headings is kept as it is: a worse brief is still a
   brief, and the worker round is where the bead is judged. Research never counts a

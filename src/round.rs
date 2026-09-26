@@ -667,6 +667,32 @@ pub fn research_prompt(json: &Value, base: &str, previous: &str, hist: &str) -> 
     )
 }
 
+/// The second opinion's prompt: the research prompt, and the reply of the researcher that
+/// said BLOCKED, whose claim is to be checked rather than trusted.
+pub fn second_opinion_prompt(prompt: &str, model: &str, reply: &str) -> String {
+    format!(
+        "{prompt}\n\nA first researcher ({model}) read this bead and stopped with BLOCKED; its reply is under <first-research>. Check its claim against the code yourself before you trust it: researchers have misread what a bead asks, and one answered about another bead entirely. If the claim holds and the bead cannot be done as written, end with your own BLOCKED: line, with file:line. If it does not hold, answer with the brief as asked, and say in its Pitfalls what the first researcher got wrong.\n\n<first-research>\n{}\n</first-research>",
+        cut_bytes(reply.trim(), 8000)
+    )
+}
+
+/// The brief in a researcher's reply: from its last `Files:` heading to the end, so what
+/// it said while it read stays out and nothing of the brief is cut. A reply without the
+/// heading keeps its last sixty lines, the most the prompt allows. (Until 26 Sep 2026 the
+/// loop kept the reply's last twenty lines, which cut the Files of every longer brief:
+/// bl-37v's began mid-list.)
+pub fn brief_of(reply: &str) -> String {
+    let lines: Vec<&str> = reply.trim().lines().collect();
+    let heading = |l: &&str| {
+        let h = l.trim_start_matches(['#', '*', ' ']);
+        h.starts_with("Files:") || h.starts_with("Files**") || h.trim_end() == "Files"
+    };
+    match lines.iter().rposition(heading) {
+        Some(i) => lines[i..].join("\n"),
+        None => tail_lines(reply.trim(), 60),
+    }
+}
+
 /// The worker's prompt: the bead, the branch and whether it is resumed, the rebase order
 /// of a conflict round, the research brief when one was written, and the notes of the
 /// rounds sent back before (the last three).
@@ -996,31 +1022,77 @@ fn research_one(repo: &Repo, opts: &Opts, id: &str, lane: Option<&LaneSpec>, las
         tidy(repo);
         return false;
     }
+    // The brief: this researcher's, or the second opinion's (and which model gave it) when
+    // that overruled this one's BLOCKED.
+    let mut brief = if r.rc == 0 { brief_of(&r.full) } else { String::new() };
+    let mut overruled_by: Option<String> = None;
     if let Some(b) = last_line_starting(&r.text, "BLOCKED:") {
-        log(&format!("{}: {id}: the researcher found the bead cannot be done as written; parked for you", repo.slug));
         bd_note(repo, id, &format!("bead-loop {}: research ({model}) {b}", date_iminutes()));
-        park(repo, id, Reason::ResearchBlocked(b), Some(&wt));
-        repo.clear_target(id);
-        repo.research_clear(id);
-        clear_lane_of(repo, id);
-        repo.release(id);
-        park_cleanup(repo, &wt);
-        if research_leftover(repo, &branch) {
-            let _ = git(&repo.repo, &["branch", "-D", &branch]);
+        // A researcher's BLOCKED is a claim about the code, and it has been wrong: a misread
+        // bead (bl-ctq), a reply about another bead entirely (bl-iej.3.1 got inq-85h.3's). The
+        // brief model reads the bead again with that reply in hand before the owner is asked:
+        // a brief from it goes to the worker; its own BLOCKED, or no answer, parks the bead
+        // with both replies for the owner's brief.
+        let mut line = b;
+        let mut replies = format!("research ({model}):\n{}", r.full.trim());
+        let second = crate::park::brief_model(repo).filter(|m| runnable(repo, m));
+        if let Some(m2) = &second {
+            log(&format!("{}: {id}: the researcher says {line}; a second opinion from {m2}", repo.slug));
+            let log2 = std::path::PathBuf::from(format!("{}.research-2.jsonl", logf.display()));
+            let r2 = run_agent(
+                repo,
+                "bead-researcher",
+                m2,
+                &wt,
+                &log2,
+                &second_opinion_prompt(&prompt, &model, &r.full),
+                &format!("{id} · research · second opinion"),
+                timeout,
+                Some(&json),
+            );
+            cut_short(repo, id);
+            let blocked2 = ends_blocked(&r2.full);
+            replies.push_str(&format!(
+                "\n\nsecond opinion ({m2}):\n{}",
+                if r2.full.trim().is_empty() { format!("(no answer; exited {})", r2.rc) } else { r2.full.trim().to_string() }
+            ));
+            if let Some(b2) = blocked2 {
+                bd_note(repo, id, &format!("bead-loop {}: research second opinion ({m2}) {b2}", date_iminutes()));
+                line = b2;
+            } else if r2.rc == 0 && !r2.full.trim().is_empty() {
+                overruled_by = Some(m2.clone());
+                brief = brief_of(&r2.full);
+            }
         }
-        repo.wake();
-        return false;
+        if overruled_by.is_none() {
+            log(&format!("{}: {id}: the researcher found the bead cannot be done as written; parked for you", repo.slug));
+            park(repo, id, Reason::ResearchBlocked(line, replies), Some(&wt));
+            repo.clear_target(id);
+            repo.research_clear(id);
+            clear_lane_of(repo, id);
+            repo.release(id);
+            park_cleanup(repo, &wt);
+            if research_leftover(repo, &branch) {
+                let _ = git(&repo.repo, &["branch", "-D", &branch]);
+            }
+            repo.wake();
+            return false;
+        }
     }
     // A brief without the headings is kept as it is: a worse brief is still a brief. A
     // round the clock ended leaves an empty one — the worker goes without, and research
     // is not tried again for this bead until a send-back under `every` clears it.
-    let brief = if r.rc == 0 { r.text.trim().to_string() } else { String::new() };
     write_file(&repo.research_path(id), &format!("{brief}\n"));
     let _ = std::fs::remove_file(repo.research_prev_path(id));
-    let what = if brief.is_empty() {
-        format!("research ({model}) gave no brief (exited {}); the worker goes without. Log: {}", r.rc, research_log.display())
-    } else {
-        format!("research ({model}) wrote the brief ({} lines)", brief.lines().count())
+    let what = match &overruled_by {
+        Some(m2) => format!(
+            "research second opinion ({m2}): the bead can be done as written; its brief goes to the worker ({} lines)",
+            brief.lines().count()
+        ),
+        None if brief.is_empty() => {
+            format!("research ({model}) gave no brief (exited {}); the worker goes without. Log: {}", r.rc, research_log.display())
+        }
+        None => format!("research ({model}) wrote the brief ({} lines)", brief.lines().count()),
     };
     log(&format!("{}: {id}: {what} → dev queue", repo.slug));
     bd_note(repo, id, &format!("bead-loop {}: {what}", date_iminutes()));
@@ -1446,6 +1518,13 @@ pub fn dev_one(repo: &Repo, opts: &Opts, id: Option<&str>, last_id: &mut Option<
 /// `grep '^PREFIX' | tail -1`
 fn last_line_starting(text: &str, prefix: &str) -> Option<String> {
     text.lines().rfind(|l| l.starts_with(prefix)).map(str::to_string)
+}
+
+/// The reply's last line that is not blank, when it is a `BLOCKED:` line. The second
+/// opinion is asked to say what the first researcher got wrong and may quote its line;
+/// only a BLOCKED it ends with is its own.
+fn ends_blocked(reply: &str) -> Option<String> {
+    reply.lines().rfind(|l| !l.trim().is_empty()).filter(|l| l.starts_with("BLOCKED:")).map(str::to_string)
 }
 
 /// `gh pr create` for `head`: `--repo pr_repo` when it is known, `--base`/`--head` and
@@ -1940,6 +2019,36 @@ mod tests {
         let rebase = dev_prompt(&j, "bead/t-1", "main", true, "", &rebase_order("origin", "main"), "", "", "");
         assert!(rebase.contains("Your job this round is the rebase, not new work. Run: git fetch origin && git rebase origin/main"));
         assert!(rebase.find("rebase origin/main").unwrap() > rebase.find("</bead>").unwrap(), "the order comes after the bead");
+    }
+    #[test]
+    fn second_opinion_prompt_asks_for_the_claim_to_be_checked() {
+        let p = second_opinion_prompt("Research the bead below.", "local/coder", "I read it.\nBLOCKED: x.rs has no fn y\n");
+        assert!(p.starts_with("Research the bead below.\n\n"), "the research prompt, as the first researcher had it");
+        assert!(p.contains("A first researcher (local/coder) read this bead and stopped with BLOCKED"));
+        assert!(p.contains("Check its claim against the code yourself before you trust it"));
+        assert!(p.contains("end with your own BLOCKED: line") && p.contains("answer with the brief as asked"));
+        assert!(p.ends_with("<first-research>\nI read it.\nBLOCKED: x.rs has no fn y\n</first-research>"), "its reply, trimmed");
+        assert_eq!(ends_blocked("I checked.\nBLOCKED: x.rs:3 has fn z\n\n"), Some("BLOCKED: x.rs:3 has fn z".into()), "its own verdict");
+        let quoting = "Files:\n- x.rs\nPitfalls:\nThe first researcher said\nBLOCKED: x.rs has no fn y\nbut x.rs:3 has it.";
+        assert_eq!(ends_blocked(quoting), None, "a brief that quotes the first BLOCKED line is not a BLOCKED");
+    }
+    #[test]
+    fn brief_of_keeps_the_whole_brief_and_drops_the_reading() {
+        let files: Vec<String> = (1..=30).map(|i| format!("- src/f{i}.rs: change {i}")).collect();
+        let reply =
+            format!("Let me read src/x.rs first.\nFiles:\n{}\n\nShape:\nedit\n\nCheck:\ncargo test\n\nPitfalls:\nnone", files.join("\n"));
+        let b = brief_of(&reply);
+        assert!(b.starts_with("Files:\n- src/f1.rs: change 1\n"), "from the heading on, the reading dropped");
+        assert_eq!(b.lines().count(), reply.lines().count() - 1, "nothing cut: the last twenty lines lost the Files");
+        assert!(b.ends_with("Pitfalls:\nnone"));
+        assert!(brief_of("## Files\n- a.rs\n## Shape\nx").starts_with("## Files\n"), "a markdown heading");
+        assert!(brief_of("**Files:**\n- a.rs").starts_with("**Files:**"));
+        assert_eq!(brief_of("Files:\n- old\nmore reading\nFiles:\n- new"), "Files:\n- new", "the last brief of several");
+        let plain: Vec<String> = (1..=80).map(|i| format!("line {i}")).collect();
+        let b = brief_of(&plain.join("\n"));
+        assert_eq!(b.lines().count(), 60, "no heading: the last sixty lines");
+        assert!(b.starts_with("line 21\n"));
+        assert_eq!(brief_of("  \n"), "");
     }
     #[test]
     fn research_prompt_carries_bead_and_previous_brief() {
