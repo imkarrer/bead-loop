@@ -184,6 +184,7 @@ Every row is a case in `test/run.sh`.
 | CI red | note with the failing checks, +1 failure; dev queue | kept; the next round's push updates the PR |
 | CI red again on the commit already charged (a fix round made no new commit) | not charged again: under `pipeline` the merge label comes off and back on and the bead waits for the re-run; otherwise **held** | unchanged |
 | CI red, every failing required check killed (Buildkite `exit status -1`: a step timeout), `pipeline` | no failure, one note; CI re-runs once on the same head; killed again, charged like any red | unchanged |
+| CI red only in checks the base does not require (the build-level context, the pipeline's own automerge step) | no failure; waits in the merge queue, held after 2 h | unchanged |
 | CI red on an adopted PR | one note, **held** | left open for whoever opened it |
 | CI pending for over two hours | **held**, still polled: is the agent up? | waits |
 | A status from a build CI skipped (Buildkite's `Build #N skipped`, state error) | not a result, no failure: its check reads as the newest status from a build that was not skipped, pending while none has reported | waits |
@@ -255,6 +256,7 @@ The watcher looks at every `inflight/ID` on each pass.
 | merge | checks red, ours | ready (`.fixing`) | +1 | kept; the next push updates the PR |
 | merge | checks red, ours, every failing check from a run already charged on this head (`.lastred`) | merge (waits for the re-run under `pipeline`, held after 2 h; held at once otherwise) | — | — |
 | merge | checks red, ours, `pipeline`, every failing required check killed (`exit status -1`), this head not yet re-run (`.rerun`) | merge (the label off and back on, one note) | — | — |
+| merge | checks red, ours, but no check the base requires is failing (`gh pr checks --required` lists none) | merge (waits; held after 2 h, `CI_TIMEOUT`, except under `external`) | — | — |
 | merge | checks red, adopted | merge (held: not the loop's branch to fix; one note) | — | — |
 | merge | green, `auto`, `CLEAN` → `gh pr merge` | closed | — | deleted |
 | merge | green, `auto`, `BEHIND` → `update-branch` | merge (CI reruns) | — | updated |

@@ -720,6 +720,30 @@ fn reconcile_open(repo: &Repo, id: &str, f: &std::path::Path, url: &str, view: &
             } else {
                 // Ours: back to the dev queue on the same branch; the next push updates this PR.
                 let required = required_failures(repo, url);
+                if required.as_ref().is_some_and(|r| r.is_empty()) {
+                    // Every check the base requires passed or is still running: the red is in one it
+                    // does not require (the build-level context, the pipeline's own automerge step).
+                    say(
+                        id,
+                        format!(
+                            "{}: {id}: CI red on {url} only in checks {} does not require ({checks}); not charged",
+                            repo.slug, repo.base
+                        ),
+                    );
+                    let since = mtime(f);
+                    if repo.merge != "external" && since > 0 && now() - since >= CI_TIMEOUT {
+                        held_in_merge(
+                            repo,
+                            id,
+                            &format!(
+                                "CI on {url} has been red for {} h only in checks {} does not require ({checks})",
+                                (now() - since) / 3600,
+                                repo.base
+                            ),
+                        );
+                    }
+                    return;
+                }
                 let head = head_sha(view);
                 if repo.merge == "pipeline"
                     && !head.is_empty()
