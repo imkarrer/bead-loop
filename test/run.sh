@@ -418,6 +418,24 @@ case_ci_killed_job_reruns_once() {
   assert_eq "$(cat "$BEAD_LOOP_STATE/repo/beads/t-1/failures")" 1 "killed again on the same head: charged"
   assert_eq "$(bead .status)" open "back in the dev queue"
 }
+case_ci_red_unrequired_waits() {
+  # bl-3x2.3, 25 Sep: rust, scripts and suite, the checks main requires, all passed on #131;
+  # only the pipeline's own automerge step failed, and the loop charged the bead's third
+  # failure and parked it. A red in no required check is not the code's: it waits.
+  setup true pipeline; sup work "$REPO"
+  set_checks '[{"context":"ci/suite","state":"SUCCESS"},{"context":"ci/automerge","state":"FAILURE"}]'
+  printf '[{"name":"ci/suite","bucket":"pass","state":"SUCCESS","description":"Passed (2 minutes, 25 seconds)","link":"https://ci.example/builds/284#s"}]\n' >"$TEST_CTRL/checks.json"
+  sup reconcile "$REPO"
+  assert_eq "$(cat "$BEAD_LOOP_STATE/repo/beads/t-1/failures" 2>/dev/null || echo 0)" 0 "a red in no required check is not charged"
+  assert_file "$BEAD_LOOP_STATE/repo/inflight/t-1" "the bead stays in the merge queue"
+  assert_nofile "$BEAD_LOOP_STATE/repo/held/t-1" "not held yet"
+  touch -d '-3 hours' "$BEAD_LOOP_STATE/repo/inflight/t-1"; sup reconcile "$REPO"
+  assert_match "$(cat "$BEAD_LOOP_STATE/repo/held/t-1")" "does not require" "held after CI_TIMEOUT, saying why"
+  set_checks '[{"context":"ci/suite","state":"FAILURE"}]'
+  printf '[{"name":"ci/suite","bucket":"fail","state":"FAILURE","description":"Failed (exit status 1)","link":"https://ci.example/builds/285#s"}]\n' >"$TEST_CTRL/checks.json"
+  sup reconcile "$REPO"
+  assert_eq "$(cat "$BEAD_LOOP_STATE/repo/beads/t-1/failures")" 1 "a required check's red is charged"
+}
 case_ci_red_unchanged_head_holds() {
   # The same no-commit fix round under merge = "auto": no label to re-run CI with, so the
   # old red is not charged twice and the bead is held for you.
