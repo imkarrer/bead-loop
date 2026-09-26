@@ -859,7 +859,7 @@ case_restart_rejoins_the_worker_session() {
   kill -TERM -- -"$pid"; rc=0; wait "$pid" || rc=$?
   assert_eq "$rc" 143 "exits 143 on TERM"
   assert_match "$(cat "$T/sup.log")" "restart: 1 session(s) left running on the server for the next process to rejoin" "a restart keeps the session"
-  ! grep -q abort "$TEST_CTRL/curl.log" && ok || bad "no abort on a restart: $(grep abort "$TEST_CTRL/curl.log")"
+  ! grep -qs abort "$TEST_CTRL/curl.log" && ok || bad "no abort on a restart: $(grep abort "$TEST_CTRL/curl.log")"
   assert_nofile "$BEAD_LOOP_STATE/restart" "the marker is consumed"
   assert_file "$BEAD_LOOP_STATE/repo/lane.dev" "a restart leaves the lane marker for recover"
   R=$BEAD_LOOP_STATE/repo
@@ -1022,8 +1022,19 @@ case_recover_rejoins_a_session_that_finished_in_the_gap() {
 case_new_attempt_aborts_leftover_session() {
   setup true auto '' 'attach = "http://oc.test:4096"'
   echo '{"ses_old":{"type":"busy"}}' >"$TEST_CTRL/session-status.json"
+  mkdir -p "$BEAD_LOOP_STATE/repo/wt/t-1"   # the killed round's worktree, still on disk
   sup work "$REPO"
   assert_match "$(head -2 "$TEST_CTRL/curl.log" | tr '\n' ' ')" "session/status .*wt/t-1 .*/session/ses_old/abort" "before the worktree is recreated, what ran there is stopped"
+}
+
+case_server_not_asked_before_its_worktree_exists() {
+  # opencode files a directory it is first asked about before it exists under its global
+  # project (worktree "/") while it runs, and the worker's edit "../*" deny never fires
+  # there. Research, worker, reviewer: no request names a worktree not yet on disk.
+  setup true auto stub/reviewer "$(printf 'attach = "http://oc.test:4096"\nresearch_model = "stub/researcher"')"
+  sup work "$REPO"
+  assert_eq "$(calls)" "bead-researcher bead-worker bead-reviewer" "the three rounds ran"
+  assert_nofile "$TEST_CTRL/curl-nodir.log" "no request named a directory before it existed"
 }
 
 case_status_json_and_ui() {

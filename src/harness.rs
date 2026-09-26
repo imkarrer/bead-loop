@@ -561,6 +561,15 @@ pub fn abort_sessions(repo: &Repo, dir: &Path) {
 }
 
 pub fn abort_sessions_on(attach: &str, slug: &str, dir: &Path) {
+    // Only a directory on disk. The attached server files a directory it is first asked
+    // about before it exists under its global project (worktree "/") for as long as it
+    // runs, and the worker's edit "../*" deny never fires there. research_one and dev_one
+    // abort before make_worktree, and a stop aborts the lane's worktree (signals.rs) even
+    // before it is made. The loop removes a worktree only after its session has ended, so
+    // a missing one has nothing of the loop's running in it.
+    if !dir.is_dir() {
+        return;
+    }
     for sid in sessions_on(attach, dir) {
         log(&format!("{slug}: aborting session {sid} on {attach}"));
         crate::shell::curl_post(&format!("{attach}/session/{sid}/abort"), 5);

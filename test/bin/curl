@@ -16,6 +16,7 @@ while [ $# -gt 0 ]; do
   shift
 done
 echo "$url $dir" >>"$TEST_CTRL/curl.log"
+[ -z "$dir" ] || [ -d "$dir" ] || echo "$url $dir" >>"$TEST_CTRL/curl-nodir.log"   # the real server files a directory it meets before it exists under its global project
 case $url in
   */abort)          # a slow server, once: the stop's own abort takes a moment, the lane's after it do not
                     if [ -f "$TEST_CTRL/abort-delay" ]; then d=$(cat "$TEST_CTRL/abort-delay"); rm -f "$TEST_CTRL/abort-delay"; sleep "$d"; fi ;;
