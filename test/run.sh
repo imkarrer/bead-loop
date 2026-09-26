@@ -10,6 +10,7 @@
 #
 # Every case has its own scratch dir, state dir and stub control dir, so with no case
 # named they run side by side, one process per case (JOBS=N; JOBS=1 for one at a time).
+# Side by side, a case that runs past CASE_TIMEOUT seconds (180) is killed and named.
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 SUP=${SUP:-$HERE/../target/debug/bead-supervisor}   # the Rust binary; SUP=... to point elsewhere
@@ -2242,9 +2243,35 @@ if [ "$jobs" -gt 1 ] && [ "$(printf '%s\n' "$cases" | wc -l)" -gt 1 ]; then
   # the cases' order — the case's line, its FAIL lines, its count — summed up here. A
   # case that died outside an assertion (set -e) has no count line and is a failure; its
   # own ABORT lines are in its file.
-  out=$(mktemp -d); DONE=1; trap 'rm -rf "$out"' EXIT
+  out=$(mktemp -d); DONE=1; SUMMED=; xargs_pid=
+  # Cut short (the CI step's timeout or a cancel: TERM, or HUP when the job's terminal
+  # goes; INT at a terminal): start no more cases, then, before the files go, name each
+  # case that started and has no count line. One whose timeout has exited died without a
+  # count (its file says why); one still running is named and stopped (its timeout passes
+  # the TERM on to the case's process group).
+  cut_short() {
+    local f name pid
+    kill "$xargs_pid" 2>/dev/null || true
+    for f in "$out"/*.out; do
+      [ -e "$f" ] && ! grep -q ' passed, .* failed$' "$f" || continue
+      name=$(basename "$f" .out); pid=$(cat "${f%.out}.pid" 2>/dev/null) || pid=
+      if [ -n "$pid" ] && ! kill -0 "$pid" 2>/dev/null; then
+        cat "$f"; printf '  FAIL case_%s: died without a count\n' "$name"
+      else
+        printf '  FAIL case_%s: still running when the run was cut short\n' "$name"
+        [ -z "$pid" ] || kill -TERM "$pid" 2>/dev/null || true
+      fi
+    done
+  }
+  trap '[ -n "$SUMMED" ] || cut_short; rm -rf "$out"' EXIT
+  trap 'exit 143' TERM; trap 'exit 129' HUP; trap 'exit 130' INT
+  # Each case under its own timeout, CASE_TIMEOUT seconds (180; the slowest case takes about
+  # 10): then TERM to the case's process group, KILL 5 s on, and a FAIL line naming it.
+  # xargs runs in the background and is waited on: bash runs a trap only after the
+  # foreground command returns, but a signal ends a wait at once.
   printf '%s\n' "$cases" | sed 's/^case_//' \
-    | xargs -P "$jobs" -I{} bash -c 'JOBS=1 "$1" "$2" >"$3/$2.out" 2>&1 || true' _ "$HERE/run.sh" {} "$out"
+    | xargs -P "$jobs" -I{} bash -c 'JOBS=1 timeout -k 5 "${CASE_TIMEOUT:-180}" "$1" "$2" >"$3/$2.out" 2>&1 & echo $! >"$3/$2.pid"; wait $!; rc=$?; if [ "$rc" = 124 ] || [ "$rc" = 137 ]; then printf "  FAIL case_%s: timed out after %ss\n" "$2" "${CASE_TIMEOUT:-180}" >>"$3/$2.out"; fi; true' _ "$HERE/run.sh" {} "$out" &
+  xargs_pid=$!; wait "$xargs_pid"
   for CASE in $cases; do
     f=$out/${CASE#case_}.out
     if grep -q ' passed, .* failed$' "$f"; then
@@ -2254,6 +2281,7 @@ if [ "$jobs" -gt 1 ] && [ "$(printf '%s\n' "$cases" | wc -l)" -gt 1 ]; then
       cat "$f"; printf '  FAIL %s: died without a count\n' "$CASE"; FAIL=$((FAIL + 1))
     fi
   done
+  SUMMED=1
 else
   for CASE in $cases; do
     t0=$(date +%s%N); "$CASE"
