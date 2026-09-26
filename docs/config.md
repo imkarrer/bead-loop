@@ -1,10 +1,10 @@
 # Config
 
-Two TOML files, every key optional: the global `~/.config/bead-loop/config.toml`
+Two TOML files, every key optional but a worker (`model`, or each stage's `worker`): the global `~/.config/bead-loop/config.toml`
 (`install.sh` seeds it) and the repo's `.bead-loop.toml` (`bead-loop.example.toml` has
 every key annotated). A key in the repo file wins over the same key in the global one;
 the global one wins over the default. A file that does not parse stops the run with its
-name. Both are read afresh on every round, so an edit takes effect on the next round.
+name. Both are read afresh on every round, so an edit takes effect on the next round. Replace a file atomically: write the new one beside it, then `mv` it over the old one. A round that reads the global file missing or empty sees none of its keys. A repo whose worker only that file names then stops the run (`stage 1 names no worker`), and the next start finds no `repos`. A half-written file stops on the parse.
 
 | Key | Default | What |
 | --- | --- | --- |
