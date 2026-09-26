@@ -146,6 +146,8 @@ case_done_to_pr() {
   assert_match "$(sed -n 2p "$TEST_CTRL/calls")" " stub/reviewer " "reviewer model from .bead-loop.toml"
   assert_match "$(cat "$TEST_CTRL/prompt.1")" "ACCEPTANCE CRITERIA" "bead rendered into the prompt"
   assert_match "$(cat "$TEST_CTRL/prompt.2")" "<diff>" "reviewer sees the diff"
+  assert_match "$(cat "$TEST_CTRL/prompt.1")" "a fresh worktree of origin/main\." "the worker is told the base by its remote"
+  assert_match "$(cat "$TEST_CTRL/prompt.2")" "The diff against origin/main is under" "and so is the reviewer"
   assert_branch bead/t-1 "branch pushed"
   assert_file "$BEAD_LOOP_STATE/repo/inflight/t-1" "inflight recorded"
   assert_eq "$(bead .status)" in_progress "bead parked in_progress until merge"
@@ -1602,12 +1604,13 @@ case_conflicting_pr_rebased_by_the_last_stage() {
   assert_eq "$(bead .status)" open "back in the dev queue"
   assert_nofile "$BEAD_LOOP_STATE/repo/inflight/t-1" "out of the merge queue"
   assert_eq "$(cat "$BEAD_LOOP_STATE/repo/beads/t-1/failures" 2>/dev/null || echo 0)" 0 "no failure charged"
-  assert_match "$(bead .notes)" "conflicts with main; back to dev for a rebase by the last stage" "noted"
-  assert_match "$(cat "$T/sup.log")" "conflicts with main → dev queue for a rebase" "logged"
+  assert_match "$(bead .notes)" "conflicts with origin/main; back to dev for a rebase by the last stage" "noted"
+  assert_match "$(cat "$T/sup.log")" "conflicts with origin/main → dev queue for a rebase" "logged"
   jq '.mergeable="MERGEABLE"' "$TEST_CTRL/pr.json" >"$TEST_CTRL/pr.tmp" && mv "$TEST_CTRL/pr.tmp" "$TEST_CTRL/pr.json"
   : >"$TEST_CTRL/calls"; printf 'approve\napprove\n' >"$TEST_CTRL/review"; sup work "$REPO"
   assert_eq "$(cut -d' ' -f3,4 "$TEST_CTRL/calls" | head -1)" "claude/sonnet claude" "the rebase round runs on the last stage's worker"
   assert_match "$(cat "$TEST_CTRL/prompt.1")" "Your job this round is the rebase, not new work. Run: git fetch origin && git rebase origin/main" "with the rebase order"
+  assert_match "$(cat "$TEST_CTRL/prompt.1")" "it conflicts with origin/main\." "the conflict named by the base's remote"
   assert_match "$(cat "$T/sup.log")" "dev: bead t-1 .*rebase)" "the round says it is a rebase"
   assert_file "$BEAD_LOOP_STATE/repo/inflight/t-1" "back in the merge queue"
   assert_nofile "$BEAD_LOOP_STATE/repo/inflight/.t-1.conflict" "conflict marker cleared"
@@ -1729,7 +1732,7 @@ case_target_review_lane() {
   # against origin/main, which does not even exist on this fork (setup_target's point).
   setup_target
   sup work "$REPO" t-3
-  assert_match "$(cat "$TEST_CTRL/prompt.2")" "The diff against main is under" "the base name is still just main"
+  assert_match "$(cat "$TEST_CTRL/prompt.2")" "The diff against upstream/main is under" "the base named by the target's base_remote"
   assert_match "$(cat "$TEST_CTRL/prompt.2")" "<diff>" "reviewer got a diff"
   assert_match "$(cat "$TEST_CTRL/prompt.2")" "work.txt" "the diff shows the worker's change: computed against upstream/main, which has it"
 }
@@ -2177,6 +2180,7 @@ case_research_round_before_the_worker() {
   assert_eq "$(calls)" "bead-researcher bead-worker bead-reviewer" "researcher, then worker, then reviewer"
   assert_match "$(sed -n 1p "$TEST_CTRL/calls")" " stub/researcher " "on the research model"
   assert_match "$(cat "$TEST_CTRL/prompt.1")" "Files / Shape / Check / Pitfalls" "the researcher's ask"
+  assert_match "$(cat "$TEST_CTRL/prompt.1")" "a fresh worktree of origin/main," "the researcher too"
   assert_file "$BEAD_LOOP_STATE/repo/beads/t-1/brief" "the brief on disk"
   assert_match "$(cat "$BEAD_LOOP_STATE/repo/beads/t-1/brief")" "^Files:" "the researcher's words"
   assert_match "$(cat "$TEST_CTRL/prompt.2")" "<research>" "the worker's prompt carries the brief"

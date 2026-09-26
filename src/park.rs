@@ -197,7 +197,7 @@ pub fn question_for(repo: &Repo, reason: &Reason, rounds: &[Value]) -> String {
         ),
         Reason::Delivered => format!(
             "The branch has no diff against {}: the work is already there. Close the bead if it is done, or say what is still missing.",
-            repo.base
+            repo.base_ref()
         ),
         Reason::ResearchBlocked(line, _) => format!(
             "The researcher stopped before a single edit: {line} — Fix the bead's text if the claim is false, answer what it needs to know, or take it yourself."
@@ -216,7 +216,7 @@ pub fn brief_prompt(repo: &Repo, bead: &Value, reason: &Reason, rounds: &[Value]
         Reason::Blocked => "the last stage stopped with BLOCKED".to_string(),
         Reason::Exhausted => format!("every stage has had its turn ({} rounds, all sent back)", rounds.len()),
         Reason::PrClosed(url) => format!("its pull request {url} was closed on GitHub without merging"),
-        Reason::Delivered => format!("its branch has no diff against {}: nothing left to rebase or commit", repo.base),
+        Reason::Delivered => format!("its branch has no diff against {}: nothing left to rebase or commit", repo.base_ref()),
         Reason::ResearchBlocked(..) => "the researcher found a claim in it false before any round ran".to_string(),
         Reason::HoldExpired(why) => format!("it has been held for over a day on the same reason: {}", why.trim()),
     };
@@ -391,7 +391,7 @@ pub fn park(repo: &Repo, id: &str, reason: Reason, wt: Option<&Path>) {
         Reason::Blocked => "BLOCKED at the last stage".to_string(),
         Reason::Exhausted => format!("stages exhausted after {} rounds", rounds.len()),
         Reason::PrClosed(url) => format!("{url} was closed without merging"),
-        Reason::Delivered => format!("its branch already matches {}", repo.base),
+        Reason::Delivered => format!("its branch already matches {}", repo.base_ref()),
         Reason::ResearchBlocked(..) => "BLOCKED by the researcher".to_string(),
         Reason::HoldExpired(why) => format!("held over a day: {}", why.trim()),
     };

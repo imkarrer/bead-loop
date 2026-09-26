@@ -232,6 +232,12 @@ impl Repo {
     pub fn held_count(&self, id: &str) -> u64 {
         read_to_string(&self.held_count_path(id)).and_then(|s| s.trim().parse().ok()).unwrap_or(1)
     }
+    /// The base as a prompt names it: the remote's copy (`origin/main`). A bare `main` in a
+    /// worktree of the loop's checkout is that checkout's local branch, as far behind as its
+    /// owner left it (bl-efd's reviewer wrote a work order against one).
+    pub fn base_ref(&self) -> String {
+        format!("{}/{}", self.base_remote, self.base)
+    }
     pub fn wt(&self, id: &str) -> PathBuf {
         self.rs.join("wt").join(id)
     }
