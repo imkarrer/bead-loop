@@ -524,7 +524,7 @@ impl Repo {
             beads,
             rs,
             state_dir,
-            research_aider: cfg.bool("research_aider", false),
+            research_aider: cfg.bool("research_aider", true),
         };
         for s in &r.stages {
             for m in std::iter::once(&s.worker).chain(s.seats.iter().map(|x| &x.model)) {
