@@ -261,6 +261,43 @@ pub fn rerun_ci(repo: &Repo, id: &str, url: &str, why: &str) {
     hand_to_pipeline(repo, id, url);
 }
 
+/// One failing required check, as `gh pr checks --json` gives it.
+pub struct Failed {
+    pub name: String,
+    pub description: String,
+    pub link: String,
+}
+
+/// The array entries whose `bucket` is "fail" or "cancel"; a string that does not parse
+/// (or is not the expected shape) gives an empty list.
+fn parse_failures(json: &str) -> Vec<Failed> {
+    serde_json::from_str::<Value>(json)
+        .ok()
+        .and_then(|v| v.as_array().cloned())
+        .unwrap_or_default()
+        .iter()
+        .filter(|c| matches!(c.get("bucket").and_then(|v| v.as_str()), Some("fail") | Some("cancel")))
+        .map(|c| Failed {
+            name: c.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+            description: c.get("description").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+            link: c.get("link").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+        })
+        .collect()
+}
+
+/// The failing required checks on `url`, with their descriptions and links. None when gh
+/// exits non-zero, which includes a base with no required checks.
+pub fn required_failures(repo: &Repo, url: &str) -> Option<Vec<Failed>> {
+    gh_out(repo, &["pr", "checks", url, "--required", "--json", "name,state,description,link,bucket"]).map(|s| parse_failures(&s))
+}
+
+/// True when every failing required check was a Buildkite job killed at its step timeout
+/// (reported to GitHub as FAILURE, indistinguishable from a real failure except by this
+/// description), not a real test failure.
+fn all_killed(f: &[Failed]) -> bool {
+    !f.is_empty() && f.iter().all(|x| x.description.contains("(exit status -1)"))
+}
+
 /// `ci=SUCCESS build=FAILURE`, what the close reason quotes; "none reported" without checks.
 pub fn checks_at_merge(view: &Value) -> String {
     let checks: Vec<String> = view
@@ -306,7 +343,7 @@ pub fn close_merged(repo: &Repo, id: &str, url: &str, view: &Value) {
     let _ = std::fs::remove_file(repo.inflight_path(id));
     repo.clear_target(id);
     repo.research_clear(id);
-    for m in ["red", "nocheck", "adopted", "held", "lastred"] {
+    for m in ["red", "nocheck", "adopted", "held", "lastred", "rerun"] {
         let _ = std::fs::remove_file(repo.mark(id, m));
     }
     repo.release(id);
@@ -536,7 +573,7 @@ pub fn reconcile(repo: &Repo) {
                 let _ = std::fs::remove_file(&f);
                 repo.clear_target(&id);
                 repo.research_clear(&id);
-                for m in ["red", "nocheck", "adopted", "held", "lastred"] {
+                for m in ["red", "nocheck", "adopted", "held", "lastred", "rerun"] {
                     let _ = std::fs::remove_file(repo.mark(&id, m));
                 }
                 repo.release(&id);
@@ -653,6 +690,20 @@ fn reconcile_open(repo: &Repo, id: &str, f: &std::path::Path, url: &str, view: &
                 }
             } else {
                 // Ours: back to the dev queue on the same branch; the next push updates this PR.
+                let required = required_failures(repo, url);
+                let head = head_sha(view);
+                if repo.merge == "pipeline"
+                    && !head.is_empty()
+                    && required.as_deref().is_some_and(all_killed)
+                    && read_to_string(&repo.mark(id, "rerun")).unwrap_or_default().trim() != head
+                {
+                    record_red(repo, id, view);
+                    write_file(&repo.mark(id, "rerun"), &format!("{head}\n"));
+                    touch(f); // bl-9wc's CI_TIMEOUT wait counts from the re-run
+                    let what = required.iter().flatten().map(|x| format!("{}: {} {}", x.name, x.description, x.link)).collect::<Vec<_>>().join(", ");
+                    rerun_ci(repo, id, url, &format!("CI on {url} was killed, not failed ({what}); re-running it once before charging a failure"));
+                    return;
+                }
                 record_red(repo, id, view);
                 let _ = std::fs::remove_file(f);
                 let _ = std::fs::remove_file(repo.mark(id, "nocheck"));
@@ -790,6 +841,31 @@ mod tests {
         assert_eq!(checks_at_merge(&view), "ci=FAILURE build=SUCCESS lint=TIMED_OUT");
         assert_eq!(checks_at_merge(&serde_json::json!({"statusCheckRollup": []})), "none reported");
         assert_eq!(failing_checks(&serde_json::json!({})), "");
+    }
+    #[test]
+    fn killed_is_exit_status_minus_one_on_every_failing_check() {
+        let f = |d: &str| Failed { name: "ci/suite".into(), description: d.into(), link: "".into() };
+        assert!(all_killed(&[f("Failed (exit status -1)")]));
+        assert!(!all_killed(&[f("Failed (exit status 1)")]));
+        assert!(!all_killed(&[f("Failed (exit status -1)"), f("Failed (exit status 1)")]));
+        assert!(!all_killed(&[]));
+    }
+    #[test]
+    fn parse_failures_keeps_fail_and_cancel() {
+        let json = serde_json::json!([
+            {"name":"pass check","bucket":"pass","state":"SUCCESS","description":"Passed","link":"https://ci.example/pass"},
+            {"name":"ci/suite","bucket":"fail","state":"FAILURE","description":"Failed (exit status -1)","link":"https://ci.example/builds/310#job"},
+            {"name":"ci/lint","bucket":"cancel","state":"CANCELLED","description":"Cancelled","link":"https://ci.example/builds/311#job"}
+        ])
+        .to_string();
+        let f = parse_failures(&json);
+        assert_eq!(f.len(), 2);
+        assert_eq!(f[0].name, "ci/suite");
+        assert_eq!(f[0].description, "Failed (exit status -1)");
+        assert_eq!(f[0].link, "https://ci.example/builds/310#job");
+        assert_eq!(f[1].name, "ci/lint");
+        assert_eq!(f[1].description, "Cancelled");
+        assert_eq!(f[1].link, "https://ci.example/builds/311#job");
     }
     #[test]
     fn say_repeats_itself_only_when_loud() {

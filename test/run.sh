@@ -392,6 +392,29 @@ case_ci_red_unchanged_head_reruns() {
   sup reconcile "$REPO"
   assert_eq "$(cat "$BEAD_LOOP_STATE/repo/beads/t-1/failures")" 2 "the re-run's own red is charged"
 }
+case_ci_killed_job_reruns_once() {
+  # A Buildkite step killed at its timeout reports FAILURE like a failing test; only the
+  # description tells them apart: "Failed (exit status -1)" (build 246 on #117, 310 on
+  # #138) vs "Failed (exit status 1)" (292 on #133). Killed: re-run once, then charged.
+  setup true pipeline; sup work "$REPO"
+  sha=$(git -C "$T/origin.git" rev-parse bead/t-1)
+  jq --arg s "$sha" '.headRefOid=$s' "$TEST_CTRL/pr.json" >"$TEST_CTRL/pr.tmp" && mv "$TEST_CTRL/pr.tmp" "$TEST_CTRL/pr.json"
+  set_checks '[{"context":"ci/suite","state":"FAILURE","targetUrl":"https://ci.example/builds/310#job"}]'
+  printf '[{"name":"ci/suite","bucket":"fail","state":"FAILURE","description":"Failed (exit status -1)","link":"https://ci.example/builds/310#job"}]\n' >"$TEST_CTRL/checks.json"
+  : >"$TEST_CTRL/gh.log"; sup reconcile "$REPO"
+  assert_eq "$(cat "$BEAD_LOOP_STATE/repo/beads/t-1/failures" 2>/dev/null || echo 0)" 0 "a killed job is not charged"
+  assert_file "$BEAD_LOOP_STATE/repo/inflight/t-1" "the bead stays in the merge queue"
+  assert_match "$(cat "$TEST_CTRL/gh.log")" "pr checks https://github.com/example/repo/pull/7 --required" "asked for the required checks' descriptions"
+  assert_match "$(cat "$TEST_CTRL/gh.log")" "--remove-label automerge" "re-run by relabelling"
+  assert_match "$(bead .notes)" "was killed, not failed" "noted on the bead"
+  sup reconcile "$REPO"
+  assert_eq "$(cat "$BEAD_LOOP_STATE/repo/beads/t-1/failures" 2>/dev/null || echo 0)" 0 "build 310's red, still in the rollup, is not charged either"
+  set_checks '[{"context":"ci/suite","state":"FAILURE","targetUrl":"https://ci.example/builds/311#job"}]'
+  printf '[{"name":"ci/suite","bucket":"fail","state":"FAILURE","description":"Failed (exit status -1)","link":"https://ci.example/builds/311#job"}]\n' >"$TEST_CTRL/checks.json"
+  sup reconcile "$REPO"
+  assert_eq "$(cat "$BEAD_LOOP_STATE/repo/beads/t-1/failures")" 1 "killed again on the same head: charged"
+  assert_eq "$(bead .status)" open "back in the dev queue"
+}
 case_ci_red_unchanged_head_holds() {
   # The same no-commit fix round under merge = "auto": no label to re-run CI with, so the
   # old red is not charged twice and the bead is held for you.
