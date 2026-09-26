@@ -20,6 +20,7 @@ on_exhaust = "repeat"                  # repeat: cycle the stages until it lands
 # research_timeout = 900               # seconds a research round may run, capped by the stage's `timeout`; past it the
                                        # worker goes without a brief. A bead labelled `harness:aider` gets no research
                                        # round at all: whoever filed it already named its files
+# research_aider = true                # a brief whose Files all exist puts the worker under aider (default true)
 # adopt = true                         # open bead/* PRs from anyone join the loop and merge on green
 # max_inflight = 2                     # PRs in the merge queue before the dev lane pauses; unset = no cap, bd's
                                        # dependencies are the only gate (the queues absorb the rest)

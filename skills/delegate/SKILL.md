@@ -17,11 +17,11 @@ A stage's worker runs in opencode: the model reads the repo with tools, finds it
 bd label add <id> harness:aider
 ```
 
-Aider is handed the files and edits them; it explores nothing. The loop's logs say where opencode rounds die on the small model: a path outside the worktree, the 32k context spent before the first edit. Both are exploration, and an aider round has none. So:
+Aider is handed the files and edits them; it explores nothing. So:
 
 - **harness:aider** when the DESCRIPTION can name every file to touch, each exists on the base branch, and the repo's gate proves the change (the gate runs as aider's lint after every edit). A one-file fix; a rename across callers you have listed; a test and the code it covers.
-- **The context budget.** Aider hands the model every file the DESCRIPTION names, and the model quotes long SEARCH blocks back. Each named file must be under ~8k tokens (`wc -c` / 4, ~32 KB), all of them under ~20k together. A ~12k file was a coin flip: ~8k is firm. Four files hit 46k, and `src/round.rs` (21k) with long SEARCH blocks hit 38k, against a 32k model. A bigger file stays in opencode, which reads in line ranges.
 - **no label** (opencode) when the model must find its files, create one, run a test the bead names, or might need to stop with `BLOCKED:` and a reason. Anything with two possible shapes.
+- **research_aider** when `research` is enabled and the brief's Files all exist, the worker runs under aider (default true); `harness:opencode` keeps a bead in opencode when the change needs exploration after all.
 - The Claude stage ignores the label. `harness:opencode` on a bead takes it out of a stage whose worker is `aider:...`.
 - **stage:NAME** starts a bead on a named stage, not the first (`docs/config.md`).
 
