@@ -6,6 +6,8 @@ every key annotated). A key in the repo file wins over the same key in the globa
 the global one wins over the default. A file that does not parse stops the run with its
 name. Both are read afresh on every round, so an edit takes effect on the next round. Replace a file atomically: write the new one beside it, then `mv` it over the old one. A round that reads the global file missing or empty sees none of its keys. A repo whose worker only that file names then stops the run (`stage 1 names no worker`), and the next start finds no `repos`. A half-written file stops on the parse.
 
+With neither, the run stops (`stage 1 names no worker`): no agent has a model of its own.
+
 | Key | Default | What |
 | --- | --- | --- |
 | `repos` | `[]` | global only: the repos the lanes walk, `~` allowed |
@@ -15,9 +17,9 @@ name. Both are read afresh on every round, so an edit takes effect on the next r
 | `setup` | none | runs in a fresh worktree before the worker (`npm ci`); not again on a branch sent back. It failing holds the bead, no failure: setup runs on the base, so it cannot be the bead's fault |
 | `gate` | none (CI is the gate) | runs after the worker, before the review queue; one fix round on failure |
 | `precheck_model` | none | runs after the gate, before the review queue; SEND BACK is a failure, anything else is not |
-| `model` | none | the worker when no `[[stages]]` table applies. The name picks the harness: `provider/model` runs in opencode, `claude/<alias>` in Claude Code, `aider:provider/model` in aider on that opencode provider's server ([design.md](design.md#harnesses)) |
+| `model` | none | the worker when no `[[stages]]` table applies. The name picks the harness: `provider/model` runs in opencode, `claude/<alias>` in Claude Code, `aider:provider/model` in aider on that opencode provider's server ([design.md](design.md#harnesses)). With neither, the run stops (`stage 1 names no worker`): no agent has a model of its own. |
 | `review_model` | none (no review) | the reviewer when no `[[stages]]` table applies; none: straight to PR |
-| `[[stages]]` | one stage of `model`/`review_model`, `failures = 3` | `worker`, `reviewer`, `failures` (how many send-backs this stage absorbs before the next takes over; `attempts` still reads), `timeout` (`worker_timeout`), `name` (default: its 1-based index as a string), in order |
+| `[[stages]]` | one stage of `model`/`review_model`, `failures = 3` | `worker` (required), `reviewer`, `failures` (how many send-backs this stage absorbs before the next takes over; `attempts` still reads), `timeout` (`worker_timeout`), `name` (default: its 1-based index as a string), in order. A stage without one stops the run, naming the stage. |
 | `on_exhaust` | `"park"` | after the last stage: `park` for you, or `repeat` the stages |
 | `conflict_worker` | the last stage's worker | who rebases a PR that conflicts with the base; a rebase is judgement, so the strong model by default |
 | `brief_model` | the last stage's worker | who writes the **brief** when a bead is parked for you — what each round tried, why it was sent back, the question you have to answer; `none` for no brief, the loop's own question then. Also the **second opinion** on a researcher's `BLOCKED:` (see `research_model`) |
@@ -67,9 +69,29 @@ each in `status` and a panel each on the page, one `pause NAME` for all of them.
 bead has its own worktree, so the slots never share a checkout. It is for a server that
 takes several sessions at once — `claude/*`, say — not for a GPU that serves one.
 
+## Providers
+
+| Key | Default | What |
+| --- | --- | --- |
+| `harness` | opencode | `opencode` · `claude-code` · `aider` · `command` (default `opencode`; `claude` for the provider named `claude`) |
+| `parallel` | 1 | number of parallel sessions |
+| `cost` | local | `local` (for opencode) or `metered` (for claude) |
+| `probe` | none | `none` (for opencode) or `claude auth status` (for claude-code) |
+| `via` | none | for `aider`: the opencode provider whose baseURL and key it uses |
+| `attach` | none | for opencode: an opencode server url; sessions run there and stream in its web UI |
+| `command` | none | for `command` harness: a command to run |
+| `model_flag` | none | for `command` harness: a flag to pass to the command to specify the model |
+| Implicit provider rule | - | a model `NAME/model` whose NAME has no table gets one (claude: Claude Code, metered; any other: opencode, local, one slot)
+
 ## Stages
 
 The failure count chooses the stage, the `[[stages]]` tables in order:
+
+Seats
+:   A `reviewer` may be a list of seats. The `approvals` key controls how many must approve:
+    - `approvals = "all"` (default): all seats must approve
+    - `approvals = "any"`: any one seat may approve
+    - `approvals = N` (number): at least N seats must approve
 
 ```toml
 on_exhaust = "repeat"
