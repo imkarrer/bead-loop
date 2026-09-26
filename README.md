@@ -98,6 +98,14 @@ itself. [docs/design-targets.md](docs/design-targets.md) explains the target con
 and how the PR is opened; [docs/config.md](docs/config.md)'s Targets section lists the
 target keys and their defaults.
 
+Targets are configured in `.bead-loop.toml` under `[targets.NAME]` tables, with keys like
+`path`, `base`, `base_remote`, `push_remote`, `pr_repo`, `setup`, `gate`, `merge`,
+`merge_label`, `adopt`, `max_inflight`, `open_pr` and `pr_style`. A bead with a
+`work:NAME` label picks the target of that name; the default target is the beads repo
+itself. [docs/design-targets.md](docs/design-targets.md) explains the target concept
+and how the PR is opened; [docs/config.md](docs/config.md)'s Targets section lists the
+target keys and their defaults.
+
 Lanes are keyed by **model server**, not role, with `[[lanes]]` in the global config
 (`gpu`, `cpu`, `claude` here): a round on the CPU box never holds the GPU's queue, and a
 bead escalated to Claude runs at once. Infrastructure failing — a server down, setup
