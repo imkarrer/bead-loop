@@ -298,6 +298,12 @@ fn all_killed(f: &[Failed]) -> bool {
     !f.is_empty() && f.iter().all(|x| x.description.contains("(exit status -1)"))
 }
 
+/// Each failing required check as `{name}: {description} {link}`, joined with "; ", the
+/// trailing space trimmed when `link` is empty.
+pub fn describe_failures(f: &[Failed]) -> String {
+    f.iter().map(|x| format!("{}: {} {}", x.name, x.description, x.link).trim_end().to_string()).collect::<Vec<_>>().join("; ")
+}
+
 /// `ci=SUCCESS build=FAILURE`, what the close reason quotes; "none reported" without checks.
 pub fn checks_at_merge(view: &Value) -> String {
     let checks: Vec<String> = view
@@ -676,7 +682,11 @@ fn reconcile_open(repo: &Repo, id: &str, f: &std::path::Path, url: &str, view: &
             if adopted {
                 // Not our branch to fix: one note, the PR waits for whoever opened it.
                 if !repo.mark(id, "red").exists() {
-                    bd_note(repo, id, &format!("bead-loop: CI red on {url} ({checks}); PR left open"));
+                    let detail = match required_failures(repo, url) {
+                        Some(f) if !f.is_empty() => describe_failures(&f),
+                        _ => checks.clone(),
+                    };
+                    bd_note(repo, id, &format!("bead-loop: CI red on {url} ({detail}); PR left open"));
                     touch(&repo.mark(id, "red"));
                     log(&format!("{}: {id}: CI red on adopted {url}", repo.slug));
                 }
@@ -740,7 +750,11 @@ fn reconcile_open(repo: &Repo, id: &str, f: &std::path::Path, url: &str, view: &
                 touch(&repo.mark(id, "fixing"));
                 let model = repo.stage_for(repo.failures_of(id)).map(|s| s.model).unwrap_or_else(|| repo.model.clone());
                 log(&format!("{}: {id}: CI red on {url} ({checks})", repo.slug));
-                send_back(repo, id, &repo.wt(id), true, &format!("CI red on {url}: {checks}"), &model, false, None);
+                let detail = match &required {
+                    Some(f) if !f.is_empty() => describe_failures(f),
+                    _ => checks.clone(),
+                };
+                send_back(repo, id, &repo.wt(id), true, &format!("CI red on {url}: {detail}"), &model, false, None);
             }
         }
         "nocheck" => {
@@ -904,6 +918,26 @@ mod tests {
         assert_eq!(f[1].name, "ci/lint");
         assert_eq!(f[1].description, "Cancelled");
         assert_eq!(f[1].link, "https://ci.example/builds/311#job");
+    }
+    #[test]
+    fn the_red_note_carries_description_and_link() {
+        let f = vec![
+            Failed {
+                name: "buildkite/x/suite".into(),
+                description: "Failed (exit status -1)".into(),
+                link: "https://bk/builds/310#j1".into(),
+            },
+            Failed {
+                name: "buildkite/x/rust".into(),
+                description: "Failed (exit status 1)".into(),
+                link: "https://bk/builds/310#j2".into(),
+            },
+        ];
+        assert_eq!(
+            describe_failures(&f),
+            "buildkite/x/suite: Failed (exit status -1) https://bk/builds/310#j1; buildkite/x/rust: Failed (exit status 1) https://bk/builds/310#j2"
+        );
+        assert_eq!(describe_failures(&[]), "");
     }
     #[test]
     fn say_repeats_itself_only_when_loud() {

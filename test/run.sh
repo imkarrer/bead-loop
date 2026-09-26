@@ -354,10 +354,12 @@ case_ci_red() {
   # CI red sends the bead back to the dev queue on the same branch; the next push
   # updates the same PR, and until then the branch is not re-adopted.
   setup; sup work "$REPO"
+  printf '[{"name":"ci","bucket":"fail","state":"FAILURE","description":"Failed (exit status 1)","link":"https://ci.example/builds/292#job"}]\n' >"$TEST_CTRL/checks.json"
   set_checks '[{"context":"ci","state":"FAILURE"}]'; sup reconcile "$REPO"
   assert_eq "$(jq -r .state "$TEST_CTRL/pr.json")" OPEN "red: not merged"
   assert_eq "$(bead .status)" open "red: back in the dev queue"
   assert_match "$(bead .notes)" "CI red on https://github.com/example/repo/pull/7: ci" "the failing check named"
+  assert_match "$(bead .notes)" "ci: Failed (exit status 1) https://ci.example/builds/292#job" "each failing required check with its description and link"
   assert_eq "$(cat "$BEAD_LOOP_STATE/repo/beads/t-1/failures")" 1 "one failure"
   assert_nofile "$BEAD_LOOP_STATE/repo/inflight/t-1" "out of the merge queue"
   sup reconcile "$REPO"; assert_nofile "$BEAD_LOOP_STATE/repo/inflight/t-1" "not adopted back while dev fixes it"
