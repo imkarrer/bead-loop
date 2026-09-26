@@ -439,6 +439,9 @@ pub fn recover(ctx: &Ctx) {
                 // back in its queue with a marker, and the lane that takes it waits on the
                 // session instead of starting one — rather than abort it and start over.
                 if in_review || is_inprog {
+                    if in_review {
+                        repo.seat_clear_all_running(&id);
+                    }
                     let kind = if in_review { "reviewer" } else { "worker" };
                     // The session's title says what round it is (a plain stop deletes the
                     // lane markers, a restart keeps them): a research round rejoined as a

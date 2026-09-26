@@ -1525,8 +1525,9 @@ pub fn review_one(repo: &Repo, opts: &Opts, id: Option<&str>, lane: Option<&Lane
             .map(|(sid, _)| sid)
             .filter(|sid| crate::harness::rejoin_fits(repo, &id, sid, "reviewer", n + 1, &review_model));
         repo.rejoin_clear(&id);
+        let seat_suffix = if seats.len() > 1 { format!(" seat {seat}") } else { String::new() };
         log(&format!(
-            "{}: review: {id} seat {seat} by {review_model} ({n} failures{})",
+            "{}: review: {id}{seat_suffix} by {review_model} ({n} failures{})",
             repo.slug,
             rejoin.as_deref().map(|s| format!(", rejoining session {s}")).unwrap_or_default()
         ));
@@ -1551,7 +1552,7 @@ pub fn review_one(repo: &Repo, opts: &Opts, id: Option<&str>, lane: Option<&Lane
                     &wt,
                     &review_log,
                     &prompt,
-                    &format!("{id} · reviewer · round {} · seat {seat}", n + 1),
+                    &format!("{id} · reviewer · round {}{seat_suffix}", n + 1),
                     timeout,
                     Some(&json),
                 )
@@ -1754,10 +1755,16 @@ pub fn work(repo: &Repo, opts: &Opts, id: Option<&str>) {
             let mut seat = 1;
             while repo.review_path(&id).exists() {
                 review_one(repo, opts, Some(&id), None, seat);
+                // No verdict on this seat (held, or the harness never answered): nothing
+                // more to do synchronously, so stop here rather than spin on a seat that
+                // isn't going to produce one on its own.
+                if !repo.review_path(&id).exists() || repo.seat_verdict(&id, seat).is_none() {
+                    break;
+                }
                 let n = repo.failures_of(&id);
                 let pending =
                     repo.stage_for(n).is_some_and(|st| quorum(&seat_verdicts(repo, &id, &st.seats), &st.approvals) == Quorum::Pending);
-                if !repo.review_path(&id).exists() || !pending {
+                if !pending {
                     break;
                 }
                 seat += 1;

@@ -131,6 +131,17 @@ impl Repo {
     pub fn seat_clear_running(&self, id: &str, k: usize) {
         let _ = std::fs::remove_file(self.seat_dir(id).join(format!("{k}.running")));
     }
+    /// Every `K.running` marker for bead ID gone: a restart cuts short whichever seats
+    /// were running, so none of them holds `pick_seat` back from picking them again.
+    pub fn seat_clear_all_running(&self, id: &str) {
+        if let Ok(rd) = std::fs::read_dir(self.seat_dir(id)) {
+            for e in rd.flatten() {
+                if e.file_name().to_string_lossy().ends_with(".running") {
+                    let _ = std::fs::remove_file(e.path());
+                }
+            }
+        }
+    }
     /// `review/ID.seats/K` write the verdict for seat K (1-based) for bead ID.
     pub fn seat_set_verdict(&self, id: &str, k: usize, text: &str) {
         let dir = self.seat_dir(id);
