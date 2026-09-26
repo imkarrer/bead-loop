@@ -57,12 +57,57 @@ use round::Opts;
 use std::path::PathBuf;
 use util::{die, log};
 
-fn usage() -> ! {
+/// The commands `main` knows; the usage above names each one.
+const COMMANDS: &[&str] = &[
+    "run",
+    "tick",
+    "work",
+    "lane",
+    "pause",
+    "resume",
+    "priority",
+    "wake",
+    "escalate",
+    "answer",
+    "publish",
+    "open",
+    "reconcile",
+    "recover",
+    "status",
+    "watch",
+    "stats",
+    "log",
+    "doctor",
+];
+
+fn usage_text() -> String {
     let src = include_str!("main.rs");
-    for line in src.lines().skip(1).take_while(|l| l.starts_with("//!")) {
-        println!("{}", line.trim_start_matches("//!").trim_start_matches(' '));
-    }
+    src.lines()
+        .take_while(|l| l.starts_with("//!"))
+        .map(|l| l.trim_start_matches("//!").trim_start_matches(' '))
+        .collect::<Vec<_>>()
+        .join("\n")
+        + "\n"
+}
+
+fn usage() -> ! {
+    print!("{}", usage_text());
     std::process::exit(0)
+}
+
+/// What is wrong with the arguments left after the known flags, if anything: a command
+/// `main` does not have, or a flag it does not know. publish reads its own flags and
+/// answer's TEXT is free text, so those two are not checked past the command. Checked
+/// before the lock: a typo never takes it, or says it skipped a tick.
+fn bad_args(args: &[String]) -> Option<String> {
+    let cmd = args.first().map(String::as_str).unwrap_or("tick");
+    if !COMMANDS.contains(&cmd) {
+        return Some(if cmd.starts_with('-') { format!("unknown flag {cmd}") } else { format!("unknown command {cmd}") });
+    }
+    if matches!(cmd, "publish" | "answer") {
+        return None;
+    }
+    args.iter().skip(1).find(|a| a.starts_with('-')).map(|a| format!("unknown flag {a}"))
 }
 
 fn main() {
@@ -88,7 +133,15 @@ fn main() {
             _ => args.push(a),
         }
     }
+    if let Some(e) = bad_args(&args) {
+        eprint!("bead-supervisor: {e}\n\n{}", usage_text());
+        std::process::exit(2);
+    }
     let cmd = args.first().cloned().unwrap_or_else(|| "tick".to_string());
+    if let Some(e) = bad_args(&args) {
+        eprint!("bead-supervisor: {e}\n\n{}", usage_text());
+        std::process::exit(2);
+    }
     let mut rest: Vec<String> = args.iter().skip(1).cloned().collect();
     let g_conf = config_dir().join("config.toml");
     let global = Layers::load(&g_conf, None);
@@ -258,5 +311,36 @@ fn main() {
             doctor_run(&loaded, json);
         }
         other => die(&format!("unknown command {other}")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn v(a: &[&str]) -> Vec<String> {
+        a.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn an_unknown_flag_or_command_is_a_usage_error() {
+        assert_eq!(bad_args(&v(&["--version"])).as_deref(), Some("unknown flag --version"));
+        assert_eq!(bad_args(&v(&["-V"])).as_deref(), Some("unknown flag -V"));
+        assert_eq!(bad_args(&v(&["stauts"])).as_deref(), Some("unknown command stauts"));
+        assert_eq!(bad_args(&v(&["tick", "--verbose"])).as_deref(), Some("unknown flag --verbose"));
+        assert_eq!(bad_args(&v(&["status", "--jsn"])).as_deref(), Some("unknown flag --jsn"));
+        assert_eq!(bad_args(&v(&[])), None, "bare: a tick");
+        assert_eq!(bad_args(&v(&["status", "/r"])), None);
+        assert_eq!(bad_args(&v(&["publish", "/r", "x-1", "--title", "-t"])), None, "publish reads its own flags");
+        assert_eq!(bad_args(&v(&["answer", "/r", "x-1", "-- yes"])), None, "answer's TEXT is free text");
+    }
+
+    #[test]
+    fn usage_starts_at_the_first_line_and_names_every_command() {
+        let u = usage_text();
+        assert!(u.starts_with("bead-supervisor: work labelled beads"), "{u}");
+        for c in COMMANDS {
+            assert!(u.contains(&format!("bead-supervisor {c}")), "usage does not name {c}");
+        }
     }
 }
