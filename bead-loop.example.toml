@@ -12,7 +12,8 @@ review_model = "acbox/reviewer"        # the model that judges the diff before t
 on_exhaust = "repeat"                  # repeat: cycle the stages until it lands | park: leave it for you (default)
 # conflict_worker = "claude/sonnet"    # who rebases a PR that conflicts with the base (default: the last stage's worker)
 # brief_model = "claude/sonnet"        # who writes the brief when a bead is parked for you — what each round tried, why it
-                                       # failed, the question to answer (default: the last stage's worker; "none" for no brief)
+                                       # failed, the question to answer (default: the last stage's worker; "none" for no brief);
+                                       # also the second opinion on a researcher's BLOCKED before a bead is parked for it
 # research_model = "acbox/reviewer"    # who writes the research brief before the first worker round (default: off)
 # research = "first"                   # first: one brief per bead · every: refined after each send-back
 # research_timeout = 900               # seconds a research round may run, capped by the stage's `timeout`; past it the

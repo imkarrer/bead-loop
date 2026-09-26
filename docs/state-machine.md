@@ -89,7 +89,8 @@ stateDiagram-v2
   waiting --> ready: last blocker closed
   ready --> research: research_model set, no brief
   research --> ready: brief written   (no failure)
-  research --> human: the researcher says BLOCKED
+  research --> ready: BLOCKED, overruled: the second opinion wrote the brief   (no failure)
+  research --> human: BLOCKED, upheld by the second opinion (or none to ask)
   ready --> dev: a lane picks (fewest failures first)
   dev --> review: DONE, commit, gate passed
   dev --> ready: BLOCKED · no commit · gate ×2 · timeout   (+1, branch removed)
@@ -156,8 +157,10 @@ Every row is a case in `test/run.sh`.
 
 | Outcome | Bead | Branch / PR |
 | --- | --- | --- |
-| Researcher writes a brief | `beads/ID/brief`, a note with its length; dev queue, **no failure** | a worktree the round made is removed again |
-| Researcher `BLOCKED:` | parked before any edit, the researcher's line as the question, **no failure** | removed |
+| Researcher writes a brief | `beads/ID/brief` (from its last `Files:` heading to the end, whole), a note with its length; dev queue, **no failure** | a worktree the round made is removed again |
+| Researcher `BLOCKED:` | noted, then a **second opinion**: `brief_model` researches the bead again, the first reply in its prompt | the round's worktree, until it answers |
+| … the second opinion writes a brief | its brief in `beads/ID/brief`, a note that it overruled the block; dev queue, **no failure** | a worktree the round made is removed again |
+| … the second opinion says `BLOCKED:` too (or there is no `brief_model`, or it does not answer) | parked before any edit, the last `BLOCKED:` line as the question, both replies in the park's brief, **no failure** | removed |
 | No brief yet, and the worker's lane has nothing else to take | the worker round runs without one (the GPU never waits on the CPU) | as any worker round |
 | Worker `BLOCKED:` | note with the worker's line, +1 failure; dev queue — parked if this was the last stage, with the brief's question | removed (after the brief) |
 | No commit, or the session timed out | note, +1 failure; dev queue | removed |

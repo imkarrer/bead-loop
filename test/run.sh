@@ -2013,19 +2013,57 @@ case_research_round_before_the_worker() {
   assert_match "$(bead .notes)" "research (stub/researcher) wrote the brief" "noted on the bead"
   assert_branch bead/t-1 "and the branch pushed"
   assert_nofile "$BEAD_LOOP_STATE/repo/beads/t-1/failures" "research counts no failure"
+  # A brief longer than twenty lines is kept whole, from its Files heading: the loop kept
+  # the reply's last twenty lines until 26 Sep, and every longer brief lost its Files.
+  setup true auto stub/reviewer 'research_model = "stub/researcher"'; echo long >"$TEST_CTRL/research"
+  sup work "$REPO"
+  assert_eq "$(sed -n 1p "$BEAD_LOOP_STATE/repo/beads/t-1/brief")" "Files:" "from the heading, the reading before it left out"
+  assert_eq "$(grep -c '^- work.txt: line' "$BEAD_LOOP_STATE/repo/beads/t-1/brief")" 30 "every Files line"
+  assert_match "$(cat "$BEAD_LOOP_STATE/repo/beads/t-1/brief")" "Pitfalls:" "to the end"
+  assert_match "$(bead .notes)" "wrote the brief (40 lines)" "counted whole"
 }
 case_research_blocked_parks() {
-  # The researcher's BLOCKED: parks the bead before a single edit, its line the question.
+  # The researcher's BLOCKED:, upheld by the second opinion (the brief model reading the bead
+  # again with the first reply in hand), parks the bead before a single edit. The brief is
+  # handed what both said: a research park has no rounds to read.
   setup true auto stub/reviewer 'research_model = "stub/researcher"'; echo blocked >"$TEST_CTRL/research"
   sup work "$REPO"
-  ! grep -q '^bead-worker' "$TEST_CTRL/calls" && ok || bad "no worker round"
+  assert_eq "$(calls)" "bead-researcher bead-researcher bead-briefer" "the researcher, the second opinion, the brief; no worker round"
+  assert_match "$(sed -n 2p "$TEST_CTRL/calls")" " stub/worker " "the second opinion on the brief model"
+  assert_match "$(cat "$TEST_CTRL/prompt.2")" "<first-research>" "handed the first reply"
+  assert_match "$(cat "$TEST_CTRL/prompt.3")" "<research>" "the brief handed the replies"
+  assert_match "$(cat "$TEST_CTRL/prompt.3")" "second opinion (stub/worker):" "both of them"
   assert_eq "$(bead .status)" in_progress "parked"
   assert_match "$(bead .notes)" "BLOCKED: work.txt" "the researcher's line on the bead"
+  assert_match "$(bead .notes)" "research second opinion (stub/worker) BLOCKED: work.txt" "and the second opinion's"
   assert_eq "$(jq -r .reason "$BEAD_LOOP_STATE/repo/parked/t-1")" blocked "parked as blocked"
   assert_nofile "$BEAD_LOOP_STATE/repo/beads/t-1/failures" "no failure charged"
   assert_nofile "$BEAD_LOOP_STATE/repo/beads/t-1/brief" "no brief kept"
   assert_nofile "$BEAD_LOOP_STATE/repo/wt/t-1" "the worktree gone"
   assert_nobranch bead/t-1 "nothing pushed"
+  # No brief model (brief_model = "none"): no second opinion, parked on the first BLOCKED.
+  setup true auto stub/reviewer "$(printf 'research_model = "stub/researcher"\nbrief_model = "none"')"; echo blocked >"$TEST_CTRL/research"
+  sup work "$REPO"
+  assert_eq "$(calls)" "bead-researcher" "the researcher alone"
+  assert_eq "$(jq -r .reason "$BEAD_LOOP_STATE/repo/parked/t-1")" blocked "parked on its line"
+  assert_match "$(jq -r .question "$BEAD_LOOP_STATE/repo/parked/t-1")" "The researcher stopped before a single edit: BLOCKED: work.txt" "the loop's own question"
+}
+case_research_second_opinion_overrules_a_block() {
+  # A researcher's BLOCKED the second opinion does not share: its brief goes to the worker,
+  # nothing is parked, no failure charged. (25 Sep: both research parks were false, a misread
+  # bead and a reply about another bead; the owner answered each by hand.)
+  setup true auto stub/reviewer 'research_model = "stub/researcher"'; printf 'blocked\nbrief\n' >"$TEST_CTRL/research"
+  sup work "$REPO"
+  assert_eq "$(calls)" "bead-researcher bead-researcher bead-worker bead-reviewer" "blocked, overruled, then the worker"
+  assert_match "$(sed -n 2p "$TEST_CTRL/calls")" " stub/worker " "the second opinion on the brief model"
+  assert_match "$(cat "$TEST_CTRL/prompt.2")" "BLOCKED: work.txt is not the file the bead means" "handed the first reply whole"
+  assert_match "$(cat "$BEAD_LOOP_STATE/repo/beads/t-1/brief")" "^Files:" "its brief on disk"
+  assert_match "$(cat "$TEST_CTRL/prompt.3")" "work.txt: append one line" "the worker carries it"
+  assert_match "$(bead .notes)" "research (stub/researcher) BLOCKED: work.txt" "the block noted"
+  assert_match "$(bead .notes)" "second opinion (stub/worker): the bead can be done as written" "and why the bead went on"
+  assert_nofile "$BEAD_LOOP_STATE/repo/parked/t-1" "not parked"
+  assert_nofile "$BEAD_LOOP_STATE/repo/beads/t-1/failures" "no failure charged"
+  assert_branch bead/t-1 "the branch pushed"
 }
 case_research_every_refreshes() {
   # research = "every": a send-back sets the brief aside, and the next research round
