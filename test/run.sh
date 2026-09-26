@@ -751,6 +751,30 @@ case_closes_bead_merged_outside_the_loop() {
   assert_eq "$(jq -r '.[]|select(.id=="t-2")|.status' "$BD_STATE/issues.json")" open "t-2's PR is only open: left alone"
   ! grep -q 'pr merge 51' "$TEST_CTRL/gh.log" && ok || bad "an open PR is not merged"
 }
+case_parked_bead_whose_pr_merged() {
+  # bl-tka.2, bl-tka.6, bl-3x2.3, bl-iej.2.3 (25 Sep): CI red on the last stage parked the
+  # bead with its PR still open and `.fixing` set; you merged the PR; nothing closed the
+  # bead, since `bd ready` never lists an in_progress bead and adopt skips `.fixing`.
+  # Reconcile asks about a parked bead's merged PR too, and forgets what the loop kept.
+  setup true auto stub/reviewer "$(stages stub/worker:stub/reviewer:1)"
+  echo "[]" >"$TEST_CTRL/extra-prs.json"  # without it the stub's pr list exits 2 and gh_out drops PR 7
+  sup work "$REPO"; assert_file "$BEAD_LOOP_STATE/repo/inflight/t-1" "PR up"
+  set_checks '[{"context":"ci","state":"FAILURE"}]'; sup reconcile "$REPO"
+  assert_eq "$(bead .status)" in_progress "red on the only stage: parked"
+  assert_file "$BEAD_LOOP_STATE/repo/parked/t-1" "the parked record"
+  assert_file "$BEAD_LOOP_STATE/repo/inflight/.t-1.fixing" "the fixing mark"
+  sup reconcile "$REPO"
+  assert_eq "$(bead .status)" in_progress "its PR only open: still parked"
+  assert_nofile "$BEAD_LOOP_STATE/repo/inflight/t-1" "and not adopted"
+  jq '.state="MERGED"' "$TEST_CTRL/pr.json" >"$TEST_CTRL/pr.tmp" && mv "$TEST_CTRL/pr.tmp" "$TEST_CTRL/pr.json"  # you merged it
+  sup reconcile "$REPO"
+  assert_eq "$(bead .status)" closed "its PR merged: closed"
+  assert_match "$(bead .close_reason)" "https://github.com/example/repo/pull/7 merged" "the url in the reason"
+  assert_nofile "$BEAD_LOOP_STATE/repo/parked/t-1" "the parked record gone"
+  assert_nofile "$BEAD_LOOP_STATE/repo/inflight/.t-1.fixing" "the fixing mark gone"
+  git -C "$REPO" show-ref -q refs/heads/bead/t-1 && bad "the local branch kept" || ok
+  git -C "$REPO" show-ref -q refs/remotes/origin/bead/t-1 && bad "the remote-tracking ref kept" || ok
+}
 case_status_lists_worktree_sessions() {
   setup true auto stub/reviewer 'attach = "http://oc.test:4096"'
   wt=$BEAD_LOOP_STATE/repo/wt/t-1; mkdir -p "$wt" "$BEAD_LOOP_STATE/repo/beads/t-1"; echo 2 >"$BEAD_LOOP_STATE/repo/beads/t-1/failures"
