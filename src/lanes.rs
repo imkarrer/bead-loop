@@ -152,6 +152,7 @@ pub fn try_lock(path: &Path) -> Option<std::fs::File> {
 /// Which lanes in this process are mid-pass — between starting to look at their queues
 /// and either claiming a bead (the lane file then says so) or finding nothing. The bash
 /// had only the lane file, and a lane picking slowly looked idle to the other one.
+/// Only a pass that may claim is listed: a lane's first, and the one after a round.
 static PASSING: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
 fn set_passing(name: &str, on: bool) {
@@ -308,6 +309,11 @@ pub fn lane(ctx: &Ctx, spec: &LaneSpec, pass_counter: Arc<AtomicUsize>) {
     };
     let mut idle = 0;
     let mut said_paused = false;
+    // Whether this lane's next pass shows as mid-pass to the others (PASSING): its first
+    // pass, and the pass after a round, the passes that may yet claim something. A pass
+    // after one that found nothing does not: two lanes that each pick for longer than
+    // LANE_WAIT kept finding each other mid-pass, and neither left the tick.
+    let mut may_claim = true;
     loop {
         // Paused by hand (pause NAME, or the UI): start nothing new.
         if paused(&ctx.state_dir, &spec.lane) {
@@ -324,11 +330,12 @@ pub fn lane(ctx: &Ctx, spec: &LaneSpec, pass_counter: Arc<AtomicUsize>) {
         }
         said_paused = false;
         let pass = pass_counter.fetch_add(1, Ordering::SeqCst);
-        set_passing(name, true);
+        set_passing(name, may_claim);
         let moved = walk(&ctx.repos, &ctx.state_dir, &spec.lane, pass, ctx.once, |r| {
             lane_pass(&Repo::load(r, ctx.opts.model_flag.as_deref()), &ctx.opts, spec)
         });
         set_passing(name, false);
+        may_claim = moved;
         if ctx.once {
             return;
         }
