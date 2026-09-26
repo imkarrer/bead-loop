@@ -463,7 +463,7 @@ fn close_merged_outside_loop(repo: &Repo) {
     }
 }
 
-/// `bead/<prefix>-<id>[.n][-slug]` → the bead id.
+/// `bead/<prefix>-<id>[.n]*[-slug]` → the bead id, at any depth (bl-iej.2.2).
 pub fn bead_id_of_branch(head: &str) -> Option<String> {
     let rest = head.strip_prefix("bead/")?;
     let b = rest.as_bytes();
@@ -482,14 +482,15 @@ pub fn bead_id_of_branch(head: &str) -> Option<String> {
         return None;
     }
     let mut end = j;
-    if j < b.len() && b[j] == b'.' {
-        let mut k = j + 1;
+    while end < b.len() && b[end] == b'.' {
+        let mut k = end + 1;
         while k < b.len() && b[k].is_ascii_digit() {
             k += 1;
         }
-        if k > j + 1 {
-            end = k;
+        if k == end + 1 {
+            break;
         }
+        end = k;
     }
     if end < b.len() && b[end] != b'-' {
         return None;
@@ -717,6 +718,15 @@ mod tests {
         assert_eq!(bead_id_of_branch("bead/x-1").as_deref(), Some("x-1"));
         assert!(bead_id_of_branch("feature/not-a-bead").is_none());
         assert!(bead_id_of_branch("bead/Upper-1").is_none());
+    }
+    #[test]
+    fn branch_ids_any_depth() {
+        assert_eq!(bead_id_of_branch("bead/bl-iej.2.2").as_deref(), Some("bl-iej.2.2"));
+        assert_eq!(bead_id_of_branch("bead/bl-iej.15.1").as_deref(), Some("bl-iej.15.1"));
+        assert_eq!(bead_id_of_branch("bead/bl-iej.2.2-slug").as_deref(), Some("bl-iej.2.2"));
+        assert_eq!(bead_id_of_branch("bead/bl-5v2").as_deref(), Some("bl-5v2"));
+        assert_eq!(bead_id_of_branch("bead/inq-85h.15").as_deref(), Some("inq-85h.15"));
+        assert!(bead_id_of_branch("bead/bl-iej.2.x").is_none());
     }
     #[test]
     fn verdicts() {
