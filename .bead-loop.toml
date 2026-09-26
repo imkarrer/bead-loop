@@ -1,5 +1,5 @@
 # bead-loop working on itself: the supervisor's own backlog, worked by the loop it
-# implements. Stages (GPU x3 -> CPU x1 -> Sonnet once, repeat) and lanes come from
+# implements. Stages (GPU x2 -> Sonnet once, then park) and lanes come from
 # ~/.config/bead-loop/config.toml. The gate is the same proof CI runs: the crate is
 # formatted, builds clippy-clean and its tests pass, the scripts pass shellcheck, the
 # skills lint and the state-machine suite runs against the fresh binary, so a worktree
