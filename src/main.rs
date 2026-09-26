@@ -128,11 +128,11 @@ fn main() {
             _ => args.push(a),
         }
     }
+    let cmd = args.first().cloned().unwrap_or_else(|| "tick".to_string());
     if let Some(e) = bad_args(&args) {
         eprint!("bead-supervisor: {e}\n\n{}", usage_text());
         std::process::exit(2);
     }
-    let cmd = args.first().cloned().unwrap_or_else(|| "tick".to_string());
     let mut rest: Vec<String> = args.iter().skip(1).cloned().collect();
     let g_conf = config_dir().join("config.toml");
     let global = Layers::load(&g_conf, None);
