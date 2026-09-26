@@ -1292,6 +1292,18 @@ case_stale_assignee_does_not_block() {
   assert_eq "$(bead .status)" in_progress "claimed"
   assert_branch bead/t-1 "and pushed"
 }
+case_review_that_explains_itself_first_approves() {
+  # A reviewer whose reply opens with its reasoning and ends APPROVE: approves. The seat file
+  # holds the whole reply, and reading only its first line sent bl-vol back "rejected:" with
+  # an empty work order on 26 Sep, a second after the log said its seat approved.
+  setup; echo explained >"$TEST_CTRL/review"
+  sup work "$REPO"
+  assert_eq "$(calls)" "bead-worker bead-reviewer" "one review"
+  assert_match "$(cat "$T/sup.log")" "t-1: review approved" "approved"
+  ! grep -q 'rejected' "$T/sup.log" && ok || bad "no rejection logged"
+  assert_nofile "$BEAD_LOOP_STATE/repo/beads/t-1/failures" "no failure charged"
+  assert_branch bead/t-1 "and pushed"
+}
 # The dev and review lanes alone: the lanes case_review_lane_waits_for_dev_to_claim was
 # written for (setup wrote no claude lane before #102). With the claude lane too, two
 # lanes pick slowly (slow-ready: 0.3 s a pass, longer than LANE_WAIT), each keeps finding
