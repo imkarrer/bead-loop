@@ -287,7 +287,7 @@ pub fn needs_research(repo: &Repo, id: &str) -> bool {
     !repo.research_model.is_empty()
         && !repo.research_path(id).exists()
         && !repo.mark(id, "conflict").exists()
-        && repo.rejoin_of(id).map(|(_, kind)| kind == "research").unwrap_or(true)
+        && repo.rejoin_of(id).map(|(_, kind, _)| kind == "research").unwrap_or(true)
 }
 
 fn pick(repo: &Repo, which: &str, lane: Option<&LaneSpec>) -> Option<(String, bool)> {
@@ -912,8 +912,8 @@ fn research_one(repo: &Repo, opts: &Opts, id: &str, lane: Option<&LaneSpec>, las
     let logf = repo.rs.join("logs").join(format!("{id}.{}", stamp()));
     let rejoin = repo
         .rejoin_of(id)
-        .filter(|(_, kind)| kind == "research")
-        .map(|(sid, _)| sid)
+        .filter(|(_, kind, _)| kind == "research")
+        .map(|(sid, _, _)| sid)
         .filter(|_| wt.is_dir())
         .filter(|sid| opts.dry_run || crate::harness::rejoin_fits(repo, id, sid, "research", n + 1, &model));
     repo.rejoin_clear(id);
@@ -1195,8 +1195,8 @@ pub fn dev_one(repo: &Repo, opts: &Opts, id: Option<&str>, last_id: &mut Option<
     // worktree it works in is left alone. Without the worktree there is nothing to rejoin.
     let rejoin = repo
         .rejoin_of(&id)
-        .filter(|(_, kind)| kind == "worker")
-        .map(|(sid, _)| sid)
+        .filter(|(_, kind, _)| kind == "worker")
+        .map(|(sid, _, _)| sid)
         .filter(|_| wt.is_dir())
         .filter(|sid| opts.dry_run || crate::harness::rejoin_fits(repo, &id, sid, "worker", n + 1, &model));
     repo.rejoin_clear(&id);
@@ -1518,13 +1518,17 @@ pub fn review_one(repo: &Repo, opts: &Opts, id: Option<&str>, lane: Option<&Lane
         review_model = this_seat.model.clone();
         let agent = if this_seat.agent.is_empty() { "bead-reviewer".to_string() } else { this_seat.agent.clone() };
         // A reviewer session of this bead still running on the server since the last
-        // process (recover found it): waited on, not started again.
-        let rejoin = repo
-            .rejoin_of(&id)
-            .filter(|(_, kind)| kind == "reviewer")
-            .map(|(sid, _)| sid)
+        // process (recover found it): waited on, not started again. Its seat names the
+        // round it belongs to; a rejoin for another seat is left alone for that seat's
+        // own round to find. Seat 0 (a lone reviewer, no seats to tell apart) is anyone's.
+        let mine = repo.rejoin_of(&id).filter(|(_, kind, k)| kind == "reviewer" && (*k == 0 || *k == seat));
+        let rejoin = mine
+            .as_ref()
+            .map(|(sid, _, _)| sid.clone())
             .filter(|sid| crate::harness::rejoin_fits(repo, &id, sid, "reviewer", n + 1, &review_model));
-        repo.rejoin_clear(&id);
+        if mine.is_some() {
+            repo.rejoin_clear(&id);
+        }
         let seat_suffix = if seats.len() > 1 { format!(" seat {seat}") } else { String::new() };
         log(&format!(
             "{}: review: {id}{seat_suffix} by {review_model} ({n} failures{})",
@@ -1623,8 +1627,10 @@ pub fn review_one(repo: &Repo, opts: &Opts, id: Option<&str>, lane: Option<&Lane
                 .enumerate()
                 .filter_map(|(i, s)| {
                     let v = repo.seat_verdict(&id, i + 1)?;
-                    let approve = last_line_starting(&v, "APPROVE:")?;
-                    Some(format!("Reviewer ({}): {}", s.model, cut_bytes(&approve, 500)))
+                    // Under "any"/a count, the deciding APPROVE need not be every seat's:
+                    // a seat that already voted REJECT still gets its line, for the record.
+                    let line = last_line_starting(&v, "APPROVE:").or_else(|| last_line_starting(&v, "REJECT:"))?;
+                    Some(format!("Reviewer ({}): {}", s.model, cut_bytes(&line, 500)))
                 })
                 .collect::<Vec<_>>()
                 .join("\n");
