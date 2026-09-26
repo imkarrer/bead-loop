@@ -73,7 +73,7 @@ flowchart LR
 | Role | What | Where it runs here |
 | --- | --- | --- |
 | Supervisor | `bead-supervisor`, one Rust binary (`src/`), resident | `bead-supervisor.service` on this box, kept up by `bead-supervisor.timer` |
-| Implementor | opencode agent `bead-worker` | `devbox/coder` — Qwen3-Coder-30B on the RTX 4080; `acbox/coder` (Qwen3-Coder-Next 80B on ac-box's CPU) as the second stage; `claude/sonnet` as the last |
+| Implementor | opencode agent `bead-worker` | `devbox/coder` — Qwen3-Coder-30B on the RTX 4080, two rounds; `claude/sonnet` as the last |
 | Reviewer | opencode agent `bead-reviewer`, read-only | `acbox/reviewer` — gpt-oss-120b on ac-box's CPU: a different family from every worker, so it catches what the Qwen models share |
 | Briefer | agent `bead-briefer`, read-only; one call when a bead is parked, and the second opinion (agent `bead-researcher`) on a researcher's `BLOCKED:` | `brief_model`: the last stage's worker (`claude/sonnet` here) |
 
