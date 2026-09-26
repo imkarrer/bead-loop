@@ -47,7 +47,7 @@ worker_timeout = 3600            # seconds per model session
 on_exhaust = "park"              # after the last stage: park (for you) | repeat (around again)
 # Escalation, in order; each send-back to dev is a failure, a stage takes the next N.
 # [[stages]]
-# worker = "devbox/coder"
+# worker = "local/coder"
 # failures = 3
 # The lanes, one per model server; unset: dev + review by role (+ claude when a stage names it).
 # [[lanes]]
@@ -59,6 +59,7 @@ on_exhaust = "park"              # after the last stage: park (for you) | repeat
 # [[lanes]]
 # name = "claude"
 # models = ["claude/*"]
+# Provider catalogue (commented shapes):
 # [providers.local]
 # probe = "http://127.0.0.1:8080/health"   # GET answers 2xx, else its rounds wait
 # [providers.paid]
