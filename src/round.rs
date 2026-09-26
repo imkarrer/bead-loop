@@ -8,7 +8,7 @@
 //! The log lines and the notes are the bash's, word for word (a note's body now indented
 //! under its first line, shell.rs `note_entry`): the page and the tests read them.
 use crate::config::{Approvals, LaneSpec, Repo};
-use crate::harness::{abort_sessions, run_agent, runnable, AgentRun};
+use crate::harness::{abort_sessions, brief_files, run_agent, runnable, AgentRun};
 use crate::park::{park, record_round, Reason};
 use crate::shell::{
     bd_claim, bd_comment, bd_note, bd_show, bd_status, branch_exists, gh, git, git_ok, git_out, git_try, local_branch_exists,
@@ -609,7 +609,15 @@ fn apply_stage_label(repo: &Repo, id: &str, labels: &[&str]) {
 /// The harness label a bead may carry, applied to the stage's worker.
 fn apply_harness_label(repo: &Repo, id: &str, json: &Value, model: &mut String) {
     let labels = bead_labels(json);
-    let (m, why) = harness_for(&labels, model);
+
+    let brief = repo.research_of(id).unwrap_or_default();
+    let (have, missing) = brief_files(&brief, &repo.repo);
+    let switch = repo.research_aider && !repo.gate.is_empty() && !have.is_empty() && missing.is_empty();
+    if let Some(path) = missing.first() {
+        log(&format!("{}: {id}: research brief names {path}, which does not exist: the worker stays in opencode", repo.slug));
+    }
+
+    let (m, why) = harness_for(&labels, model, switch.then_some(have.len()));
     *model = m;
     if let Some(why) = why {
         log(&format!("{}: {id}: {why}", repo.slug));
@@ -619,7 +627,7 @@ fn apply_harness_label(repo: &Repo, id: &str, json: &Value, model: &mut String) 
 /// `harness:aider` puts an opencode model under aider, `harness:opencode` takes an
 /// `aider:` model out of it; `claude/*` is not touched. The worker to run, and the
 /// reason to log when the label changed it.
-pub fn harness_for(labels: &[&str], model: &str) -> (String, Option<String>) {
+pub fn harness_for(labels: &[&str], model: &str, brief_files: Option<usize>) -> (String, Option<String>) {
     if labels.contains(&"harness:aider") {
         if !model.starts_with("aider:") && !model.starts_with("claude/") {
             let m = format!("aider:{model}");
@@ -628,6 +636,12 @@ pub fn harness_for(labels: &[&str], model: &str) -> (String, Option<String>) {
     } else if labels.contains(&"harness:opencode") {
         if let Some(m) = model.strip_prefix("aider:") {
             return (m.to_string(), Some(format!("label harness:opencode: worker {m} runs in opencode, not aider")));
+        }
+    }
+    if let Some(n) = brief_files.filter(|_| !labels.contains(&"harness:opencode")) {
+        if !model.starts_with("aider:") && !model.starts_with("claude/") {
+            let m = format!("aider:{model}");
+            return (m.clone(), Some(format!("research brief names {n} files that exist and the gate is set: worker {m} runs in aider")));
         }
     }
     (model.to_string(), None)
@@ -1984,17 +1998,36 @@ mod tests {
     #[test]
     fn harness_label_picks_the_worker_harness() {
         assert_eq!(
-            harness_for(&["harness:opencode"], "aider:stub/worker"),
+            harness_for(&["harness:opencode"], "aider:stub/worker", None),
             ("stub/worker".into(), Some("label harness:opencode: worker stub/worker runs in opencode, not aider".into()))
         );
         assert_eq!(
-            harness_for(&["harness:aider"], "stub/worker"),
+            harness_for(&["harness:aider"], "stub/worker", None),
             ("aider:stub/worker".into(), Some("label harness:aider: worker aider:stub/worker runs in aider, not opencode".into()))
         );
-        assert_eq!(harness_for(&["harness:aider"], "claude/opus"), ("claude/opus".into(), None), "claude/* stays in Claude Code");
-        assert_eq!(harness_for(&["harness:aider"], "aider:x/y"), ("aider:x/y".into(), None), "already under aider: nothing to say");
-        assert_eq!(harness_for(&["harness:opencode"], "stub/worker"), ("stub/worker".into(), None));
-        assert_eq!(harness_for(&["delegate:local"], "aider:x/y"), ("aider:x/y".into(), None), "no harness label: the stage's choice");
+        assert_eq!(harness_for(&["harness:aider"], "claude/opus", None), ("claude/opus".into(), None), "claude/* stays in Claude Code");
+        assert_eq!(harness_for(&["harness:aider"], "aider:x/y", None), ("aider:x/y".into(), None), "already under aider: nothing to say");
+        assert_eq!(harness_for(&["harness:opencode"], "stub/worker", None), ("stub/worker".into(), None));
+        assert_eq!(harness_for(&["delegate:local"], "aider:x/y", None), ("aider:x/y".into(), None), "no harness label: the stage's choice");
+    }
+
+    #[test]
+    fn a_complete_brief_picks_aider() {
+        assert_eq!(
+            harness_for(&["delegate:local"], "stub/worker", Some(2)),
+            (
+                "aider:stub/worker".into(),
+                Some("research brief names 2 files that exist and the gate is set: worker aider:stub/worker runs in aider".into())
+            ),
+            "a complete brief switches an opencode worker to aider"
+        );
+        assert_eq!(
+            harness_for(&["harness:opencode"], "stub/worker", Some(2)),
+            ("stub/worker".into(), None),
+            "harness:opencode opts out of the auto-switch"
+        );
+        assert_eq!(harness_for(&["delegate:local"], "claude/opus", Some(2)), ("claude/opus".into(), None), "claude/* is never switched");
+        assert_eq!(harness_for(&["delegate:local"], "stub/worker", None), ("stub/worker".into(), None), "no brief: nothing changes");
     }
     #[test]
     fn dev_prompt_says_fresh_or_resumed_and_carries_the_history() {

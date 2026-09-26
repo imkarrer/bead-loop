@@ -409,6 +409,8 @@ pub struct Repo {
     pub research_model: String,
     /// `first` (once, before round 1) or `every` (again after each send-back)
     pub research: String,
+    /// a brief whose Files all exist puts an opencode worker under aider
+    pub research_aider: bool,
     /// seconds a research round may run (capped by the stage's timeout); default 900
     pub research_timeout: u64,
     /// the `[providers.NAME]` tables of the global file
@@ -497,6 +499,7 @@ impl Repo {
             precheck_model: cfg.str("precheck_model", ""),
             research_model: cfg.str("research_model", ""),
             research: cfg.str("research", "first"),
+            research_aider: cfg.bool("research_aider", true),
             research_timeout: cfg.u64("research_timeout", 900),
             providers: cfg.providers(),
             adopt: cfg.bool("adopt", true),
@@ -773,6 +776,7 @@ pub fn test_repo(root: &Path, stages: &[&str]) -> Repo {
         precheck_model: String::new(),
         research_model: String::new(),
         research: "first".into(),
+        research_aider: true,
         research_timeout: 900,
         providers: Vec::new(),
         adopt: true,
