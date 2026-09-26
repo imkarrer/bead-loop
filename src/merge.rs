@@ -700,8 +700,18 @@ fn reconcile_open(repo: &Repo, id: &str, f: &std::path::Path, url: &str, view: &
                     record_red(repo, id, view);
                     write_file(&repo.mark(id, "rerun"), &format!("{head}\n"));
                     touch(f); // bl-9wc's CI_TIMEOUT wait counts from the re-run
-                    let what = required.iter().flatten().map(|x| format!("{}: {} {}", x.name, x.description, x.link)).collect::<Vec<_>>().join(", ");
-                    rerun_ci(repo, id, url, &format!("CI on {url} was killed, not failed ({what}); re-running it once before charging a failure"));
+                    let what = required
+                        .iter()
+                        .flatten()
+                        .map(|x| format!("{}: {} {}", x.name, x.description, x.link))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    rerun_ci(
+                        repo,
+                        id,
+                        url,
+                        &format!("CI on {url} was killed, not failed ({what}); re-running it once before charging a failure"),
+                    );
                     return;
                 }
                 record_red(repo, id, view);
