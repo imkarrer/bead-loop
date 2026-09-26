@@ -7,7 +7,7 @@
 //!
 //! The log lines and the notes are the bash's, word for word (a note's body now indented
 //! under its first line, shell.rs `note_entry`): the page and the tests read them.
-use crate::config::{LaneSpec, Repo};
+use crate::config::{Approvals, LaneSpec, Repo};
 use crate::harness::{abort_sessions, run_agent, runnable, AgentRun};
 use crate::park::{park, record_round, Reason};
 use crate::shell::{
@@ -15,7 +15,7 @@ use crate::shell::{
     worktree_remove,
 };
 use crate::signals;
-use crate::state::{dev_queue, review_queue, stage_start, StageHit};
+use crate::state::{dev_queue, quorum, review_queue, stage_start, Quorum, StageHit};
 use crate::util::{
     cut_bytes, date_iminutes, die, ensure_line, first_line, link_skills, log, read_to_string, stamp, stderr_str, stdout_str, tail_bytes,
     tail_lines, write_file,
@@ -215,7 +215,7 @@ fn park_stale_hold(repo: &Repo, id: &str) {
     bd_status(repo, id, "in_progress");
     park(repo, id, Reason::HoldExpired(why), None);
     repo.release(id);
-    let _ = std::fs::remove_file(repo.review_path(id));
+    repo.review_clear(id);
 }
 
 /// The beads a round in this process is on, as `STATE/ID`. A bead stays in its queue
@@ -251,14 +251,6 @@ pub fn reserve(repo: &Repo, id: &str) -> Option<Reservation> {
     }
     g.push(key.clone());
     Some(Reservation(key))
-}
-
-/// `pick_runnable`, and the bead reserved to the caller. No lock across the look at the
-/// queue: it reads bd, and lanes queued on a lock that long look busy to each other for
-/// ever (a tick then never ends). Two slots can pick the same bead; the one whose
-/// reservation fails looks again, and the pick passes over a reserved bead.
-fn pick_and_reserve(repo: &Repo, which: &str, lane: Option<&LaneSpec>) -> Option<(String, Reservation)> {
-    pick_dev_and_reserve_in(repo, which, lane).map(|(id, _, r)| (id, r))
 }
 
 /// The dev pick, reserved the same way: (id, research round, reservation). A bead with
@@ -299,6 +291,12 @@ pub fn needs_research(repo: &Repo, id: &str) -> bool {
 }
 
 fn pick(repo: &Repo, which: &str, lane: Option<&LaneSpec>) -> Option<(String, bool)> {
+    pick_with_seat(repo, which, lane).map(|(id, research, _)| (id, research))
+}
+
+/// `pick`, with the seat it found for a review round (1-based; 0 for dev, and for a
+/// stage with no seats — straight to PR).
+fn pick_with_seat(repo: &Repo, which: &str, lane: Option<&LaneSpec>) -> Option<(String, bool, usize)> {
     let queue = if which == "dev" { dev_queue(repo) } else { review_queue(repo) };
     let mut skipped_claude = 0;
     let mut waiting_for = String::new();
@@ -318,7 +316,7 @@ fn pick(repo: &Repo, which: &str, lane: Option<&LaneSpec>) -> Option<(String, bo
             if let Some(st) = repo.stage_for(n) {
                 let rm = &repo.research_model;
                 if lane.map(|l| l.takes(rm)).unwrap_or(true) && runnable(repo, rm) {
-                    pick = Some((id, true));
+                    pick = Some((id, true, 0));
                     break;
                 }
                 if unresearched.is_none() && lane.map(|l| l.takes(&st.model)).unwrap_or(true) && runnable(repo, &st.model) {
@@ -331,13 +329,15 @@ fn pick(repo: &Repo, which: &str, lane: Option<&LaneSpec>) -> Option<(String, bo
         // sent back with a conflict, the rebase worker (conflict_worker, else the last
         // stage's). A bead whose stages are exhausted is the first lane's to park; a
         // round with no reviewer (straight to PR) names no model and is the first
-        // reviewing lane's.
+        // reviewing lane's. For a review round, the candidates are the stage's seats
+        // with no verdict yet and not running, one round per seat.
+        let mut seat = 0usize;
         let model = match repo.stage_for(n) {
             None => {
                 if lane.map(|l| !l.parks).unwrap_or(false) {
                     continue;
                 }
-                pick = Some((id, false));
+                pick = Some((id, false, 0));
                 break;
             }
             Some(st) => {
@@ -347,10 +347,24 @@ fn pick(repo: &Repo, which: &str, lane: Option<&LaneSpec>) -> Option<(String, bo
                     } else {
                         st.model
                     }
-                } else if st.review.is_empty() {
+                } else if st.seats.is_empty() {
                     "none".into()
                 } else {
-                    st.review
+                    let mut found = None;
+                    for (i, s) in st.seats.iter().enumerate() {
+                        let k = i + 1;
+                        if repo.seat_verdict(&id, k).is_none() && !repo.seat_running(&id, k) {
+                            found = Some((k, s.model.clone()));
+                            break;
+                        }
+                    }
+                    match found {
+                        Some((k, m)) => {
+                            seat = k;
+                            m
+                        }
+                        None => continue,
+                    }
                 }
             }
         };
@@ -361,7 +375,7 @@ fn pick(repo: &Repo, which: &str, lane: Option<&LaneSpec>) -> Option<(String, bo
             }
         }
         if runnable(repo, &model) {
-            pick = Some((id, false));
+            pick = Some((id, false, seat));
             break;
         }
         waiting_for = crate::harness::why_not(repo, &model);
@@ -370,7 +384,20 @@ fn pick(repo: &Repo, which: &str, lane: Option<&LaneSpec>) -> Option<(String, bo
     if skipped_claude > 0 {
         log(&format!("{}: {which}: {skipped_claude} bead(s) wait for {waiting_for}", repo.slug));
     }
-    pick.or(unresearched.map(|id| (id, false)))
+    pick.or(unresearched.map(|id| (id, false, 0)))
+}
+
+/// The review pick, reserved: (id, seat, reservation). Two slots can pick the same
+/// bead's next seat; the one whose reservation fails looks again, same as
+/// `pick_dev_and_reserve_in`.
+pub fn pick_seat(repo: &Repo, lane: Option<&LaneSpec>) -> Option<(String, usize, Reservation)> {
+    for _ in 0..3 {
+        let (id, _research, seat) = pick_with_seat(repo, "review", lane)?;
+        if let Some(r) = reserve(repo, &id) {
+            return Some((id, seat, r));
+        }
+    }
+    None
 }
 
 /// A worker, gate or reviewer that came back while the loop is stopping came back
@@ -1438,15 +1465,21 @@ pub fn create_pr(repo: &Repo, head: &str, title: &str, body: &str) -> Result<Str
 }
 
 /// `review_one [ID]`
-pub fn review_one(repo: &Repo, opts: &Opts, id: Option<&str>, lane: Option<&LaneSpec>) -> Pass {
-    let (id, _mine) = match id {
+/// The verdict of every seat, `quorum`'s shape: Some(true) approved, Some(false)
+/// rejected, None not in yet.
+fn seat_verdicts(repo: &Repo, id: &str, seats: &[crate::config::Seat]) -> Vec<Option<bool>> {
+    (1..=seats.len()).map(|k| repo.seat_verdict(id, k).map(|v| v.starts_with("APPROVE:"))).collect()
+}
+
+pub fn review_one(repo: &Repo, opts: &Opts, id: Option<&str>, lane: Option<&LaneSpec>, seat: usize) -> Pass {
+    let (id, seat, _mine) = match id {
         Some(i) => match reserve(repo, i) {
-            Some(r) => (i.to_string(), r),
+            Some(r) => (i.to_string(), seat, r),
             // another slot took its review first (lane_pass hands the worker slot the
             // review too, and the queue shows it to every slot meanwhile)
             None => return Pass::Nothing,
         },
-        None => match pick_and_reserve(repo, "review", lane) {
+        None => match pick_seat(repo, lane) {
             Some(x) => x,
             None => return Pass::Nothing,
         },
@@ -1455,9 +1488,9 @@ pub fn review_one(repo: &Repo, opts: &Opts, id: Option<&str>, lane: Option<&Lane
     // checkout and PR repo act on this bead from here on, whichever the default is.
     let repo = &repo.for_id(&id);
     let n = repo.failures_of(&id);
-    let (mut review_model, model, timeout) = match repo.stage_for(n) {
-        Some(st) => (st.review, st.model, st.timeout),
-        None => (repo.review_model.clone(), repo.model.clone(), repo.worker_timeout),
+    let (seats, approvals, model, timeout) = match repo.stage_for(n) {
+        Some(st) => (st.seats, st.approvals, st.model, st.timeout),
+        None => (Vec::new(), Approvals::All, repo.model.clone(), repo.worker_timeout),
     };
     let model = opts.model_flag.clone().unwrap_or(model);
     let branch = format!("bead/{id}");
@@ -1480,8 +1513,10 @@ pub fn review_one(repo: &Repo, opts: &Opts, id: Option<&str>, lane: Option<&Lane
     let lane_name = lane.map(|l| l.name.as_str()).unwrap_or("review");
     repo.lane_set(lane_name, &id);
     signals::set_current(lane_name, &repo.attach, &repo.slug, Some(wt.clone()), Some(repo.lane_path(lane_name)));
-    let mut verdict = String::new();
-    if !review_model.is_empty() {
+    let mut review_model = String::new();
+    if let Some(this_seat) = seats.get(seat.wrapping_sub(1)).filter(|_| seat >= 1) {
+        review_model = this_seat.model.clone();
+        let agent = if this_seat.agent.is_empty() { "bead-reviewer".to_string() } else { this_seat.agent.clone() };
         // A reviewer session of this bead still running on the server since the last
         // process (recover found it): waited on, not started again.
         let rejoin = repo
@@ -1490,12 +1525,18 @@ pub fn review_one(repo: &Repo, opts: &Opts, id: Option<&str>, lane: Option<&Lane
             .map(|(sid, _)| sid)
             .filter(|sid| crate::harness::rejoin_fits(repo, &id, sid, "reviewer", n + 1, &review_model));
         repo.rejoin_clear(&id);
+        let seat_suffix = if seats.len() > 1 { format!(" seat {seat}") } else { String::new() };
         log(&format!(
-            "{}: review: {id} by {review_model} ({n} failures{})",
+            "{}: review: {id}{seat_suffix} by {review_model} ({n} failures{})",
             repo.slug,
             rejoin.as_deref().map(|s| format!(", rejoining session {s}")).unwrap_or_default()
         ));
-        let review_log = std::path::PathBuf::from(format!("{}.review.jsonl", logf.display()));
+        let review_log = if seats.len() > 1 {
+            std::path::PathBuf::from(format!("{}.review.{seat}.jsonl", logf.display()))
+        } else {
+            std::path::PathBuf::from(format!("{}.review.jsonl", logf.display()))
+        };
+        repo.seat_set_running(&id, seat);
         let r = match &rejoin {
             Some(sid) => crate::harness::rejoin_session(repo, sid, &wt, &review_log, timeout),
             None => {
@@ -1506,24 +1547,31 @@ pub fn review_one(repo: &Repo, opts: &Opts, id: Option<&str>, lane: Option<&Lane
                 let prompt = review_prompt(&json, &repo.base, &crate::park::last_round(repo, &id), &final_text, &stat, diff);
                 run_agent(
                     repo,
-                    "bead-reviewer",
+                    &agent,
                     &review_model,
                     &wt,
                     &review_log,
                     &prompt,
-                    &format!("{id} · reviewer · round {}", n + 1),
+                    &format!("{id} · reviewer · round {}{seat_suffix}", n + 1),
                     timeout,
                     Some(&json),
                 )
             }
         };
         cut_short(repo, &id);
+        repo.seat_clear_running(&id, seat);
+        if !repo.review_path(&id).exists() {
+            log(&format!("{}: {id}: seat {seat} ({review_model}) finished after the bead left review; verdict dropped", repo.slug));
+            repo.lane_clear(lane_name);
+            signals::clear_current(lane_name);
+            return Pass::Worked;
+        }
         if r.empty && r.rc != 124 {
             hold(repo, &id, None, &never_answered("reviewer", &review_model, &r));
             return Pass::Worked;
         }
         if r.rc != 0 {
-            let _ = std::fs::remove_file(repo.review_path(&id));
+            repo.review_clear(&id);
             let note = r.stalled.clone().unwrap_or_else(|| format!("reviewer exited {}. Log: {}", r.rc, review_log.display()));
             send_back(repo, &id, &wt, true, &note, &model, false, Some(&logf));
             return Pass::Worked;
@@ -1540,28 +1588,50 @@ pub fn review_one(repo: &Repo, opts: &Opts, id: Option<&str>, lane: Option<&Lane
             );
             return Pass::Worked;
         }
-        if !r.text.lines().any(|l| l.starts_with("APPROVE:")) {
-            let _ = std::fs::remove_file(repo.review_path(&id));
-            // The whole of the reviewer's verdict travels — the REJECT line and the block for
-            // the worker under it — not a 600-character summary of it: it is the work order.
-            send_back(
-                repo,
-                &id,
-                &wt,
-                true,
-                &format!("review ({review_model}) rejected:\n{}", cut_bytes(&reject_block(&r.text), 4000)),
-                &model,
-                false,
-                Some(&logf),
-            );
+        repo.seat_set_verdict(&id, seat, r.text.trim());
+        let approved = r.text.lines().any(|l| l.starts_with("APPROVE:"));
+        log(&format!("{}: {id}: seat {seat} ({review_model}) {}", repo.slug, if approved { "approved" } else { "rejected" }));
+    }
+
+    let verdicts = seat_verdicts(repo, &id, &seats);
+    let verdict = match quorum(&verdicts, &approvals) {
+        Quorum::Pending => {
+            repo.lane_clear(lane_name);
+            signals::clear_current(lane_name);
             return Pass::Worked;
         }
-        log(&format!("{}: {id}: review approved", repo.slug));
-        verdict = r.text;
-    } else {
-        review_model.clear();
-    }
-    let _ = std::fs::remove_file(repo.review_path(&id));
+        Quorum::Reject => {
+            let this = repo.seat_verdict(&id, seat).unwrap_or_default();
+            let mut note = format!("review ({review_model}) rejected:\n{}", cut_bytes(&reject_block(&this), 4000));
+            for (i, s) in seats.iter().enumerate() {
+                let k = i + 1;
+                if k == seat {
+                    continue;
+                }
+                if let Some(v) = repo.seat_verdict(&id, k) {
+                    note.push_str(&format!("\nseat {k} ({}): {}", s.model, first_line(&v)));
+                }
+            }
+            repo.review_clear(&id);
+            send_back(repo, &id, &wt, true, &note, &model, false, Some(&logf));
+            return Pass::Worked;
+        }
+        Quorum::Approve => {
+            log(&format!("{}: {id}: review approved", repo.slug));
+            let reviewer_line = seats
+                .iter()
+                .enumerate()
+                .filter_map(|(i, s)| {
+                    let v = repo.seat_verdict(&id, i + 1)?;
+                    let approve = last_line_starting(&v, "APPROVE:")?;
+                    Some(format!("Reviewer ({}): {}", s.model, cut_bytes(&approve, 500)))
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            reviewer_line
+        }
+    };
+    repo.review_clear(&id);
 
     if opts.local {
         log(&format!("{}: --local: branch {branch} is ready in {}; nothing pushed", repo.slug, wt.display()));
@@ -1598,11 +1668,7 @@ pub fn review_one(repo: &Repo, opts: &Opts, id: Option<&str>, lane: Option<&Lane
     }
     let ac = json.get(0).and_then(|b| b.get("acceptance_criteria")).and_then(|v| v.as_str()).unwrap_or("");
     let worker_line = cut_bytes(final_text.lines().last().unwrap_or(""), 500).to_string();
-    let reviewer_line = if review_model.is_empty() {
-        String::new()
-    } else {
-        format!("Reviewer ({review_model}): {}", cut_bytes(&last_line_starting(&verdict, "APPROVE:").unwrap_or_default(), 500))
-    };
+    let reviewer_line = verdict;
     let body = if repo.pr_style == "plain" {
         let desc = json.get(0).and_then(|b| b.get("description")).and_then(|v| v.as_str()).unwrap_or("");
         pr_body_plain(&id, desc, ac, &worker_line)
@@ -1686,8 +1752,22 @@ pub fn work(repo: &Repo, opts: &Opts, id: Option<&str>) {
     let mut last = None;
     if dev_one(repo, opts, id, &mut last, None) == Pass::Worked {
         if let Some(id) = last {
-            if repo.review_path(&id).exists() {
-                review_one(repo, opts, Some(&id), None);
+            let mut seat = 1;
+            while repo.review_path(&id).exists() {
+                review_one(repo, opts, Some(&id), None, seat);
+                // No verdict on this seat (held, or the harness never answered): nothing
+                // more to do synchronously, so stop here rather than spin on a seat that
+                // isn't going to produce one on its own.
+                if !repo.review_path(&id).exists() || repo.seat_verdict(&id, seat).is_none() {
+                    break;
+                }
+                let n = repo.failures_of(&id);
+                let pending =
+                    repo.stage_for(n).is_some_and(|st| quorum(&seat_verdicts(repo, &id, &st.seats), &st.approvals) == Quorum::Pending);
+                if !pending {
+                    break;
+                }
+                seat += 1;
             }
         }
     }

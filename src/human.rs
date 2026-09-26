@@ -68,7 +68,7 @@ pub fn answer(repo: &Repo, id: &str, text: &str) {
     }
     bd_note(repo, id, &format!("operator {}: {text}", date_iminutes()));
     repo.unpark(id);
-    let _ = std::fs::remove_file(repo.review_path(id));
+    repo.review_clear(id);
     repo.release(id);
     bd_status(repo, id, "open");
     log(&format!("{}: {id}: answered; back in the dev queue", repo.slug));

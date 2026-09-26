@@ -298,6 +298,29 @@ case_no_reviewer() {
   assert_eq "$(calls)" "bead-worker" "no review round without REVIEW_MODEL"
   assert_branch bead/t-1 "pushed"
 }
+case_two_seats_both_approve() {
+  # Every seat is its own review round: `work` loops seat by seat while the quorum is
+  # Pending, then pushes once every seat (the default rule, "all") has approved.
+  setup true auto '' "$(printf '[[stages]]\nworker = "stub/worker"\nreviewer = ["stub/reviewer", "stub/second"]\n')"
+  printf 'approve\napprove\n' >"$TEST_CTRL/review"
+  sup work "$REPO"
+  assert_eq "$(grep -c '^bead-reviewer ' "$TEST_CTRL/calls")" 2 "both seats reviewed"
+  assert_match "$(grep '^bead-reviewer ' "$TEST_CTRL/calls")" "stub/reviewer" "seat 1's model"
+  assert_match "$(grep '^bead-reviewer ' "$TEST_CTRL/calls")" "stub/second" "seat 2's model"
+  assert_branch bead/t-1 "pushed once both seats approve"
+  assert_eq "$(grep -c 'Reviewer (' "$TEST_CTRL/gh.log")" 2 "the PR body lists both seats' approvals"
+}
+case_two_seats_first_reject_sends_back() {
+  # The "all" rule rejects as soon as one seat does: the bead goes back to the dev queue
+  # with that seat's work order, the second seat's line in $TEST_CTRL/review unused.
+  setup true auto '' "$(printf '[[stages]]\nworker = "stub/worker"\nreviewer = ["stub/reviewer", "stub/second"]\n')"
+  printf 'reject\napprove\n' >"$TEST_CTRL/review"
+  sup work "$REPO"
+  assert_match "$(bead .notes)" "review (stub/reviewer) rejected:" "the deciding seat's rejection"
+  assert_match "$(bead .notes)" "For the worker:" "the work order"
+  assert_eq "$(cat "$BEAD_LOOP_STATE/repo/beads/t-1/failures")" 1 "one failure"
+  assert_nobranch bead/t-1 "nothing pushed"
+}
 case_ci_pending_then_green() {
   # The verdict on a check list is a unit test (merge::verdicts); here, what each one
   # does to the PR and the bead: nothing while a check is pending, the merge on green.

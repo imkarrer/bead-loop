@@ -37,13 +37,10 @@ pub struct StageHit {
     pub last: bool,
     /// 1-based, what status --json shows
     pub index: usize,
-    #[cfg_attr(not(test), allow(dead_code))]
     pub seats: Vec<Seat>,
-    #[cfg_attr(not(test), allow(dead_code))]
     pub approvals: Approvals,
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 #[derive(Clone, Debug, PartialEq)]
 pub enum Quorum {
     Approve,
@@ -53,7 +50,6 @@ pub enum Quorum {
 
 /// Applies a stage's seat rule to its seats' verdicts: Some(true) approved, Some(false)
 /// rejected, None not in yet. An empty slice is Approve: no reviewer means straight to PR.
-#[cfg_attr(not(test), allow(dead_code))]
 pub fn quorum(verdicts: &[Option<bool>], rule: &Approvals) -> Quorum {
     if verdicts.is_empty() {
         return Quorum::Approve;
@@ -114,38 +110,50 @@ impl Repo {
         self.rs.join("review").join(id)
     }
     /// `review/ID.seats/K` the verdict of seat K (1-based) for bead ID.
-    #[cfg_attr(not(test), allow(dead_code))]
     pub fn seat_dir(&self, id: &str) -> PathBuf {
         self.rs.join("review").join(format!("{id}.seats"))
     }
     /// `review/ID.seats/K` the verdict of seat K (1-based) for bead ID.
-    #[cfg_attr(not(test), allow(dead_code))]
     pub fn seat_verdict(&self, id: &str, k: usize) -> Option<String> {
         read_to_string(&self.seat_dir(id).join(format!("{k}")))
     }
     /// `review/ID.seats/K.running` true when seat K (1-based) is running for bead ID.
-    #[cfg_attr(not(test), allow(dead_code))]
     pub fn seat_running(&self, id: &str, k: usize) -> bool {
         self.seat_dir(id).join(format!("{k}.running")).exists()
     }
     /// `review/ID.seats/K.running` create the marker file for seat K (1-based) running for bead ID.
-    #[cfg_attr(not(test), allow(dead_code))]
     pub fn seat_set_running(&self, id: &str, k: usize) {
         let dir = self.seat_dir(id);
         std::fs::create_dir_all(&dir).ok();
         touch(&dir.join(format!("{k}.running")));
     }
     /// `review/ID.seats/K.running` remove the marker file for seat K (1-based) running for bead ID.
-    #[cfg_attr(not(test), allow(dead_code))]
     pub fn seat_clear_running(&self, id: &str, k: usize) {
         let _ = std::fs::remove_file(self.seat_dir(id).join(format!("{k}.running")));
     }
+    /// Every `K.running` marker for bead ID gone: a restart cuts short whichever seats
+    /// were running, so none of them holds `pick_seat` back from picking them again.
+    pub fn seat_clear_all_running(&self, id: &str) {
+        if let Ok(rd) = std::fs::read_dir(self.seat_dir(id)) {
+            for e in rd.flatten() {
+                if e.file_name().to_string_lossy().ends_with(".running") {
+                    let _ = std::fs::remove_file(e.path());
+                }
+            }
+        }
+    }
     /// `review/ID.seats/K` write the verdict for seat K (1-based) for bead ID.
-    #[cfg_attr(not(test), allow(dead_code))]
     pub fn seat_set_verdict(&self, id: &str, k: usize, text: &str) {
         let dir = self.seat_dir(id);
         std::fs::create_dir_all(&dir).ok();
         write_file(&dir.join(format!("{k}")), &format!("{text}\n"));
+    }
+    /// `review/ID` and `review/ID.seats` both go: the bead leaves review, whether pushed,
+    /// sent back, parked, or answered by a human. A seats dir left behind would be read at
+    /// the bead's next review and count a stale verdict in the next quorum.
+    pub fn review_clear(&self, id: &str) {
+        let _ = std::fs::remove_file(self.review_path(id));
+        let _ = std::fs::remove_dir_all(self.seat_dir(id));
     }
     pub fn inflight_path(&self, id: &str) -> PathBuf {
         self.rs.join("inflight").join(id)
@@ -586,6 +594,17 @@ mod tests {
         repo.seat_set_verdict("t-1", 2, "APPROVE: ok");
         assert!(repo.seat_verdict("t-1", 2).unwrap().contains("APPROVE"));
         assert!(repo.seat_verdict("t-1", 1).is_none());
+        let _ = std::fs::remove_dir_all(&d);
+    }
+    #[test]
+    fn review_clear_takes_the_seats() {
+        let d = crate::config::scratch("review-clear");
+        let repo = crate::config::test_repo(&d, &["a"]);
+        write_file(&repo.review_path("t-1"), "DONE\n");
+        repo.seat_set_verdict("t-1", 1, "APPROVE: ok");
+        repo.review_clear("t-1");
+        assert!(!repo.review_path("t-1").exists());
+        assert!(!repo.seat_dir("t-1").exists());
         let _ = std::fs::remove_dir_all(&d);
     }
     #[test]

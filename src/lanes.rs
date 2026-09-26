@@ -66,7 +66,9 @@ pub fn providers_named_in(repo: &Repo) -> Vec<String> {
     let mut models: Vec<&str> = Vec::new();
     for s in &repo.stages {
         models.push(&s.worker);
-        models.push(&s.reviewer);
+        for x in &s.seats {
+            models.push(&x.model);
+        }
     }
     models.extend([repo.conflict_worker.as_str(), repo.brief_model.as_str(), repo.research_model.as_str()]);
     let mut out: Vec<String> = Vec::new();
@@ -239,7 +241,7 @@ pub fn wait_for_work(ctx: &Ctx, max: f64) {
 /// too when that is this lane's as well (or there is no reviewer: nothing then waits on
 /// a model), so a bead's rounds stay together and a `--once` tick carries it to its PR.
 fn lane_pass(repo: &Repo, opts: &Opts, spec: &LaneSpec) -> Pass {
-    if spec.reviewer && review_one(repo, opts, None, Some(spec)) == Pass::Worked {
+    if spec.reviewer && review_one(repo, opts, None, Some(spec), 0) == Pass::Worked {
         return Pass::Worked;
     }
     if !spec.worker {
@@ -253,7 +255,7 @@ fn lane_pass(repo: &Repo, opts: &Opts, spec: &LaneSpec) -> Pass {
                 // The reviewer round is a round: under the pause flag it does not start,
                 // and the bead waits in the review queue for the resume.
                 if (reviewer.is_empty() || spec.takes(&reviewer)) && !repo.paused(&spec.lane) {
-                    review_one(repo, opts, Some(&id), Some(spec));
+                    review_one(repo, opts, Some(&id), Some(spec), 1);
                 }
             }
         }
@@ -437,6 +439,9 @@ pub fn recover(ctx: &Ctx) {
                 // back in its queue with a marker, and the lane that takes it waits on the
                 // session instead of starting one — rather than abort it and start over.
                 if in_review || is_inprog {
+                    if in_review {
+                        repo.seat_clear_all_running(&id);
+                    }
                     let kind = if in_review { "reviewer" } else { "worker" };
                     // The session's title says what round it is (a plain stop deletes the
                     // lane markers, a restart keeps them): a research round rejoined as a
