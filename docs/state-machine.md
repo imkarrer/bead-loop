@@ -191,7 +191,7 @@ Every row is a case in `test/run.sh`.
 | `gh` cannot read the PR | **held** with gh's words, still polled | waits |
 | PR conflicts with the base | note, **no failure**; dev queue — the next round is a rebase by `conflict_worker`, told to keep both sides | kept; the push updates the PR |
 | Adopted PR conflicts | left alone | whoever opened it rebases |
-| A dev-queue bead's `bead/<id>…` PR merged outside the loop (never open when `adopt` looked) | closed with the PR url | already gone |
+| A dev-queue or parked bead's `bead/<id>…` PR merged outside the loop (never open when `adopt` looked, or left open when the loop parked the bead) | closed with the PR url; its marks, `parked/ID` and branch go | already gone |
 | Merged, but `bd close` fails | **held** with the url; the PR stays in the queue | merged |
 | Failures exhausted (`on_exhaust = "park"`) | in_progress, for you, with the brief's question | removed (after the brief) |
 | PR closed unmerged | in_progress, note with the url and the brief's question | gone |
@@ -267,14 +267,14 @@ The watcher looks at every `inflight/ID` on each pass.
 | merge | pending longer than 2 h (`CI_TIMEOUT`) | merge (held: is the agent up?), still polled | — | — |
 | merge | a check's status came from a skipped build (`Build #N skipped`) | merge: that check reads as the newest status from a build that was not skipped, pending if none; every other row reads that view | — | — |
 | merge | `gh pr view` fails | merge (held: gh's words), still polled | — | — |
-| merge | sent back red, then the stages run out | human (parked); the PR stays open, `.fixing` stays, so `adopt` leaves it to the next round | — | kept |
+| merge | sent back red, then the stages run out | human (parked); the PR stays open, `.fixing` stays, so `adopt` leaves it to the next round; merge it and the next reconcile closes the bead | — | kept |
 
 ### Beside the merge queue
 
 | event | to |
 | --- | --- |
 | an open PR on `bead/<id>…` the loop did not open (`adopt = true`, no `.fixing`) | merge (`.adopted`; labelled under `pipeline`) |
-| a dev-queue bead whose `bead/<id>…` PR merged before adopt ever saw it | closed with the url (`close_merged_outside_loop`, once per idle bead per reconcile) |
+| a dev-queue or parked bead whose `bead/<id>…` PR merged while no queue held it | closed with the url (`close_merged_outside_loop`, once per idle or parked bead per reconcile) |
 
 ### human → …
 
@@ -283,6 +283,7 @@ The watcher looks at every `inflight/ID` on each pass.
 | human (parked) | `answer TEXT` | ready, the note in the next prompt | −1 |
 | human (parked) | reopen (`bd update --status open`, the page) | ready, count as is | — |
 | human (parked) | `escalate` | ready at the last stage (refused while Claude is signed out) | set |
+| human (parked) | you merge its `bead/<id>…` PR | closed with the url at the next reconcile; `.fixing` and `parked/ID` go | — |
 | human (held, any queue) | the reason clears (server back, signed in, CI reports, the pipeline merges) | that queue, flag dropped | — |
 | human (held, merge) | `answer` / reopen / `escalate` | refused: in the merge queue at the url; close the PR or wait | — |
 | human | a bead depends on this one | its dependents stay **waiting** (bd) | — |

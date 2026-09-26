@@ -6,7 +6,7 @@
 //! state: the PR is still asked about on every pass, and the flag clears when it moves.
 use crate::config::Repo;
 use crate::round::send_back;
-use crate::shell::{bd_close, bd_knows, bd_note, bd_ready_json, bd_status, gh, gh_ok, gh_out, git};
+use crate::shell::{bd_close, bd_in_progress_json, bd_knows, bd_note, bd_ready_json, bd_status, gh, gh_ok, gh_out, git};
 use crate::util::{date_iminutes, log, mtime, now, read_to_string, stderr_str, stdout_str, touch, write_file};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -340,16 +340,25 @@ pub fn close_merged(repo: &Repo, id: &str, url: &str, view: &Value) {
             return;
         }
     }
+    forget_done(repo, id);
+    log(&format!("{}: {id} closed ({url} merged; {checks})", repo.slug));
+    repo.wake();
+}
+
+/// Clears everything the loop kept on a bead now closed: the inflight file, its target,
+/// its research brief, its marks, its hold, `parked/ID`, and its local and
+/// remote-tracking `bead/ID` branches.
+fn forget_done(repo: &Repo, id: &str) {
     let _ = std::fs::remove_file(repo.inflight_path(id));
     repo.clear_target(id);
     repo.research_clear(id);
-    for m in ["red", "nocheck", "adopted", "held", "lastred", "rerun"] {
+    for m in ["red", "nocheck", "adopted", "held", "fixing", "conflict", "green"] {
         let _ = std::fs::remove_file(repo.mark(id, m));
     }
     repo.release(id);
+    repo.unpark(id);
     let _ = git(&repo.repo, &["branch", "-D", &format!("bead/{id}")]);
-    log(&format!("{}: {id} closed ({url} merged; {checks})", repo.slug));
-    repo.wake();
+    let _ = git(&repo.repo, &["branch", "-D", "-r", &format!("{}/bead/{id}", repo.push_remote)]);
 }
 
 /// `hand_to_pipeline ID URL`: merge = "pipeline". The loop labels the PR and the CI
@@ -453,18 +462,26 @@ fn adopt_from(repo: &Repo, r: &Repo) {
 /// `bead/<id>[-slug]` merged before `adopt` ever saw it open, so nothing closed the
 /// bead and the dev queue would hand it out again. `adopt` only catches a PR while it
 /// is still open; this catches the ones that were never caught at all. One `gh pr
-/// list` per idle bead in the dev queue — that queue is short, so nothing is cached.
+/// list` per idle bead in the dev queue and per parked bead — that queue is short, so
+/// nothing is cached.
 /// `--head` matches a branch name exactly, which would miss an adopted-style
 /// `bead/<id>-slug`; `--search head:...` is a substring match on GitHub's side, so a
 /// hit is still checked against `bead_id_of_branch` before it counts.
 fn close_merged_outside_loop(repo: &Repo) {
     let ready = bd_ready_json(repo).as_array().cloned().unwrap_or_default();
-    for b in ready {
+    let parked = bd_in_progress_json(repo).as_array().cloned().unwrap_or_default();
+    for b in ready.into_iter().chain(parked) {
         let id = match b.get("id").and_then(|v| v.as_str()) {
             Some(i) => i.to_string(),
             None => continue,
         };
-        if repo.inflight_path(&id).exists() || repo.review_path(&id).exists() || repo.wt(&id).is_dir() {
+        let on_lane = repo.lane_files().iter().any(|n| repo.lane_bead(n).as_deref() == Some(id.as_str()));
+        if repo.inflight_path(&id).exists()
+            || repo.review_path(&id).exists()
+            || repo.wt(&id).is_dir()
+            || on_lane
+            || repo.proposed_path(&id).exists()
+        {
             continue;
         }
         // The bead's own target: its PR, if any, is on that target's pr_repo. A config
@@ -493,6 +510,7 @@ fn close_merged_outside_loop(repo: &Repo) {
         if let Some(url) = url {
             let reason = format!("bead-loop: {url} merged outside the loop");
             if bd_close(repo, &id, &reason) {
+                forget_done(&r, &id);
                 log(&format!("{}: {id}: closed ({url} merged outside the loop)", repo.slug));
                 repo.wake();
             }
