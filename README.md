@@ -40,7 +40,7 @@ flowchart LR
     end
 
     G -- "pass" --> PC["pre-check<br/>precheck_model"]
-    PC -- "PASS" --> RQ
+    PC -- "PASS · skipped" --> RQ
     PC -- "SEND BACK" --> F
     PR --> MQ
     MQ -- "green: merge<br/>or the pipeline on the label" --> M["squash-merge<br/>bd close ID"]
@@ -143,22 +143,21 @@ every gate pass. The numbers said why it is worth asking: 9 of 11 rounds on 21 S
 died before any reviewer saw them, each still spending the reviewer's five minutes and
 its one slot on a diff no reviewer could have approved.
 
-Why inline and not a lane: a lane takes rounds by model glob, so the small model as a
-lane would queue a GPU bead's pre-check behind whatever the CPU lane was already
-running. Resident and one-slot instead, it takes a synchronous call from any lane
-without waiting on another lane's queue.
+Why inline and not a lane: a lane takes rounds by provider, so the small model as a
+lane would queue each pre-check behind whatever that lane was already running. Inline,
+the pre-check is one synchronous call inside the dev round, from any lane; it waits
+only for a free slot on its provider, never behind another lane's queue.
 
 Why a SEND BACK still counts as a failure: a send-back is a send-back, wherever it
 comes from. What the pre-check saves is the reviewer's minutes and its one slot, not
 the failure count.
 
 It never blocks or holds: a pre-check that cannot run — the model down, no verdict in
-its answer — falls through to the review queue exactly as a bare `precheck_model`
-would.
+its answer — falls through to the review queue, as if no `precheck_model` were set.
 
 The scoreboard's `pre-check: N sent back, M passed, K skipped` line (`bead-supervisor
-stats`) counts these apart from a reviewer's `REJECT`; a send-back it catches still
-shows under `send-backs by reason` as `precheck`.
+stats`, and the page under "Where rounds go back") counts these apart from a reviewer's
+`REJECT`; a send-back it catches still shows under `send-backs by reason` as `precheck`.
 
 ## Layout
 

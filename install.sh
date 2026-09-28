@@ -45,6 +45,7 @@ repos = []                       # e.g. ["~/src/inquire-platform"]; each has .be
 worker_timeout = 3600            # seconds per model session
 # max_inflight = 2               # unset: no cap — bd's dependencies are the only gate on the dev lane
 on_exhaust = "park"              # after the last stage: park (for you) | repeat (around again)
+# precheck_model = "local/small" # a small resident model: pre-check after the gate, post-mortem on a send-back; unset: neither
 # Provider catalogue (commented shapes):
 # [providers.local]
 # probe = "http://127.0.0.1:8080/health"   # GET answers 2xx, else its rounds wait
@@ -65,7 +66,6 @@ worker = "local/coder"
 failures = 2
 # reviewer = ["local/reviewer", "paid/model"]
 # approvals = "all"
-# precheck_model = "acbox/utility"  # the small resident model: pre-check after the gate, post-mortem on a send-back; empty = neither
 # [[lanes]] is optional: unset, one lane per provider the stages name, as wide as its parallel.
 CFG
   echo "config ~/.config/bead-loop/config.toml (set repos)"

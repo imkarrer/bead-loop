@@ -887,7 +887,10 @@ function scoreboard(s) {
   const top = reasons.length ? reasons[0][1] : 1;
   const bars = reasons.length === 0 ? '<div class="empty">no send-backs</div>'
     : `<div class="bars">${reasons.map(([k, n]) => `<span class="k">${esc(k)}</span><span class="bar" title="${n} of ${sb.total}"><i style="width:${Math.round(n * 100 / top)}%"></i></span><span class="n">${n}</span>`).join('')}</div>`;
-  const extra = [w.rebases ? `${w.rebases} rebase${w.rebases > 1 ? 's' : ''} (no failure)` : '', w.interrupted ? `${w.interrupted} round${w.interrupted > 1 ? 's' : ''} interrupted by a stop` : ''].filter(Boolean).join(' · ');
+  // the pre-check's tally as `bead-supervisor stats` prints it: its send-backs are the
+  // precheck bar above, what it passed and skipped shows only here; no pre-check, no line
+  const pc = w.precheck;
+  const extra = [pc && pc.sent_back + pc.passed + pc.skipped ? `pre-check: ${pc.sent_back} sent back, ${pc.passed} passed, ${pc.skipped} skipped` : '', w.rebases ? `${w.rebases} rebase${w.rebases > 1 ? 's' : ''} (no failure)` : '', w.interrupted ? `${w.interrupted} round${w.interrupted > 1 ? 's' : ''} interrupted by a stop` : ''].filter(Boolean).join(' · ');
   // by model: what each landed, what it lost and why
   const models = [...new Set([...Object.keys(w.landed_by), ...Object.keys(sb.by_model)])].sort((a, b) => (w.landed_by[b] || 0) - (w.landed_by[a] || 0) || a.localeCompare(b));
   const modelRows = models.length === 0 ? '<div class="empty">no rounds yet</div>'
