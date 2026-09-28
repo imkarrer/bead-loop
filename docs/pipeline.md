@@ -24,7 +24,7 @@ opencode needs. `scripts/ci.sh rust|scripts|suite` are the three steps.
 ## Buildkite
 
 Buildkite runs them, merges, and releases (`.buildkite/pipeline.yml`). Every push and PR
-builds on queue `self` (ac-box): `rust` (fmt, clippy `-D warnings`, build, unit tests)
+builds on queue `self` (arcade-box): `rust` (fmt, clippy `-D warnings`, build, unit tests)
 and `scripts` side by side, then the `suite`; then, on a PR carrying the `automerge`
 label — which the loop puts on every PR it opens under `merge = "pipeline"` —
 `scripts/ci-merge.sh` squash-merges the commit the build tested (the label is read from
@@ -54,7 +54,7 @@ builds".
 ## The deploy
 
 **A pull, and a download, not a build.** The box the loop runs on is behind WSL's NAT,
-where the agent on ac-box cannot reach it, so `bead-loop-deploy.timer` on that box runs
+where the agent on arcade-box cannot reach it, so `bead-loop-deploy.timer` on that box runs
 `scripts/deploy.sh` every two minutes: one `git fetch` in the deploy's own clone
 (`~/.local/state/bead-loop/deploy/src`), and nothing more unless `origin/main` has moved
 past what is deployed — then download the release `main-<sha7>` the pipeline published
