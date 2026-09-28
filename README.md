@@ -39,9 +39,9 @@ flowchart LR
       MQ[["merge queue<br/>PRs in CI on GitHub"]]
     end
 
-    G -- "pass" --> P["pre-check<br/>precheck_model"]
-    P -- "PASS" --> RQ
-    P -- "SEND BACK" --> F
+    G -- "pass" --> PC["pre-check<br/>precheck_model"]
+    PC -- "PASS · skipped" --> RQ
+    PC -- "SEND BACK" --> F
     PR --> MQ
     MQ -- "green: merge<br/>or the pipeline on the label" --> M["squash-merge<br/>bd close ID"]
     MQ -- "red" --> F
@@ -49,7 +49,7 @@ flowchart LR
     W -- "BLOCKED / no commit" --> F
     G -- "fail twice" --> F
     V -- "REJECT" --> F
-    F["failure +1<br/>note on the bead"] -- "stages left" --> DQ
+    F["failure +1<br/>note on the bead<br/>+ post-mortem: what it tried, where it stopped"] -- "stages left" --> DQ
     F -- "exhausted, or BLOCKED at the last stage" --> H["parked<br/>for you"]
     MQ -. "conflicts: a rebase round, no failure" .-> DQ
     RS -. "BLOCKED: false claim" .-> H
@@ -65,12 +65,14 @@ flowchart LR
 
   W -.- GPU[("provider A / worker model")]
   V -.- CPU[("provider B / reviewer seats")]
+  PC -.- SMALL[("a small resident model<br/>pre-check + post-mortem, ~20 s, evicts nothing")]
+  F -.- SMALL
 
   classDef model fill:#f3f0ff,stroke:#7c5cff,color:#222
   classDef stop fill:#fff3f0,stroke:#e0503c,color:#222
   classDef queue fill:#eef7f7,stroke:#2aa198,color:#222
   classDef hold fill:#fffbe6,stroke:#b58900,color:#222
-  class GPU,CPU model
+  class GPU,CPU,SMALL model
   class H stop
   class HD hold
   class DQ,RQ,MQ queue
@@ -81,6 +83,8 @@ flowchart LR
 | Supervisor | `bead-supervisor`, one Rust binary (`src/`), resident | the global config and each repo's `.bead-loop.toml`; kept up by `bead-supervisor.timer` |
 | Implementor | opencode agent `bead-worker` — or Claude Code, aider, a `command` | `[[stages]].worker`, one provider per stage; `research_model` for the optional research round |
 | Reviewer | opencode agent `bead-reviewer`, read-only (or another harness, per seat) | `[[stages]].reviewer`, one or more seats, with `approvals`; `precheck_model` for the pre-check |
+| Pre-checker | opencode agent `bead-prechecker`, read-only | `precheck_model` — a small resident model beside the workers; ~20 s a call, evicts nothing |
+| Post-mortem | agent `bead-postmortem`, no tools; one call when a round is sent back without a verdict | the same `precheck_model` |
 | Briefer | agent `bead-briefer`, read-only; one call when a bead is parked, and the second opinion (agent `bead-researcher`) on a researcher's `BLOCKED:` | `brief_model` |
 
 Each model is a `[providers.NAME]` in the config, naming how it is reached, how many
@@ -129,6 +133,31 @@ the shape you want. Infrastructure failing — a server down, setup broken, CI s
 never the bead's failure: the bead is **held** with the reason until the world changes. A
 bead the models cannot land is **parked** for you with a written brief: what happened,
 why, and the question to answer.
+
+### The pre-check and the post-mortem
+
+Why a 4B: the pre-check asks three mechanical questions a small model answers as well
+as a large one — did `DONE:` quote a command, does the diff touch only the files the
+bead named, is anything added that the bead did not ask for — cheap enough to ask on
+every gate pass. The numbers said why it is worth asking: 9 of 11 rounds on 21 Sep 2026
+died before any reviewer saw them, each still spending the reviewer's five minutes and
+its one slot on a diff no reviewer could have approved.
+
+Why inline and not a lane: a lane takes rounds by provider, so the small model as a
+lane would queue each pre-check behind whatever that lane was already running. Inline,
+the pre-check is one synchronous call inside the dev round, from any lane; it waits
+only for a free slot on its provider, never behind another lane's queue.
+
+Why a SEND BACK still counts as a failure: a send-back is a send-back, wherever it
+comes from. What the pre-check saves is the reviewer's minutes and its one slot, not
+the failure count.
+
+It never blocks or holds: a pre-check that cannot run — the model down, no verdict in
+its answer — falls through to the review queue, as if no `precheck_model` were set.
+
+The scoreboard's `pre-check: N sent back, M passed, K skipped` line (`bead-supervisor
+stats`, and the page under "Where rounds go back") counts these apart from a reviewer's
+`REJECT`; a send-back it catches still shows under `send-backs by reason` as `precheck`.
 
 ## Layout
 
