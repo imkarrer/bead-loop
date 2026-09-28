@@ -28,7 +28,7 @@ research_aider = true
 probe = "http://127.0.0.1:8100/health"
 
 [providers.acbox]                # llm-box's CPU: the 80B, gpt-oss-120b, the 4B utility model
-probe = "http://192.168.1.50:8100/health"
+probe = "http://192.168.1.51:8100/health"
 
 [providers.claude]               # the Claude Code subscription: the last stage
 harness = "claude-code"
