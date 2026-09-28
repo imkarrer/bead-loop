@@ -452,6 +452,21 @@ case_ci_red_unchanged_head_holds() {
   assert_eq "$(cat "$BEAD_LOOP_STATE/repo/beads/t-1/failures")" 1 "the same red is not charged twice"
   assert_match "$(cat "$BEAD_LOOP_STATE/repo/held/t-1")" "no new commit" "held, saying why"
 }
+case_ci_red_park_briefs_in_its_own_checkout() {
+  # 25 Sep: review_one removes the worktree once the PR is up, so every CI-red park that
+  # day briefed in repo.repo -- the operator's checkout, its local main 76 commits behind
+  # -- and bl-iej.8.1's brief blamed a "stale base" that was that local main. The brief
+  # gets a detached checkout of the bead's branch instead, removed after it.
+  setup true auto stub/reviewer "$(stages stub/worker:stub/reviewer:1)"
+  sup work "$REPO"; assert_file "$BEAD_LOOP_STATE/repo/inflight/t-1" "PR up"
+  assert_nofile "$BEAD_LOOP_STATE/repo/wt/t-1" "the round's worktree went with the PR"
+  set_checks '[{"context":"ci","state":"FAILURE"}]'; sup reconcile "$REPO"
+  assert_file "$BEAD_LOOP_STATE/repo/parked/t-1" "one stage, one CI red: parked"
+  assert_eq "$(grep '^bead-briefer ' "$TEST_CTRL/calls" | cut -d' ' -f2)" "$BEAD_LOOP_STATE/repo/brief/t-1" "the brief ran in its own checkout, not in $REPO"
+  assert_eq "$(cat "$TEST_CTRL/brief.head")" "$(git -C "$REPO" rev-parse bead/t-1)" "a checkout of the bead's branch"
+  assert_nofile "$BEAD_LOOP_STATE/repo/brief/t-1" "removed after the brief"
+  assert_eq "$(git -C "$REPO" worktree list | grep -c brief/t-1)" 0 "and unregistered"
+}
 case_external_green() {
   # merge = "external": someone else merges. Green sits in the queue, polled, never
   # held and never merged by the loop — the maintainer's call, on their own time.

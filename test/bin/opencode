@@ -76,6 +76,7 @@ case $agent in
   bead-briefer)
     # The brief of a parked bead: the model reads the rounds and asks the owner. The
     # prompt it got is on file for the test (prompt.N); what it answers is the control's.
+    git -C "$dir" rev-parse HEAD >"$TEST_CTRL/brief.head" 2>/dev/null || :
     case $(cat "$TEST_CTRL/brief" 2>/dev/null || echo shape) in
       plain) say "I read the rounds; it looks like the flag is missing." ;;
       crash) echo "connection refused" >&2; exit 7 ;;
