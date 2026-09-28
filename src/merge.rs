@@ -628,9 +628,13 @@ fn reconcile_open(repo: &Repo, id: &str, f: &std::path::Path, url: &str, view: &
         touch(&repo.mark(id, "conflict"));
         repo.release(id);
         let who = if repo.conflict_worker.is_empty() { "the last stage".to_string() } else { repo.conflict_worker.clone() };
-        bd_note(repo, id, &format!("bead-loop {}: {url} conflicts with {}; back to dev for a rebase by {who}", date_iminutes(), repo.base));
+        bd_note(
+            repo,
+            id,
+            &format!("bead-loop {}: {url} conflicts with {}; back to dev for a rebase by {who}", date_iminutes(), repo.base_ref()),
+        );
         bd_status(repo, id, "open");
-        log(&format!("{}: {id}: {url} conflicts with {} → dev queue for a rebase ({who})", repo.slug, repo.base));
+        log(&format!("{}: {id}: {url} conflicts with {} → dev queue for a rebase ({who})", repo.slug, repo.base_ref()));
         repo.wake();
         return;
     }

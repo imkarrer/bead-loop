@@ -652,7 +652,7 @@ pub fn harness_for(labels: &[&str], model: &str, brief_files: Option<usize>) -> 
 /// drift out of sync with each other).
 pub fn rebase_order(base_remote: &str, base: &str) -> String {
     format!(
-        "\n\nThis branch has an open pull request that GitHub cannot merge: it conflicts with {base}. Your job this round is the rebase, not new work. Run: git fetch {base_remote} && git rebase {base_remote}/{base}. Resolve every conflict so that both what this branch set out to do (the bead above, and the commits already on the branch) and what {base} changed since are kept; do not drop either side to make the conflict go away. Then run the gate if one is given, make sure the acceptance criteria still hold, and end with DONE: <what conflicted and how you resolved it>. Do not squash or rewrite the branch beyond the rebase."
+        "\n\nThis branch has an open pull request that GitHub cannot merge: it conflicts with {base_remote}/{base}. Your job this round is the rebase, not new work. Run: git fetch {base_remote} && git rebase {base_remote}/{base}. Resolve every conflict so that both what this branch set out to do (the bead above, and the commits already on the branch) and what {base_remote}/{base} changed since are kept; do not drop either side to make the conflict go away. Then run the gate if one is given, make sure the acceptance criteria still hold, and end with DONE: <what conflicted and how you resolved it>. Do not squash or rewrite the branch beyond the rebase."
     )
 }
 
@@ -968,7 +968,7 @@ fn research_one(repo: &Repo, opts: &Opts, id: &str, lane: Option<&LaneSpec>, las
     let previous = read_to_string(&repo.research_prev_path(id)).unwrap_or_default();
     // the note to refine the brief by; with no brief to refine, the rounds behind the bead
     let hist = crate::park::history(repo, id, if previous.is_empty() { 3 } else { 1 });
-    let prompt = research_prompt(&json, &repo.base, &previous, &hist);
+    let prompt = research_prompt(&json, &repo.base_ref(), &previous, &hist);
     // a research round holds a lane the reviewer may share: its own, shorter clock
     let timeout = st.timeout.min(repo.research_timeout);
     log(&format!(
@@ -1304,7 +1304,7 @@ pub fn dev_one(repo: &Repo, opts: &Opts, id: Option<&str>, last_id: &mut Option<
             if review_model.is_empty() { "none" } else { &review_model },
             repo.merge
         );
-        println!("{}", dev_prompt(&json, &branch, &repo.base, resumed, &repo.gate, &rebase, &research, &hist, ""));
+        println!("{}", dev_prompt(&json, &branch, &repo.base_ref(), resumed, &repo.gate, &rebase, &research, &hist, ""));
         return Pass::Nothing;
     }
     *last_id = Some(id.clone());
@@ -1371,7 +1371,7 @@ pub fn dev_one(repo: &Repo, opts: &Opts, id: Option<&str>, last_id: &mut Option<
             repo.beads.to_string_lossy().to_string()
         }
     };
-    let prompt = dev_prompt(&json, &branch, &repo.base, resumed, &repo.gate, &rebase, &research, &hist, &house);
+    let prompt = dev_prompt(&json, &branch, &repo.base_ref(), resumed, &repo.gate, &rebase, &research, &hist, &house);
 
     let title_w = format!("{id} · worker · round {}", n + 1);
     let worker_log = std::path::PathBuf::from(format!("{}.worker.jsonl", logf.display()));
@@ -1649,7 +1649,7 @@ pub fn review_one(repo: &Repo, opts: &Opts, id: Option<&str>, lane: Option<&Lane
                 let stat = git_out(&wt, &["diff", &range, "--stat"]);
                 let diff = git_out(&wt, &["diff", &range]);
                 let diff = cut_bytes(&diff, 60000);
-                let prompt = review_prompt(&json, &repo.base, &crate::park::last_round(repo, &id), &final_text, &stat, diff);
+                let prompt = review_prompt(&json, &repo.base_ref(), &crate::park::last_round(repo, &id), &final_text, &stat, diff);
                 run_agent(
                     repo,
                     &agent,
@@ -2060,6 +2060,10 @@ mod tests {
         let rebase = dev_prompt(&j, "bead/t-1", "main", true, "", &rebase_order("origin", "main"), "", "", "");
         assert!(rebase.contains("Your job this round is the rebase, not new work. Run: git fetch origin && git rebase origin/main"));
         assert!(rebase.find("rebase origin/main").unwrap() > rebase.find("</bead>").unwrap(), "the order comes after the bead");
+        assert!(
+            rebase.contains("it conflicts with origin/main.") && rebase.contains("what origin/main changed since"),
+            "the base named by its remote"
+        );
     }
     #[test]
     fn second_opinion_prompt_asks_for_the_claim_to_be_checked() {
