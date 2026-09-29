@@ -27,8 +27,8 @@ research_aider = true
 [providers.devbox]               # Qwen3-Coder-30B on the RTX 4080, through opencode
 probe = "http://127.0.0.1:8100/health"
 
-[providers.acbox]                # ac-box's CPU: the 80B, gpt-oss-120b, the 4B utility model
-probe = "http://192.168.1.50:8100/health"
+[providers.acbox]                # llm-box's CPU: the 80B, gpt-oss-120b, the 4B utility model
+probe = "http://192.168.1.51:8100/health"
 
 [providers.claude]               # the Claude Code subscription: the last stage
 harness = "claude-code"

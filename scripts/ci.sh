@@ -9,7 +9,7 @@
 # The cache: the agent runs `git clean -ffxdq` in the checkout before every job, which
 # would take target/ with it, so the registry and the target directory live beside the
 # checkouts — <build-path>/.cache/bead-loop on a Buildkite agent (the one directory
-# every layout of the ac-box agent persists), or CI_CACHE_DIR anywhere; with neither, a
+# every layout of the arcade-box agent persists), or CI_CACHE_DIR anywhere; with neither, a
 # cold build. Cargo's own fingerprints then do the rest: a crate whose inputs did not
 # change is not rebuilt, and a push that touches only docs costs a no-op build.
 set -euo pipefail

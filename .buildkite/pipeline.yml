@@ -6,10 +6,10 @@
 # which has no /bin/bash, and the hooks' move to #!/usr/bin/env bash (a218a63) is on
 # main only. Pin a tag again once one exists at or after a218a63.
 #
-# One shared agent, queue `self` on ac-box, builds and tests every push and PR and
+# One shared agent, queue `self` on arcade-box, builds and tests every push and PR and
 # merges a labelled PR (scripts/ci-merge.sh — the loop labels every PR it opens under
 # merge = "pipeline", so the loop's own work lands without a hand on it). The deploy is
-# a pull, not a push: the box the loop runs on is behind WSL's NAT where ac-box cannot reach it,
+# a pull, not a push: the box the loop runs on is behind WSL's NAT where arcade-box cannot reach it,
 # so bead-loop-deploy.timer there runs scripts/deploy.sh every two minutes, which downloads
 # the release the `release` step published for origin/main into a clone of its own,
 # installs it and recycles the stack — only when origin/main has moved. The same shape
