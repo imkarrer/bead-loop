@@ -1,0 +1,13 @@
+# bead-loop (~/src/bead-loop): which beads the loop works here, and how a worktree is proven.
+# Stages, lanes and the research round come from ~/.config/bead-loop/config.toml.
+# The gate is CI's source half (scripts/ci_test.sh minus the tenant gate): the catalog,
+# crops, www and script checks, inside this tree's flox environment for python3. The
+# tenant gate starts mindustry-server and stays CI's: the loop never changes .flox/.
+# Then every windows/*.ps1 must parse under PowerShell 7's parser, from nixpkgs and not
+# the flox environment (that environment IS the box's tenant; pwsh does not belong in
+# it). Added 2026-10-01 after arc-780.1 merged a launcher that did not parse: the python
+# checks read .ps1 only as text.
+label = "delegate:local"
+base = "main"
+gate = '''flox activate -- bash -c 'python3 scripts/assert-no-content.py && python3 -m unittest discover -s scripts -p "test_*.py" -v' && nix shell nixpkgs#powershell -c pwsh -NoProfile -NonInteractive -Command '$bad = 0; foreach ($f in Get-ChildItem windows/*.ps1) { $e = $null; [void][System.Management.Automation.Language.Parser]::ParseFile($f.FullName, [ref]$null, [ref]$e); foreach ($x in $e) { Write-Host ("{0}:{1}: {2}" -f $f.Name, $x.Extent.StartLineNumber, $x.Message); $bad = 1 } }; exit $bad' '''
+merge = "auto"                       # the watcher squash-merges on green (owner, 2026-10-01: "you merge them")

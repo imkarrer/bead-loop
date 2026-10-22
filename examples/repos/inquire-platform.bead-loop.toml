@@ -1,0 +1,7 @@
+# bead-loop (~/src/bead-loop): which beads the local models work here, and how a worktree is proven.
+# Stages, lanes and the research round come from ~/.config/bead-loop/config.toml.
+label = "delegate:local"
+base = "master"
+setup = "npm ci && npm run db:generate"
+gate = "npm run typecheck && npm run lint && npm test"
+merge = "pipeline"                  # the loop labels each PR "automerge"; the pipeline merges it

@@ -1,0 +1,60 @@
+# bead-loop global config (~/.config/bead-loop/config.toml). A key in a repo's
+# .bead-loop.toml wins over the same key here. docs/config.md has every key.
+repos = ["~/src/inquire-platform", "~/src/bead-loop", "~/src/home-arcade"]
+model = "devbox/coder"           # worker, when no stages table applies
+worker_timeout = 3600            # seconds per model session
+max_inflight = 100               # no cap: dependencies (bd ready) are the only gate; 1 stalled the GPU behind one green PR
+attach = "http://127.0.0.1:4096" # sessions run inside opencode-web.service; watch them live in the browser
+on_exhaust = "park"              # after the last stage: repeat (around again) | park (for you)
+
+# Research: a ready bead goes to the 80B first, which writes the brief -- Files / Shape /
+# Check / Pitfalls -- every worker prompt then carries; "first" = once, before round 1.
+# A brief whose Files all exist puts the worker under aider; harness:opencode opts out.
+research_model = "acbox/coder"
+research = "first"
+research_aider = true
+
+# Providers: how each model server is reached, how many sessions it runs at once, what
+# it costs. Names match the model prefixes.
+[providers.devbox]               # Qwen3-Coder-30B on the RTX 4080, through opencode
+probe = "http://127.0.0.1:8100/health"
+
+[providers.acbox]                # ac-box's CPU: the 80B, gpt-oss-120b, the 4B utility model
+probe = "http://192.168.1.51:8100/health"
+
+[providers.claude]               # the Claude Code subscription: the last stage
+harness = "claude-code"
+parallel = 2
+cost = "metered"
+
+# Escalation, in order: two GPU attempts, then Sonnet once; after that the bead parks
+# for you (on_exhaust = "park"). A stage:NAME label on a bead starts it at that stage.
+[[stages]]
+name = "local"
+worker = "devbox/coder"
+reviewer = "acbox/reviewer"
+failures = 2
+
+[[stages]]
+name = "frontier"
+worker = "claude/sonnet"
+reviewer = "claude/sonnet"
+failures = 1
+# A second opinion from another family: a list of seats, and how many must approve.
+# reviewer = ["acbox/reviewer", "claude/sonnet"]
+# approvals = "all"
+
+# The lanes, one per model server: a round on the CPU box never holds the GPU's queue;
+# a bead escalated to Claude runs at once, two at a time.
+[[lanes]]
+name = "gpu"
+models = ["devbox/*"]
+
+[[lanes]]
+name = "cpu"
+models = ["acbox/*"]
+
+[[lanes]]
+name = "claude"
+models = ["claude/*"]
+parallel = 2
