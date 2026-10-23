@@ -1666,6 +1666,35 @@ case_conflict_pr_closed_parks() {
   assert_match "$(cat "$T/sup.log")" "conflict round: its PR (https://github.com/example/repo/pull/7) is CLOSED" "logged"
 }
 
+case_mergeable_unknown_is_pending_not_nocheck() {
+  # bl-7g8, 22 Oct: GitHub computes mergeability lazily, so right after the base moves a
+  # PR can report mergeable UNKNOWN with an empty rollup (no merge ref to test yet) —
+  # that is pending, re-asked on the next tick, not the nocheck hold. CONFLICTING still
+  # goes straight to the conflict round. MERGEABLE with an empty rollup past the grace
+  # period still holds as nocheck, same as today.
+  setup; sup work "$REPO"
+  jq '.mergeable="UNKNOWN"' "$TEST_CTRL/pr.json" >"$TEST_CTRL/pr.tmp" && mv "$TEST_CTRL/pr.tmp" "$TEST_CTRL/pr.json"
+  touch -d "10 minutes ago" "$BEAD_LOOP_STATE/repo/inflight/t-1"; sup reconcile "$REPO"
+  assert_nofile "$BEAD_LOOP_STATE/repo/held/t-1" "UNKNOWN + empty rollup: not held"
+  assert_nofile "$BEAD_LOOP_STATE/repo/inflight/.t-1.nocheck" "UNKNOWN + empty rollup: no nocheck mark"
+  ! grep -q "no CI checks" <<<"$(bead .notes)" && ok || bad "UNKNOWN: no nocheck note"
+  assert_file "$BEAD_LOOP_STATE/repo/inflight/t-1" "stays in the merge queue, pending"
+  assert_nofile "$BEAD_LOOP_STATE/repo/inflight/.t-1.conflict" "not sent to the conflict round either"
+  # CONFLICTING: the conflict round, not the nocheck hold.
+  setup; sup work "$REPO"
+  jq '.mergeable="CONFLICTING"' "$TEST_CTRL/pr.json" >"$TEST_CTRL/pr.tmp" && mv "$TEST_CTRL/pr.tmp" "$TEST_CTRL/pr.json"
+  sup reconcile "$REPO"
+  assert_file "$BEAD_LOOP_STATE/repo/inflight/.t-1.conflict" "conflict mark set"
+  assert_nofile "$BEAD_LOOP_STATE/repo/held/t-1" "not held"
+  assert_nofile "$BEAD_LOOP_STATE/repo/inflight/.t-1.nocheck" "no nocheck mark either"
+  # MERGEABLE + empty rollup past the grace period: today's nocheck hold still fires.
+  setup; sup work "$REPO"
+  jq '.mergeable="MERGEABLE"' "$TEST_CTRL/pr.json" >"$TEST_CTRL/pr.tmp" && mv "$TEST_CTRL/pr.tmp" "$TEST_CTRL/pr.json"
+  touch -d "10 minutes ago" "$BEAD_LOOP_STATE/repo/inflight/t-1"; sup reconcile "$REPO"
+  assert_match "$(bead .notes)" "no CI checks" "MERGEABLE past the grace period: noted"
+  assert_match "$(cat "$BEAD_LOOP_STATE/repo/held/t-1")" "reports no CI checks" "held"
+}
+
 # ---- targets (docs/design-targets.md) -----------------------------------------------
 case_target() {
   # A bead labelled work:t claims the [targets.t] checkout: its round works in

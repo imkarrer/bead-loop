@@ -615,11 +615,14 @@ pub fn reconcile(repo: &Repo) {
 
 fn reconcile_open(repo: &Repo, id: &str, f: &std::path::Path, url: &str, view: &Value) {
     let adopted = repo.mark(id, "adopted").exists();
+    let mergeable = view.get("mergeable").and_then(|m| m.as_str()).unwrap_or("");
+    let ms = view.get("mergeStateStatus").and_then(|m| m.as_str()).unwrap_or("").to_string();
     // A PR of ours that conflicts with the base is not CI's problem, and not the model's
     // fault: no failure. It goes back to the dev queue on its own branch with a rebase
     // work order, and that round's worker is conflict_worker — the last stage's by
     // default, the strong model — since a rebase is judgement, not typing.
-    if view.get("mergeable").and_then(|m| m.as_str()) == Some("CONFLICTING") && !adopted {
+    if mergeable == "CONFLICTING" && !adopted {
+        // A PR GitHub has already resolved as conflicting goes to the conflict round.
         let _ = std::fs::remove_file(f);
         for m in ["nocheck", "red", "held"] {
             let _ = std::fs::remove_file(repo.mark(id, m));
@@ -638,7 +641,19 @@ fn reconcile_open(repo: &Repo, id: &str, f: &std::path::Path, url: &str, view: &
         repo.wake();
         return;
     }
-    let ms = view.get("mergeStateStatus").and_then(|m| m.as_str()).unwrap_or("").to_string();
+
+    // Special handling for mergeable UNKNOWN or mergeStateStatus DIRTY/UNKNOWN with empty rollup:
+    // GitHub computes mergeability lazily, so right after base moves, it reports UNKNOWN
+    // and zero checks falls through to nocheck, but this should be treated as pending
+    let checks: Vec<String> =
+        view.get("statusCheckRollup").and_then(|v| v.as_array()).map(|a| a.iter().map(check_state).collect()).unwrap_or_default();
+    if (mergeable == "UNKNOWN" || ms == "DIRTY" || ms == "UNKNOWN") && checks.is_empty() && !adopted {
+        // This case means GitHub hasn't finished computing mergeability yet, or it's
+        // in a transient state. Treat it as pending to be re-evaluated on the next tick.
+        say(id, format!("{}: {id}: mergeable is UNKNOWN, CI checks pending; will re-evaluate", repo.slug));
+        return;
+    }
+
     match verdict(view) {
         "green" => {
             if repo.merge == "auto" {
@@ -1014,5 +1029,19 @@ mod tests {
         assert!(first > 0 && repo.mark("t-1", "green").exists());
         assert_eq!(green_since(&repo, "t-1"), first, "the second look keeps the first time");
         let _ = std::fs::remove_dir_all(&d);
+    }
+    #[test]
+    fn test_mergeable_unknown_empty_rollup() {
+        // Test the case where mergeable is UNKNOWN and rollup is empty - this test should
+        // verify that the reconcile logic handles this case properly (not as nocheck)
+        // The verdict function correctly returns "nocheck" but this should not be treated as
+        // a nocheck hold in reconcile_open logic when mergeable is UNKNOWN
+        let view = serde_json::json!({
+            "mergeable": "UNKNOWN",
+            "mergeStateStatus": "UNKNOWN",
+            "statusCheckRollup": []
+        });
+        // Verify that verdict returns "nocheck" (this is expected behavior for empty rollup)
+        assert_eq!(verdict(&view), "nocheck");
     }
 }
