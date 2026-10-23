@@ -621,8 +621,8 @@ fn reconcile_open(repo: &Repo, id: &str, f: &std::path::Path, url: &str, view: &
     // fault: no failure. It goes back to the dev queue on its own branch with a rebase
     // work order, and that round's worker is conflict_worker — the last stage's by
     // default, the strong model — since a rebase is judgement, not typing.
-    if mergeable == "CONFLICTING" || ms == "DIRTY" {
-        // Handle CONFLICTING and DIRTY merge states the same way: send to conflict round
+    if mergeable == "CONFLICTING" && !adopted {
+        // A PR GitHub has already resolved as conflicting goes to the conflict round.
         let _ = std::fs::remove_file(f);
         for m in ["nocheck", "red", "held"] {
             let _ = std::fs::remove_file(repo.mark(id, m));
