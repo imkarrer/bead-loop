@@ -24,6 +24,10 @@ on_exhaust = "repeat"                  # repeat: cycle the stages until it lands
 # adopt = true                         # open bead/* PRs from anyone join the loop and merge on green
 # max_inflight = 2                     # PRs in the merge queue before the dev lane pauses; unset = no cap, bd's
                                        # dependencies are the only gate (the queues absorb the rest)
+# max_open_prs = 1                     # global only: the merge queue across EVERY target at once. max_inflight
+#                                      # counts one target, so 1 on two targets still allows two open PRs.
+#                                      # Set this when the PRs land on someone else's repo.
+# update_behind = true                 # an open PR BEHIND the base is brought up first (default: merge = "auto")
 # merge_label = "automerge"            # the label merge = "pipeline" puts on each PR
 # worker_timeout = 3600                # seconds per model session
 # stall_compactions = 10                # opencode sessions only: abort a session past this many compactions
@@ -74,6 +78,7 @@ failures = 1
 # setup = "npm ci"                      # runs in the fresh worktree before the worker
 # gate = "npm test"                     # after the worker, before review
 # merge = "external"                    # auto | pipeline | manual | external (someone else merges; the loop watches)
+# update_behind = true                 # an open PR BEHIND the base is brought up first (default: merge = "auto")
 # merge_label = "automerge"             # the label merge = "pipeline" puts on each PR
 # adopt = true                          # bead/* PRs from anyone on this target join the loop
 # max_inflight = 1                      # PRs in the merge queue before the dev lane pauses on this target
