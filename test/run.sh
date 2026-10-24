@@ -1825,6 +1825,20 @@ case_ask_counts_inflight() {
   sup work "$REPO" t-5
   assert_eq "$(calls)" "" "max_inflight=1 with t-3 proposed: the second work:t bead is not taken"
 }
+case_recover_leaves_a_proposed_bead() {
+  # A proposed bead is in_progress with a worktree and in no queue — what recover took
+  # for a round a stop interrupted: it reopened it at every restart, and the reopened
+  # bead went back to research and the dev queue though its round was approved (pw-i7c,
+  # 24 Oct). Recover leaves it as the round left it, waiting to be published.
+  setup_target
+  echo 'open_pr = "ask"' >>"$REPO/.bead-loop.toml"   # inside [targets.t], the last table
+  sup work "$REPO" t-3
+  assert_file "$BEAD_LOOP_STATE/repo/proposed/t-3" "t-3 proposed"
+  sup recover "$REPO"
+  assert_eq "$(bead3 .status)" in_progress "still in_progress after recover"
+  ! grep -q 'interrupted by a stop' <<<"$(bead3 .notes)" && ok || bad "not noted as interrupted: $(bead3 .notes)"
+  assert_file "$BEAD_LOOP_STATE/repo/proposed/t-3" "still waiting to be published"
+}
 
 # ---- the state machine's exits (docs/state-machine.md) ------------------------------------
 case_git_refusing_the_worktree_holds() {

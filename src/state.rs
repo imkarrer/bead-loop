@@ -431,8 +431,8 @@ pub fn review_queue(repo: &Repo) -> Vec<String> {
 
 /// `dev_queue`: `bd ready -l LABEL` — open beads, the label, no open blocker — fewest
 /// failures first (a stable sort keeps bd's order within a count). A bead that is also
-/// in the review or merge queue, or on a lane, is not handed out again whatever bd says
-/// (invariant: one place).
+/// in the review or merge queue, waiting to be published, or on a lane, is not handed out
+/// again whatever bd says (invariant: one place).
 pub fn dev_queue(repo: &Repo) -> Vec<String> {
     order_dev(repo, crate::shell::bd_ready(repo))
 }
@@ -443,7 +443,7 @@ pub fn order_dev(repo: &Repo, ready: Vec<String>) -> Vec<String> {
     let mut v: Vec<(bool, u64, usize, String)> = ready
         .into_iter()
         .enumerate()
-        .filter(|(_, id)| !repo.review_path(id).exists() && !repo.inflight_path(id).exists())
+        .filter(|(_, id)| !repo.review_path(id).exists() && !repo.inflight_path(id).exists() && !repo.proposed_path(id).exists())
         .filter(|(_, id)| !lanes.iter().any(|n| repo.lane_bead(n).as_deref() == Some(id)))
         // a session to rejoin goes first: it is already running, and it holds the server
         .map(|(i, id)| (repo.rejoin_path(&id).exists(), repo.failures_of(&id), i, id))
@@ -581,6 +581,9 @@ mod tests {
         write_file(&repo.review_path("t-2"), "DONE: x\n");
         write_file(&repo.inflight_path("t-3"), "https://example/pull/7\n");
         assert_eq!(order_dev(&repo, ids(&["t-1", "t-2", "t-7", "t-3"])), ids(&["t-1", "t-7"]), "review and merge queues excluded");
+        write_file(&repo.proposed_path("t-7"), "{}\n");
+        assert_eq!(order_dev(&repo, ids(&["t-1", "t-7"])), ids(&["t-1"]), "a bead waiting to be published excluded");
+        let _ = std::fs::remove_file(repo.proposed_path("t-7"));
         repo.lane_set("dev", "t-1");
         assert_eq!(order_dev(&repo, ids(&["t-1", "t-7"])), ids(&["t-7"]), "the bead on a lane excluded");
         repo.lane_clear("dev");
