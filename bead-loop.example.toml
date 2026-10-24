@@ -11,6 +11,8 @@ merge = "auto"                         # auto: the merge watcher squash-merges o
 review_model = "acbox/reviewer"        # the model that judges the diff before the push, when no [[stages]] table
                                        # applies; unset = no review. A different family from the worker catches more
 on_exhaust = "repeat"                  # repeat: cycle the stages until it lands | park: leave it for you (default)
+# feedback = true                      # a maintainer's review/comment on an open PR of ours sends the bead back to dev
+                                       # on the same branch with the comments as the work order (default true; false = CI colour only)
 # conflict_worker = "claude/sonnet"    # who rebases a PR that conflicts with the base (default: the last stage's worker)
 # brief_model = "claude/sonnet"        # who writes the brief when a bead is parked for you — what each round tried, why it
                                        # failed, the question to answer (default: the last stage's worker; "none" for no brief);

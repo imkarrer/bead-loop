@@ -172,6 +172,20 @@ impl Repo {
     pub fn held_path(&self, id: &str) -> PathBuf {
         self.rs.join("held").join(id)
     }
+    /// `reopen/ID`: the url of the PR a feedback send-back left open, for the dev round
+    /// that fixes it to push to instead of calling `gh pr create` a second time.
+    pub fn reopen_path(&self, id: &str) -> PathBuf {
+        self.rs.join("reopen").join(id)
+    }
+    /// `feedback/ID`: the ISO timestamp of the newest PR comment already turned into a
+    /// round — written the moment the bead goes back to dev, so a comment a round fails
+    /// on is never worked twice. No file: everything on the PR so far is new.
+    pub fn feedback_watermark(&self, id: &str) -> Option<String> {
+        read_to_string(&self.rs.join("feedback").join(id)).map(|s| s.trim().to_string())
+    }
+    pub fn set_feedback_watermark(&self, id: &str, at: &str) {
+        write_file(&self.rs.join("feedback").join(id), &format!("{at}\n"));
+    }
     /// `proposed/ID`: `open_pr = "ask"`'s PR details, waiting on a human to publish.
     pub fn proposed_path(&self, id: &str) -> PathBuf {
         self.rs.join("proposed").join(id)

@@ -1268,6 +1268,30 @@ pub fn dev_one(repo: &Repo, opts: &Opts, id: Option<&str>, last_id: &mut Option<
             log(&format!("{}: {id}: conflict round: rebase onto {} by {model}", repo.slug, repo.base));
         }
     }
+    // The feedback round: a maintainer's review or comment on the open PR, left by
+    // merge.rs's check_feedback as the work order under inflight/.ID.feedback. Same
+    // worker precedent as the rebase round: a maintainer's note is at least as much
+    // judgement as a conflict.
+    let mut feedback = false;
+    if let Some(order) = read_to_string(&repo.mark(&id, "feedback")) {
+        feedback = true;
+        rebase = order;
+        if !repo.conflict_worker.is_empty() {
+            model = repo.conflict_worker.clone();
+        } else if let Some(last) = repo.stage_for(repo.last_stage_start()) {
+            model = opts.model_flag.clone().unwrap_or(last.model);
+        }
+        if !runnable(repo, &model) {
+            log(&format!(
+                "{}: {id}: feedback round needs {model}, which cannot run now ({}); waiting",
+                repo.slug,
+                crate::harness::why_not(repo, &model)
+            ));
+            bd_status(repo, &id, "open");
+            return Pass::Nothing;
+        }
+        log(&format!("{}: {id}: feedback round: by {model}", repo.slug));
+    }
     // A branch left from an earlier round (sent back by review or CI) is resumed, not
     // restarted: the worker fixes its commit. A dev-side failure deleted the branch.
     let resumed = branch_exists(repo, &branch);
@@ -1291,7 +1315,13 @@ pub fn dev_one(repo: &Repo, opts: &Opts, id: Option<&str>, last_id: &mut Option<
         repo.slug,
         if review_model.is_empty() { "none" } else { &review_model },
         if resumed { ", resuming the branch" } else { "" },
-        if conflict { ", rebase" } else { "" },
+        if conflict {
+            ", rebase"
+        } else if feedback {
+            ", feedback"
+        } else {
+            ""
+        },
         rejoin.as_deref().map(|s| format!(", rejoining session {s}")).unwrap_or_default()
     ));
     if opts.dry_run {
@@ -1788,11 +1818,21 @@ pub fn review_one(repo: &Repo, opts: &Opts, id: Option<&str>, lane: Option<&Lane
     // (empty in the test suite's local-path remotes, where the owner cannot be parsed).
     let head = repo.head_ref(&branch);
     let repo_args: Vec<&str> = if repo.pr_repo.is_empty() { vec![] } else { vec!["--repo", &repo.pr_repo] };
-    // A branch sent back by CI already has its PR: the push updated it.
-    let mut list_args = vec!["pr", "list", "--state", "open"];
-    list_args.extend(repo_args.iter().copied());
-    list_args.extend(["--head", &head, "--json", "url", "--jq", ".[0].url // empty"]);
-    let existing = crate::shell::gh_stdout_any(repo, &list_args).trim().to_string();
+    // A feedback round's branch already has a PR open, remembered under reopen/ID by
+    // merge.rs's check_feedback rather than relooked-up: the push updates it, inflight/ID
+    // is restored from the same url below, and gh pr create is never called a second time.
+    let reopened = repo.reopen_path(&id);
+    let reopen_url = read_to_string(&reopened).map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+    let existing = if let Some(u) = &reopen_url {
+        let _ = std::fs::remove_file(&reopened);
+        u.clone()
+    } else {
+        // A branch sent back by CI already has its PR: the push updated it.
+        let mut list_args = vec!["pr", "list", "--state", "open"];
+        list_args.extend(repo_args.iter().copied());
+        list_args.extend(["--head", &head, "--json", "url", "--jq", ".[0].url // empty"]);
+        crate::shell::gh_stdout_any(repo, &list_args).trim().to_string()
+    };
     let updated = !existing.is_empty();
     if existing.is_empty() && repo.open_pr.as_deref() == Some("ask") {
         let compare_url = format!("https://github.com/{}/compare/{}...{head}?expand=1", repo.pr_repo, repo.base);
@@ -1828,7 +1868,7 @@ pub fn review_one(repo: &Repo, opts: &Opts, id: Option<&str>, lane: Option<&Lane
         }
     };
     write_file(&repo.inflight_path(&id), &format!("{url}\n"));
-    for m in ["red", "fixing", "conflict"] {
+    for m in ["red", "fixing", "conflict", "feedback"] {
         let _ = std::fs::remove_file(repo.mark(&id, m));
     }
     repo.release(&id);

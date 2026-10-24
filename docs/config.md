@@ -29,6 +29,7 @@ With neither, the run stops (`stage 1 names no worker`): no agent has a model of
 | `research_aider` | `true` | a brief whose Files all exist puts the worker under aider (default true); `false` never switches |
 | `merge` | `"auto"` | `auto`: the watcher merges on green · `pipeline`: the loop labels, CI merges · `manual`: PR only, the bead held for you once green |
 | `merge_label` | `"automerge"` | the label `pipeline` puts on each PR |
+| `feedback` | `true` | a review (`CHANGES_REQUESTED` or a comment) or an issue/inline comment on an open PR of the loop's own, from someone other than the loop's own account and newer than the last one acted on, sends the bead back to dev on the same branch with the comments as the work order (`conflict_worker` does the round, the same judgement call as a rebase); `false` is yesterday's behaviour, CI colour only — common under `merge = "manual"` where a human already reads the thread |
 | `adopt` | `true` | open `bead/*` PRs from anyone join the loop: merged on green under `auto`, labelled under `pipeline`, the bead the branch names closed; red or conflicting, held with a note for whoever opened them. They do not count toward `max_inflight` |
 | `max_inflight` | none | a cap on PRs in the merge queue before the dev lane pauses. Unset, there is no cap: bd's dependencies are the only gate on the dev lane, and the queues absorb the rest. Set it for a repo whose CI is the scarce thing |
 | `worker_timeout` | `3600` | seconds per model session |
