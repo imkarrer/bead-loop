@@ -433,7 +433,9 @@ pub fn recover(ctx: &Ctx) {
                 }
                 let id = e.file_name().to_string_lossy().into_owned();
                 repo.rejoin_clear(&id);
-                if repo.inflight_path(&id).exists() {
+                // A PR in flight, or one waiting to be published: the round is over, the
+                // bead in_progress on purpose — not a round the stop interrupted.
+                if repo.inflight_path(&id).exists() || repo.proposed_path(&id).exists() {
                     crate::harness::abort_sessions(&repo, &dir);
                     continue;
                 }
