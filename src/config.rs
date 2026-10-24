@@ -221,6 +221,18 @@ impl Layers {
         }
     }
 
+    /// `max_open_prs`, global only: a cap on the merge queue ACROSS EVERY TARGET,
+    /// where `max_inflight` caps one target alone. Set it to 1 when the PRs land on
+    /// someone else's repository, where a queue of them is a queue of review for
+    /// the maintainer rather than throughput for us.
+    pub fn max_open_prs(&self) -> u64 {
+        match self.global.get("max_open_prs") {
+            Some(Value::Number(n)) => n.as_u64().unwrap_or(u64::MAX),
+            Some(Value::String(s)) => s.trim().parse().unwrap_or(u64::MAX),
+            _ => u64::MAX,
+        }
+    }
+
     /// `repos`, global only, `~` expanded.
     pub fn repos(&self) -> Vec<PathBuf> {
         match self.global.get("repos") {
@@ -393,6 +405,9 @@ pub struct Repo {
     pub slug: String,
     pub label: String,
     pub merge: String,
+    /// `update_behind`: bring an open PR's branch up to the base when GitHub reports it
+    /// BEHIND. Defaults to `merge == "auto"`, which is where the loop already did it.
+    pub update_behind: bool,
     pub merge_label: String,
     pub setup: String,
     pub gate: String,
@@ -417,6 +432,8 @@ pub struct Repo {
     pub providers: Vec<Provider>,
     pub adopt: bool,
     pub max_inflight: u64,
+    /// Global cap on the merge queue across every target (`max_open_prs`).
+    pub max_open_prs: u64,
     pub worker_timeout: u64,
     /// opencode sessions only: past this many compaction events, the watchdog aborts the
     /// session as stalled — a read/compaction loop the model never broke out of on its
@@ -490,6 +507,7 @@ impl Repo {
         let r = Repo {
             label: cfg.str("label", "delegate:local"),
             merge: cfg.str("merge", "auto"),
+            update_behind: cfg.bool("update_behind", cfg.str("merge", "auto") == "auto"),
             merge_label: cfg.str("merge_label", "automerge"),
             setup: cfg.str("setup", ""),
             gate: cfg.str("gate", ""),
@@ -504,6 +522,7 @@ impl Repo {
             providers: cfg.providers(),
             adopt: cfg.bool("adopt", true),
             max_inflight: cfg.u64("max_inflight", u64::MAX),
+            max_open_prs: cfg.max_open_prs(),
             worker_timeout: cfg.u64("worker_timeout", 3600),
             stall_compactions: cfg.u64("stall_compactions", 10),
             stall_steps: cfg.u64("stall_steps", 60),
@@ -781,6 +800,8 @@ pub fn test_repo(root: &Path, stages: &[&str]) -> Repo {
         providers: Vec::new(),
         adopt: true,
         max_inflight: u64::MAX,
+        max_open_prs: u64::MAX,
+        update_behind: true,
         worker_timeout: 60,
         stall_compactions: 10,
         stall_steps: 60,
@@ -1064,6 +1085,24 @@ impl Layers {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn update_behind_follows_the_merge_mode_unless_set() {
+        // A behind branch is stale whoever merges it, but only `auto` used to bring it
+        // up. The default keeps that; external and pipeline opt in.
+        let d = crate::config::scratch("update-behind");
+        let mk = |toml: &str| {
+            let r = crate::config::test_repo(&d, &["a::3"]);
+            let l = layers(toml, "");
+            (l.bool("update_behind", l.str("merge", "auto") == "auto"), r)
+        };
+        assert!(mk("").0, "default merge is auto, so on");
+        assert!(!mk("merge = \"external\"").0, "external leaves a behind branch alone by default");
+        assert!(!mk("merge = \"pipeline\"").0, "so does pipeline");
+        assert!(mk("merge = \"external\"\nupdate_behind = true").0, "external can opt in");
+        assert!(!mk("merge = \"auto\"\nupdate_behind = false").0, "auto can opt out");
+        let _ = std::fs::remove_dir_all(&d);
+    }
 
     #[test]
     fn lanes_default_and_from_toml() {
@@ -1381,6 +1420,8 @@ mod tests {
     fn config_keys_are_documented() {
         const KEYS: &[&str] = &[
             "repos",
+            "max_open_prs",
+            "update_behind",
             "lanes",
             "label",
             "base",

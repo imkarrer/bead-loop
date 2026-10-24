@@ -656,13 +656,21 @@ fn reconcile_open(repo: &Repo, id: &str, f: &std::path::Path, url: &str, view: &
 
     match verdict(view) {
         "green" => {
+            // A branch behind the base is stale whoever merges it: its green is a green
+            // against an old base, and on someone else's repo the maintainer is the one
+            // looking at "out-of-date". Bring it up first, whatever the merge mode —
+            // update_behind defaults to merge == "auto", where the loop already did it.
+            if ms == "BEHIND" && repo.update_behind && !adopted {
+                if gh_ok(repo, &["pr", "update-branch", url]) {
+                    log(&format!("{}: {id}: behind {}, updated the branch, CI reruns", repo.slug, repo.base));
+                } else {
+                    log(&format!("{}: {id}: behind {}, update-branch failed", repo.slug, repo.base));
+                }
+                return;
+            }
             if repo.merge == "auto" {
                 if ms == "BEHIND" {
-                    if gh_ok(repo, &["pr", "update-branch", url]) {
-                        log(&format!("{}: {id}: updated branch, CI reruns", repo.slug));
-                    } else {
-                        log(&format!("{}: {id}: update-branch failed", repo.slug));
-                    }
+                    say(id, format!("{}: {id}: green but behind {} and update_behind is off: {url}", repo.slug, repo.base));
                 } else if gh_ok(repo, &["pr", "merge", url, "--squash", "--delete-branch"]) {
                     close_merged(repo, id, url, view);
                 } else {

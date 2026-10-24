@@ -1205,6 +1205,22 @@ pub fn dev_one(repo: &Repo, opts: &Opts, id: Option<&str>, last_id: &mut Option<
         );
         return Pass::Nothing;
     }
+    // The global cap, which max_inflight cannot express: that one counts this target
+    // alone, so a bead on a sibling target opens a second PR beside it. Set
+    // max_open_prs when the PRs land on someone else's repo and the queue would be
+    // theirs to read, not ours to drain.
+    if repo.inflight_count() >= repo.max_open_prs {
+        crate::merge::say(
+            &format!("{}/{name}-idle-global", repo.slug),
+            format!(
+                "{}: {name}: {} in the merge queue across every target (max_open_prs {}); waiting",
+                repo.slug,
+                repo.inflight_count(),
+                repo.max_open_prs
+            ),
+        );
+        return Pass::Nothing;
+    }
     let title = json.get(0).and_then(|b| b.get("title")).and_then(|t| t.as_str()).unwrap_or("").to_string();
     apply_harness_label(repo, &id, &json, &mut model);
     let branch = format!("bead/{id}");

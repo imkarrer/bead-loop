@@ -11,6 +11,7 @@ With neither, the run stops (`stage 1 names no worker`): no agent has a model of
 | Key | Default | What |
 | --- | --- | --- |
 | `repos` | `[]` | global only: the repos the lanes walk, `~` allowed |
+| `max_open_prs` | none | global only: a cap on **open PRs across every repo and target at once**, where `max_inflight` caps one target alone. Each target keeps its own merge queue, so a per-target cap of 1 still permits one PR per target. Set this to `1` when the PRs land on someone else's repository and a queue of them would be a queue of review for them rather than throughput for you. Adopted PRs are excluded, as they are from `max_inflight` |
 | `[[lanes]]` | one lane per provider named in the stages | global only: the lanes, one per model server — `name`, `models` (globs: `devbox/*`, `acbox/*`, `claude/*`, `*`), `roles` (`worker`, `reviewer`; both by default), `exclude`, `parallel` (rounds at once, default 1). Each takes the rounds whose model it matches. Unset: one lane per provider (the part before the `/`) that a stage, `conflict_worker`, `brief_model` or `research_model` names, in the order first named, each with both roles and as wide as its `[providers.NAME]` `parallel` |
 | `label` | `"delegate:local"` | `bd ready -l LABEL` picks the work; the loop claims, notes and closes beads as this actor, not as you (`BEADS_ACTOR` in its environment overrides) |
 | `base` | origin's HEAD | branch to fork from and PR into |
@@ -28,6 +29,7 @@ With neither, the run stops (`stage 1 names no worker`): no agent has a model of
 | `research_timeout` | `900` | seconds a research round may run, capped by the stage's `timeout`; past it the worker goes without a brief. A bead labelled `harness:aider` gets no research round at all: whoever filed it already named its files |
 | `research_aider` | `true` | a brief whose Files all exist puts the worker under aider (default true); `false` never switches |
 | `merge` | `"auto"` | `auto`: the watcher merges on green · `pipeline`: the loop labels, CI merges · `manual`: PR only, the bead held for you once green |
+| `update_behind` | `merge == "auto"` | when GitHub reports an open PR **BEHIND** the base, bring its branch up before anything else — its green is a green against an old base, and on someone else's repo the maintainer is the one looking at "out-of-date". On under `auto`, which is where the loop already did this; turn it on for `external` or `pipeline`, off to leave a behind branch alone |
 | `merge_label` | `"automerge"` | the label `pipeline` puts on each PR |
 | `adopt` | `true` | open `bead/*` PRs from anyone join the loop: merged on green under `auto`, labelled under `pipeline`, the bead the branch names closed; red or conflicting, held with a note for whoever opened them. They do not count toward `max_inflight` |
 | `max_inflight` | none | a cap on PRs in the merge queue before the dev lane pauses. Unset, there is no cap: bd's dependencies are the only gate on the dev lane, and the queues absorb the rest. Set it for a repo whose CI is the scarce thing |
