@@ -221,6 +221,18 @@ impl Layers {
         }
     }
 
+    /// `max_open_prs`, global only: a cap on the merge queue ACROSS EVERY TARGET,
+    /// where `max_inflight` caps one target alone. Set it to 1 when the PRs land on
+    /// someone else's repository, where a queue of them is a queue of review for
+    /// the maintainer rather than throughput for us.
+    pub fn max_open_prs(&self) -> u64 {
+        match self.global.get("max_open_prs") {
+            Some(Value::Number(n)) => n.as_u64().unwrap_or(u64::MAX),
+            Some(Value::String(s)) => s.trim().parse().unwrap_or(u64::MAX),
+            _ => u64::MAX,
+        }
+    }
+
     /// `repos`, global only, `~` expanded.
     pub fn repos(&self) -> Vec<PathBuf> {
         match self.global.get("repos") {
@@ -417,6 +429,8 @@ pub struct Repo {
     pub providers: Vec<Provider>,
     pub adopt: bool,
     pub max_inflight: u64,
+    /// Global cap on the merge queue across every target (`max_open_prs`).
+    pub max_open_prs: u64,
     pub worker_timeout: u64,
     /// opencode sessions only: past this many compaction events, the watchdog aborts the
     /// session as stalled — a read/compaction loop the model never broke out of on its
@@ -504,6 +518,7 @@ impl Repo {
             providers: cfg.providers(),
             adopt: cfg.bool("adopt", true),
             max_inflight: cfg.u64("max_inflight", u64::MAX),
+            max_open_prs: cfg.max_open_prs(),
             worker_timeout: cfg.u64("worker_timeout", 3600),
             stall_compactions: cfg.u64("stall_compactions", 10),
             stall_steps: cfg.u64("stall_steps", 60),
@@ -781,6 +796,7 @@ pub fn test_repo(root: &Path, stages: &[&str]) -> Repo {
         providers: Vec::new(),
         adopt: true,
         max_inflight: u64::MAX,
+        max_open_prs: u64::MAX,
         worker_timeout: 60,
         stall_compactions: 10,
         stall_steps: 60,
@@ -1381,6 +1397,7 @@ mod tests {
     fn config_keys_are_documented() {
         const KEYS: &[&str] = &[
             "repos",
+            "max_open_prs",
             "lanes",
             "label",
             "base",

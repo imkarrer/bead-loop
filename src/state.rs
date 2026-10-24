@@ -351,9 +351,9 @@ impl Repo {
         v.sort();
         v
     }
-    /// The whole merge queue, every target together — `status`'s count; the two
+    /// The whole merge queue, every target together — `status`'s count, and the
+    /// `max_open_prs` gate (round.rs, lanes.rs); the two
     /// `max_inflight` gates (round.rs, lanes.rs) want `inflight_count_for` instead.
-    #[allow(dead_code)]
     pub fn inflight_count(&self) -> u64 {
         self.inflight_ids().iter().filter(|id| !self.mark(id, "adopted").exists()).count() as u64 + self.proposed_ids().len() as u64
     }
@@ -632,6 +632,28 @@ mod tests {
         assert!(!repo.seat_dir("t-1").exists());
         let _ = std::fs::remove_dir_all(&d);
     }
+    #[test]
+    fn max_open_prs_counts_every_target_where_max_inflight_counts_one() {
+        // The guard rail for PRs on someone else's repo: max_inflight is per target,
+        // so 1 on each of two targets still allows two open PRs. inflight_count is the
+        // whole queue, which is what max_open_prs gates on.
+        let d = crate::config::scratch("max-open-prs");
+        let repo = crate::config::test_repo(&d, &["a::3"]);
+        write_file(&repo.inflight_path("t-1"), "https://example/pull/1\n");
+        repo.set_target("t-2", "other");
+        write_file(&repo.inflight_path("t-2"), "https://example/pull/2\n");
+
+        assert_eq!(repo.inflight_count_for(""), 1, "the default target sees its own");
+        assert_eq!(repo.inflight_count_for("other"), 1, "the sibling sees its own");
+        assert_eq!(repo.inflight_count(), 2, "the global count sees both");
+
+        // Adopted PRs are not the loop's queue, in either count.
+        write_file(&repo.inflight_path("t-3"), "https://example/pull/3\n");
+        touch(&repo.mark("t-3", "adopted"));
+        assert_eq!(repo.inflight_count(), 2, "adopted is excluded");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
     #[test]
     fn inflight_count_skips_adopted_and_markers() {
         let d = crate::config::scratch("inflight");

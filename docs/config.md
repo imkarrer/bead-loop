@@ -11,6 +11,7 @@ With neither, the run stops (`stage 1 names no worker`): no agent has a model of
 | Key | Default | What |
 | --- | --- | --- |
 | `repos` | `[]` | global only: the repos the lanes walk, `~` allowed |
+| `max_open_prs` | none | global only: a cap on **open PRs across every repo and target at once**, where `max_inflight` caps one target alone. Each target keeps its own merge queue, so a per-target cap of 1 still permits one PR per target. Set this to `1` when the PRs land on someone else's repository and a queue of them would be a queue of review for them rather than throughput for you. Adopted PRs are excluded, as they are from `max_inflight` |
 | `[[lanes]]` | one lane per provider named in the stages | global only: the lanes, one per model server — `name`, `models` (globs: `devbox/*`, `acbox/*`, `claude/*`, `*`), `roles` (`worker`, `reviewer`; both by default), `exclude`, `parallel` (rounds at once, default 1). Each takes the rounds whose model it matches. Unset: one lane per provider (the part before the `/`) that a stage, `conflict_worker`, `brief_model` or `research_model` names, in the order first named, each with both roles and as wide as its `[providers.NAME]` `parallel` |
 | `label` | `"delegate:local"` | `bd ready -l LABEL` picks the work; the loop claims, notes and closes beads as this actor, not as you (`BEADS_ACTOR` in its environment overrides) |
 | `base` | origin's HEAD | branch to fork from and PR into |
