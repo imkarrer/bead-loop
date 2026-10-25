@@ -2463,6 +2463,17 @@ case_stage_label_starts_there() {
   assert_eq "$(cut -d' ' -f3 "$TEST_CTRL/calls" | head -1)" "stub/slow" "the label floors the count past stub/fast"
   assert_match "$(bead .notes)" "label stage:senior" "noted on the bead"
 }
+case_stage_label_goes_to_its_lane() {
+  # The lane picks by the count before the label floors it: the dev lane, first in the
+  # tick, takes t-1, finds the label puts it on the Claude stage, and hands it back with
+  # the floor kept; the claude lane runs it. The dev lane never runs a Claude round.
+  setup true auto '' "$(printf '[[stages]]\nworker = "stub/fast"\nattempts = 1\n\n[[stages]]\nworker = "claude/opus"\nreviewer = "claude/opus"\nattempts = 1\nname = "frontier"\n')"
+  jq '.[0].labels=["delegate:local","stage:frontier"]' "$BD_STATE/issues.json" >"$BD_STATE/i.tmp" && mv "$BD_STATE/i.tmp" "$BD_STATE/issues.json"
+  sup --once tick
+  assert_match "$(cat "$T/sup.log")" "t-1: its stage label moved it to claude/opus, not the dev lane's; back to the queue" "the dev lane handed it back"
+  assert_eq "$(cut -d' ' -f3 "$TEST_CTRL/calls" | head -1)" "claude/opus" "no stub/fast round: straight to Claude"
+  assert_eq "$(grep -c "dev: bead t-1" "$T/sup.log")" 1 "one worker round, the claude lane's"
+}
 case_doctor() {
   # Every dependency probed, red or green: bd's version and git are real; gh auth, claude
   # auth, the opencode provider named in the stages (its /models) and the attach server
