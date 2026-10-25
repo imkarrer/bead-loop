@@ -88,6 +88,22 @@ takes several sessions at once — `claude/*`, say — not for a GPU that serves
 | `model_flag` | none | for `command` harness: a flag to pass to the command to specify the model |
 | Implicit provider rule | - | a model `NAME/model` whose NAME has no table gets one (claude: Claude Code, metered; any other: opencode, local, one slot)
 
+## Reference rate
+
+The scoreboard's **Model cost** shows what the metered models charged. A local model charges nothing, so beside it the scoreboard shows an *avoided cost*: the tokens the local models handled, priced at a reference rate you set, which is what a metered model would have charged for the same work. It is an **estimate**, labelled as one, and kept apart from the spend; the page and `bead-supervisor stats` say so.
+
+```toml
+# ~/.config/bead-loop/config.toml (global only)
+[reference_rate]          # USD per million tokens
+input = 2.00              # tokens the model reads fresh
+output = 10.00            # tokens it writes (reasoning included)
+cache_read = 0.20         # tokens the server already held; default: the input price
+```
+
+`input` and `output` are required, `cache_read` is optional, and a price that is not a non-negative number stops the run naming the key. Price it as the stage the local models stand in for, usually the last stage's worker; the loop does not know current prices, so keep the table in step with the provider's list. Unset, the scoreboard still counts the local tokens and prices nothing.
+
+What is counted: every opencode step the harness priced at $0, in every local session: workers, reviewers, gate fixes, and the rounds that were sent back, since a metered model would have billed those too. A step with a cost, and Claude Code's sessions, are metered and left out. Aider writes no token counts, so its rounds add nothing and the figure is a floor in that respect. Set `cache_read` below `input` when the metered model would cache: local servers report the prompt they already held as cache reads, which are most of the tokens, and without the setting they are priced as fresh input and the estimate runs high.
+
 ## Stages
 
 The failure count chooses the stage, the `[[stages]]` tables in order:

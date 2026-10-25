@@ -1179,6 +1179,8 @@ case_status_json_and_ui() {
   # The JSON's shape from this layout is a unit test (status::tests); here, that the
   # binary reads bd and the attached server into it, and what the UI does with it.
   setup true auto stub/reviewer "$(printf 'attach = "http://oc.test:4096"\n%s' "$(stages stub/worker:stub/reviewer:2 claude/opus::1)")"
+  # a reference rate in the global file: the scoreboard prices the local tokens in t-9's session log below
+  printf '[reference_rate]\ninput = 2\noutput = 10\ncache_read = 0.25\n' >>"$BEAD_LOOP_CONFIG/config.toml"
   R=$BEAD_LOOP_STATE/repo; wt=$R/wt/t-1; mkdir -p "$wt" "$R/beads/t-1" "$R/beads/t-3" "$R/beads/t-5" "$R/beads/t-7" "$R/inflight" "$R/review"; echo 2 >"$R/beads/t-1/failures"; echo 1 >"$R/beads/t-3/failures"; echo 2 >"$R/beads/t-7/failures"
   printf 'round 1 (stub/worker): BLOCKED: which flag?\nround 2 (stub/worker): REJECT: x.ts:1 wrong\n' >"$R/beads/t-7/notes"
   jq '. + [{id:"t-2", title:"Second", description:"y", status:"open", priority:2, labels:["delegate:local"]},
@@ -1203,11 +1205,13 @@ case_status_json_and_ui() {
   jq '. + [{id:"t-9", title:"Landed one", description:"l", status:"closed", priority:2, labels:["delegate:local"], started_at:((now-7200)|todate), closed_at:((now-3600)|todate),
           close_reason:"bead-loop: https://github.com/example/repo/pull/3 merged; checks at merge: ci=SUCCESS",
           notes:("bead-loop round 1 (stub/worker) " + ((now-5400)|strftime("%Y-%m-%dT%H:%M+00:00")) + ": gate failed twice: make")}]' "$BD_STATE/issues.json" >"$BD_STATE/i.tmp" && mv "$BD_STATE/i.tmp" "$BD_STATE/issues.json"
-  mkdir -p "$R/logs"; printf '{"a":1}\n{"b":2}\n' >"$R/logs/t-9.$(date -d @$(($(date +%s) - 7000)) +%Y%m%dT%H%M%S).worker.jsonl"; : >"$R/logs/t-9.$(date -d @$(($(date +%s) - 300)) +%Y%m%dT%H%M%S).worker.jsonl"
+  mkdir -p "$R/logs"; printf '{"a":1}\n{"type":"step_finish","part":{"tokens":{"input":1000000,"output":100000,"reasoning":0,"cache":{"read":4000000,"write":0}},"cost":0}}\n' >"$R/logs/t-9.$(date -d @$(($(date +%s) - 7000)) +%Y%m%dT%H%M%S).worker.jsonl"; : >"$R/logs/t-9.$(date -d @$(($(date +%s) - 300)) +%Y%m%dT%H%M%S).worker.jsonl"
   st=$(sup stats "$REPO")
   assert_match "$st" "24h  landed 1 (first try 0%, without Claude 100%)  rounds/landed 2.0  time to land 1h00  send-backs 1" "stats: the landing, its rounds and its hour"
   assert_match "$st" "empty rounds 1" "stats: the session the server never answered"
   assert_match "$st" "send-backs by reason: gate 1" "stats: why the round went back"
+  assert_match "$st" 'local models handled 1.0M in, 4.0M cached, 100k out · ~\$4.00 avoided (estimate, at \$2/\$10/\$0.25 per M tokens in/out/cached)' "stats: the local tokens at the reference rate, as an estimate"
+  assert_eq "$(sup --json stats "$REPO" | jq -r '.windows["7d"].avoided | [.input_tokens, .output_tokens, .cache_read_tokens, (.usd * 100 | round)] | join(" ")')" "1000000 100000 4000000 400" "stats --json: the tokens and the avoided cents"
   assert_eq "$(sup --json stats "$REPO" | jq -r '.windows["7d"].landed_by["stub/worker"], .windows["7d"].model_time.worker_rounds, .finished[0].id, .finished[0].how, .finished[0].rounds' | tr '\n' ' ')" "1 1 t-9 landed 2 " "stats --json: by model, the rounds, the finished list"
   # t-6's worker session so far: the lane carries its last lines (tail), the page shows them.
   printf '{"type":"text","part":{"text":"reading src/x.rs"}}\n' >"$R/logs/t-6.20260925T000000.worker.jsonl"
@@ -1242,6 +1246,9 @@ case_status_json_and_ui() {
   assert_match "$score" '<span class="k">gate</span><span class="bar" title="1 of 1">' "where rounds go back"
   assert_match "$score" 'class="id">t-9</td>.*<span class="chip ok">landed</span>.*<td class="num">2</td><td class="mono muted fit">stub/worker</td><td class="num">1h00</td>' "the finished row: rounds, who landed it, how long"
   assert_match "$score" '<button class="cur" onclick="setWin(.7d.)">7d</button>' "the window picker, 7d by default"
+  avoid=$(printf '%s' "$html" | tr '\n' ' ' | grep -o '<div class="avoid"[^>]*>.*' | cut -c1-900)
+  assert_match "$avoid" '<span class="n">≈ \$4.00</span><span class="k">avoided</span><span class="chip">estimate</span>' "Model cost: the avoided dollars, labelled an estimate"
+  assert_match "$avoid" '1.0M in · 4.0M cached · 100k out, priced at \$2 / \$10 / \$0.25 per M tokens' "and the tokens and the rate they were priced at"
   # The decision under Needs you: the question, its text in full, and the answer box.
   assert_match "$(printf '%s' "$html" | grep -o '<h3 class="human">Needs you<span class="n">[0-9]*</span>')" '<span class="n">2</span>' "Needs you counts the decision with the parked bead"
   dec=$(printf '%s' "$html" | tr '\n' ' ' | grep -o '<table class="decisions">.*' | cut -c1-1200)

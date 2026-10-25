@@ -20,7 +20,15 @@
 //! on an opencode provider) per-step `cost` in its `step_finish` events — nothing
 //! estimated from token counts, only what the harness already priced. A local, unmetered
 //! model naturally sums to $0.
-use crate::config::Repo;
+//!
+//! *Avoided cost* is the one estimate, kept apart from that sum: the tokens the local
+//! models handled — opencode `step_finish` events the harness priced at $0 — at the
+//! global file's `[reference_rate]`, what a metered model would have charged for them.
+//! Every local session counts, a round sent back as much as one that landed, since a
+//! metered model would have billed those too. Aider writes no token counts, so its
+//! rounds add nothing: the figure is a floor in that respect. Without a rate the tokens
+//! are counted and nothing is priced.
+use crate::config::{Rate, Repo};
 use crate::util::{mtime, now, read_to_string};
 use serde_json::{json, Map, Value};
 use std::collections::BTreeMap;
@@ -39,6 +47,51 @@ pub struct LogRound {
     pub empty: bool,
     /// what the session's own transcript says it spent, in USD; 0 for a local model
     pub cost_usd: f64,
+    /// the tokens of the steps nobody was billed for: a local model's work
+    pub unbilled: Tokens,
+}
+
+/// Tokens by how a price list bills them. `input` is what the model read fresh (a cache
+/// write counts here: it was prefilled like any input), `cache_read` what the server
+/// already held, `output` what it wrote (reasoning included: metered models bill it so).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Tokens {
+    pub input: u64,
+    pub output: u64,
+    pub cache_read: u64,
+}
+
+impl Tokens {
+    fn add(&mut self, o: Tokens) {
+        self.input += o.input;
+        self.output += o.output;
+        self.cache_read += o.cache_read;
+    }
+
+    /// What `rate` charges for these tokens, in USD.
+    fn priced(&self, rate: Rate) -> f64 {
+        (self.input as f64 * rate.input + self.output as f64 * rate.output + self.cache_read as f64 * rate.cache_read) / 1e6
+    }
+}
+
+/// The tokens a session's transcript shows no bill for: each opencode `step_finish` whose
+/// `cost` is absent or zero — a local server, which prices nothing. A step the harness
+/// priced is metered and left out, and so is Claude Code's result line, which carries its
+/// own `total_cost_usd`.
+fn unbilled_tokens(raw: &str) -> Tokens {
+    let mut sum = Tokens::default();
+    for line in raw.lines() {
+        let Ok(v) = serde_json::from_str::<Value>(line.trim()) else { continue };
+        if v.get("type").and_then(|t| t.as_str()) != Some("step_finish") {
+            continue;
+        }
+        if v.pointer("/part/cost").and_then(|c| c.as_f64()).unwrap_or(0.0) > 0.0 {
+            continue;
+        }
+        let n = |p: &str| v.pointer(&format!("/part/tokens/{p}")).and_then(|n| n.as_u64()).unwrap_or(0);
+        sum.add(Tokens { input: n("input") + n("cache/write"), output: n("output") + n("reasoning"), cache_read: n("cache/read") });
+    }
+    sum
 }
 
 /// A session's own transcript, summed: Claude Code writes one result line carrying
@@ -364,6 +417,7 @@ pub fn log_rounds(repo: &Repo) -> Vec<LogRound> {
             fix: kind == "worker-gate",
             empty: lines < 2,
             cost_usd: round_cost(&raw),
+            unbilled: unbilled_tokens(&raw),
         });
     }
     out.sort_by(|a, b| a.start.cmp(&b.start).then(a.id.cmp(&b.id)).then(a.fix.cmp(&b.fix)));
@@ -464,7 +518,15 @@ fn counts(m: &BTreeMap<String, u64>) -> Value {
 }
 
 /// The scoreboard for one window: events at or after `from`.
-fn window_json(beads: &[Bead], rounds: &[(String, LogRound)], prechecks: &[PrecheckRound], from: i64, now: i64, since: i64) -> Value {
+fn window_json(
+    beads: &[Bead],
+    rounds: &[(String, LogRound)],
+    prechecks: &[PrecheckRound],
+    rate: Option<Rate>,
+    from: i64,
+    now: i64,
+    since: i64,
+) -> Value {
     let inside = |t: i64| t >= from && t <= now;
     let mut landed = 0u64;
     let mut first_try = 0u64;
@@ -535,7 +597,9 @@ fn window_json(beads: &[Bead], rounds: &[(String, LogRound)], prechecks: &[Prech
     }
     let (mut worker_s, mut review_s, mut worker_rounds, mut review_rounds, mut empty) = (0i64, 0i64, 0u64, 0u64, 0u64);
     let (mut worker_usd, mut review_usd) = (0.0f64, 0.0f64);
+    let mut unbilled = Tokens::default();
     for (_, r) in rounds.iter().filter(|(_, r)| inside(r.start)) {
+        unbilled.add(r.unbilled);
         let d = (r.end.min(now) - r.start).max(0);
         if r.role == "worker" {
             worker_s += d;
@@ -580,6 +644,13 @@ fn window_json(beads: &[Bead], rounds: &[(String, LogRound)], prechecks: &[Prech
         "precheck": {"sent_back": precheck_sent_back, "passed": precheck_passed, "skipped": precheck_skipped},
         "holds": holds, "rebases": rebases, "escalations": escalations, "answers": answers, "interrupted": interrupted,
         "model_time": {"worker_s": worker_s, "review_s": review_s, "worker_usd": worker_usd, "review_usd": review_usd, "worker_rounds": worker_rounds, "review_rounds": review_rounds, "empty_rounds": empty},
+        // an estimate, not a bill: the local models' tokens at the reference rate; `usd` and
+        // `rate` are null until the global config sets one
+        "avoided": {
+            "input_tokens": unbilled.input, "output_tokens": unbilled.output, "cache_read_tokens": unbilled.cache_read,
+            "usd": rate.map(|r| unbilled.priced(r)),
+            "rate": rate.map(|r| json!({"input": r.input, "output": r.output, "cache_read": r.cache_read})),
+        },
         "by_repo": Value::Object(by_repo.iter().map(|(s, (l, sb, w))| (s.clone(), json!({"landed": l, "send_backs": sb, "worked": w.len()}))).collect()),
     })
 }
@@ -600,10 +671,12 @@ pub fn stats_from(inputs: &[Input], now: i64) -> Value {
         .chain(rounds.iter().map(|(_, r)| r.start))
         .min()
         .unwrap_or(now);
+    // the rate is the global file's, so every repo loaded the same one
+    let rate = inputs.first().and_then(|i| i.repo.reference_rate);
     let mut windows = Map::new();
     for (name, len) in WINDOWS {
         let from = if len == i64::MAX { i64::MIN } else { now - len };
-        windows.insert(name.into(), window_json(&beads, &rounds, &prechecks, from, now, since));
+        windows.insert(name.into(), window_json(&beads, &rounds, &prechecks, rate, from, now, since));
     }
     // Every bead the loop finished, newest first: what the page lists under the tiles.
     let mut finished: Vec<&Bead> = beads.iter().filter(|b| b.how != How::Open).collect();
@@ -663,6 +736,17 @@ fn hm(s: f64) -> String {
     }
 }
 
+/// 53271707 as `53.3M`, 812345 as `812k`.
+fn mtok(n: u64) -> String {
+    if n >= 1_000_000 {
+        format!("{:.1}M", n as f64 / 1e6)
+    } else if n >= 1000 {
+        format!("{}k", (n as f64 / 1e3).round() as u64)
+    } else {
+        n.to_string()
+    }
+}
+
 /// `stats_text`: the scoreboard as a few lines per window.
 pub fn stats_text(j: &Value) -> String {
     let mut out = String::new();
@@ -692,6 +776,26 @@ pub fn stats_text(j: &Value) -> String {
             w["send_backs"]["by_reason"].as_object().map(|m| m.iter().map(|(k, v)| format!("{k} {v}")).collect::<Vec<_>>().join(", "));
         if let Some(r) = reasons.filter(|r| !r.is_empty()) {
             out.push_str(&format!("       send-backs by reason: {r}\n"));
+        }
+        let a = &w["avoided"];
+        let tok = |k: &str| a[k].as_u64().unwrap_or(0);
+        let (t_in, t_out, t_cached) = (tok("input_tokens"), tok("output_tokens"), tok("cache_read_tokens"));
+        let spent = w["model_time"]["worker_usd"].as_f64().unwrap_or(0.0) + w["model_time"]["review_usd"].as_f64().unwrap_or(0.0);
+        if t_in + t_out + t_cached > 0 || spent > 0.0 {
+            let local = format!("local models handled {} in, {} cached, {} out", mtok(t_in), mtok(t_cached), mtok(t_out));
+            let priced = match a["usd"].as_f64() {
+                Some(usd) => {
+                    let r = |k: &str| a["rate"][k].as_f64().unwrap_or(0.0);
+                    format!(
+                        "~${usd:.2} avoided (estimate, at ${}/${}/${} per M tokens in/out/cached)",
+                        r("input"),
+                        r("output"),
+                        r("cache_read")
+                    )
+                }
+                None => "not priced: no [reference_rate] in the global config".into(),
+            };
+            out.push_str(&format!("       model cost ${spent:.2} · {local} · {priced}\n"));
         }
         let (sent_back, passed, skipped) = (
             w["precheck"]["sent_back"].as_u64().unwrap_or(0),
@@ -824,7 +928,8 @@ mod tests {
     #[test]
     fn the_scoreboard_over_a_weeks_beads() {
         let d = crate::config::scratch("stats");
-        let repo = crate::config::test_repo(&d, &["fast:rev:2", "claude/sonnet:claude/sonnet:1"]);
+        let mut repo = crate::config::test_repo(&d, &["fast:rev:2", "claude/sonnet:claude/sonnet:1"]);
+        repo.reference_rate = Some(Rate { input: 2.0, output: 10.0, cache_read: 0.25 });
         let now = parse_iso("2026-09-20T23:00:00Z").unwrap();
         let landed = "bead-loop: https://x/pull/1 merged; checks at merge: ci=SUCCESS";
         let beads =
@@ -851,10 +956,46 @@ mod tests {
         repo.set_failures("t-2", 2);
         let h = |n: i64| now - n * 3600;
         let rounds = vec![
-            LogRound { id: "t-1".into(), start: h(26), end: h(25), role: "worker", fix: false, empty: false, cost_usd: 0.25 },
-            LogRound { id: "t-1".into(), start: h(25), end: h(25) + 1800, role: "worker", fix: true, empty: false, cost_usd: 0.125 },
-            LogRound { id: "t-1".into(), start: h(24), end: h(24) + 600, role: "review", fix: false, empty: false, cost_usd: 0.5 },
-            LogRound { id: "t-5".into(), start: h(3), end: h(3), role: "worker", fix: false, empty: true, cost_usd: 0.0 },
+            LogRound {
+                id: "t-1".into(),
+                start: h(26),
+                end: h(25),
+                role: "worker",
+                fix: false,
+                empty: false,
+                cost_usd: 0.25,
+                unbilled: Tokens { input: 1_000_000, output: 100_000, cache_read: 5_000_000 },
+            },
+            LogRound {
+                id: "t-1".into(),
+                start: h(25),
+                end: h(25) + 1800,
+                role: "worker",
+                fix: true,
+                empty: false,
+                cost_usd: 0.125,
+                unbilled: Tokens { input: 500_000, output: 0, cache_read: 0 },
+            },
+            LogRound {
+                id: "t-1".into(),
+                start: h(24),
+                end: h(24) + 600,
+                role: "review",
+                fix: false,
+                empty: false,
+                cost_usd: 0.5,
+                unbilled: Tokens::default(),
+            },
+            LogRound {
+                id: "t-5".into(),
+                start: h(3),
+                end: h(3),
+                role: "worker",
+                fix: false,
+                empty: true,
+                cost_usd: 0.0,
+                unbilled: Tokens::default(),
+            },
             LogRound {
                 id: "t-3".into(),
                 start: now - 8 * 86400,
@@ -863,6 +1004,7 @@ mod tests {
                 fix: false,
                 empty: false,
                 cost_usd: 1.0,
+                unbilled: Tokens { input: 2_000_000, output: 0, cache_read: 0 },
             },
         ];
         let j = stats_from(&[Input { repo: &repo, beads, rounds, prechecks: Vec::new() }], now);
@@ -886,7 +1028,16 @@ mod tests {
             json!({"worker_s": 5400, "review_s": 600, "worker_usd": 0.375, "review_usd": 0.5, "worker_rounds": 1, "review_rounds": 1, "empty_rounds": 1}),
             "the fix session's time and cost count, not as a round; the empty one is counted apart; t-3's is outside"
         );
-        assert_eq!(w7["by_repo"]["repo"]["landed"], 2);
+        assert_eq!(
+            w7["avoided"],
+            json!({
+                "input_tokens": 1_500_000, "output_tokens": 100_000, "cache_read_tokens": 5_000_000,
+                "usd": 5.25, "rate": {"input": 2.0, "output": 10.0, "cache_read": 0.25}
+            }),
+            "the fix session's tokens count too: 1.5M x $2 + 0.1M x $10 + 5M x $0.25; t-3's are outside"
+        );
+        assert_eq!(j["windows"]["30d"]["avoided"]["usd"], 9.25, "t-3's 2M input tokens, outside 7d, are inside 30d");
+        assert_eq!(j["windows"]["24h"]["avoided"]["usd"], 0.0, "the last day holds only a review with no tokens and the empty round");
         let w24 = &j["windows"]["24h"];
         assert_eq!(w24["landed"], 0, "both landed more than a day ago");
         assert_eq!(w24["holds"], 1);
@@ -915,7 +1066,72 @@ mod tests {
         let text = stats_text(&j);
         assert!(text.contains("7d   landed 2 (first try 50%, without Claude 50%)"), "{text}");
         assert!(text.contains("send-backs by reason: blocked 1, gate 1, no commit 1"), "{text}");
+        assert!(
+            text.contains(
+                "model cost $0.88 · local models handled 1.5M in, 5.0M cached, 100k out · ~$5.25 avoided (estimate, at $2/$10/$0.25 per M tokens in/out/cached)\n"
+            ),
+            "{text}"
+        );
         let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn without_a_rate_the_local_tokens_are_counted_and_nothing_is_priced() {
+        let d = crate::config::scratch("stats-no-rate");
+        let repo = crate::config::test_repo(&d, &["fast"]);
+        let now = parse_iso("2026-09-20T23:00:00Z").unwrap();
+        let rounds = vec![LogRound {
+            id: "t-1".into(),
+            start: now - 3600,
+            end: now - 1800,
+            role: "worker",
+            fix: false,
+            empty: false,
+            cost_usd: 0.0,
+            unbilled: Tokens { input: 40_000, output: 2_000, cache_read: 900_000 },
+        }];
+        let j = stats_from(&[Input { repo: &repo, beads: Vec::new(), rounds, prechecks: Vec::new() }], now);
+        let a = &j["windows"]["24h"]["avoided"];
+        assert_eq!((&a["input_tokens"], &a["output_tokens"], &a["cache_read_tokens"]), (&json!(40_000), &json!(2_000), &json!(900_000)));
+        assert!(a["usd"].is_null() && a["rate"].is_null(), "no [reference_rate]: no dollars, not $0: {a}");
+        let text = stats_text(&j);
+        assert!(text.contains("local models handled 40k in, 900k cached, 2k out · not priced: no [reference_rate]"), "{text}");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn only_steps_nobody_billed_are_unbilled_tokens() {
+        let step = |cost: &str| {
+            format!("{{\"type\":\"step_finish\",\"part\":{{\"tokens\":{{\"input\":100,\"output\":20,\"reasoning\":5,\"cache\":{{\"read\":400,\"write\":7}}}}{cost}}}}}\n")
+        };
+        assert_eq!(unbilled_tokens(""), Tokens::default(), "no session ran");
+        assert_eq!(
+            unbilled_tokens(&step(",\"cost\":0")),
+            Tokens { input: 107, output: 25, cache_read: 400 },
+            "a cache write was prefilled like input, reasoning is billed as output"
+        );
+        assert_eq!(unbilled_tokens(&step("")), Tokens { input: 107, output: 25, cache_read: 400 }, "no cost field is no bill");
+        assert_eq!(unbilled_tokens(&step(",\"cost\":0.01")), Tokens::default(), "a priced step is a metered model's");
+        let both = format!("{}{}{}", step(",\"cost\":0"), step(",\"cost\":0.5"), step(",\"cost\":0"));
+        assert_eq!(unbilled_tokens(&both), Tokens { input: 214, output: 50, cache_read: 800 }, "summed across the steps nobody billed");
+        let claude = "{\"is_error\":false,\"total_cost_usd\":1.5,\"usage\":{\"input_tokens\":50,\"output_tokens\":900,\"cache_read_input_tokens\":7000}}\n";
+        assert_eq!(unbilled_tokens(claude), Tokens::default(), "Claude Code's result line is priced by Claude Code");
+        assert_eq!(
+            unbilled_tokens("Applied edit to x.ts\nTokens: 1.2k sent, 340 received.\n"),
+            Tokens::default(),
+            "aider writes prose, no counts"
+        );
+        assert_eq!(unbilled_tokens("{\"type\":\"step_finish\",\"part\":{}}\n"), Tokens::default(), "a step with no tokens adds none");
+    }
+
+    #[test]
+    fn tokens_are_priced_per_million() {
+        let t = Tokens { input: 1_500_000, output: 100_000, cache_read: 5_000_000 };
+        assert_eq!(t.priced(Rate { input: 2.0, output: 10.0, cache_read: 0.25 }), 5.25);
+        assert_eq!(t.priced(Rate { input: 2.0, output: 10.0, cache_read: 2.0 }), 14.0, "cache_read at the input price: no discount");
+        assert_eq!(Tokens::default().priced(Rate { input: 3.0, output: 15.0, cache_read: 0.3 }), 0.0);
+        let shown: Vec<String> = [999, 1_499, 812_345, 53_271_707].into_iter().map(mtok).collect();
+        assert_eq!(shown, ["999", "1k", "812k", "53.3M"]);
     }
 
     #[test]
@@ -925,7 +1141,10 @@ mod tests {
         let logs = repo.rs.join("logs");
         let w = |name: &str, body: &str| std::fs::write(logs.join(name), body).unwrap();
         w("t-1.2.20260919T100000.setup", "npm ci");
-        w("t-1.2.20260919T100000.worker.jsonl", "{\"a\":1}\n{\"b\":2}\n");
+        w(
+            "t-1.2.20260919T100000.worker.jsonl",
+            "{\"a\":1}\n{\"type\":\"step_finish\",\"part\":{\"tokens\":{\"input\":100,\"output\":20,\"reasoning\":5,\"cache\":{\"read\":400,\"write\":7}},\"cost\":0}}\n",
+        );
         w("t-1.2.20260919T100000.worker.jsonl.err", "");
         w("t-1.2.20260919T100000.gate", "ok");
         w("t-1.2.20260919T100000.worker-gate.jsonl", "{\"a\":1}\n{\"b\":2}\n");
@@ -948,6 +1167,8 @@ mod tests {
         );
         assert_eq!(r[0].cost_usd, 0.42, "Claude Code's result line");
         assert_eq!(r[1].cost_usd, 0.0, "no cost field: nothing priced this");
+        assert_eq!(r[1].unbilled, Tokens { input: 107, output: 25, cache_read: 400 }, "the step nobody billed");
+        assert_eq!(r[0].unbilled, Tokens::default(), "Claude Code's session is priced, not unbilled");
         assert_eq!(r[1].start, parse_stamp("20260919T100000").unwrap());
         assert!(r[1].end >= r[1].start);
         let _ = std::fs::remove_dir_all(&d);

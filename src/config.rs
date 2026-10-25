@@ -107,6 +107,18 @@ impl Provider {
     }
 }
 
+/// What a metered model would have charged for the tokens a local one handled, in USD per
+/// million tokens: the global file's `[reference_rate]`. The scoreboard prices the local
+/// models' tokens at it to show the avoided cost, an estimate and labelled as one.
+/// `cache_read` is the price of a token the server already held; unset, it is `input`
+/// (no discount, which overstates against a provider that caches).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Rate {
+    pub input: f64,
+    pub output: f64,
+    pub cache_read: f64,
+}
+
 /// A model name resolved: its provider, the harness its session runs under, and the
 /// model as that harness wants it spelled.
 #[derive(Clone, Debug, PartialEq)]
@@ -311,6 +323,35 @@ impl Layers {
         Ok(out)
     }
 
+    /// `[reference_rate]`, global file only: `input` and `output` (both required) and
+    /// `cache_read`, USD per million tokens. `None` when the table is absent, so the
+    /// scoreboard counts the local models' tokens and prices nothing. A price that is not a
+    /// non-negative number stops the run, naming the key.
+    pub fn reference_rate(&self) -> Option<Rate> {
+        self.try_reference_rate().unwrap_or_else(|e| die(&e))
+    }
+
+    pub fn try_reference_rate(&self) -> Result<Option<Rate>, String> {
+        let Some(v) = self.global.get("reference_rate") else { return Ok(None) };
+        let Value::Object(map) = v else { return Err("[reference_rate]: a table of input, output and cache_read prices".into()) };
+        let price = |k: &str| -> Result<Option<f64>, String> {
+            let Some(x) = map.get(k) else { return Ok(None) };
+            let n = match x {
+                Value::Number(n) => n.as_f64(),
+                Value::String(s) => s.trim().parse().ok(),
+                _ => None,
+            };
+            match n {
+                Some(n) if n.is_finite() && n >= 0.0 => Ok(Some(n)),
+                _ => Err(format!("[reference_rate]: {k} = {}: a price in USD per million tokens", scalar(x))),
+            }
+        };
+        let (Some(input), Some(output)) = (price("input")?, price("output")?) else {
+            return Err("[reference_rate]: input and output are both required, in USD per million tokens".into());
+        };
+        Ok(Some(Rate { input, output, cache_read: price("cache_read")?.unwrap_or(input) }))
+    }
+
     /// `[targets.NAME]` tables, repo file only — a target's configuration lives beside the
     /// beads it comes from, never in the global file.
     pub fn targets(&self) -> BTreeMap<String, Target> {
@@ -440,6 +481,8 @@ pub struct Repo {
     pub research_timeout: u64,
     /// the `[providers.NAME]` tables of the global file
     pub providers: Vec<Provider>,
+    /// the global file's `[reference_rate]`: what the scoreboard prices a local model's tokens at
+    pub reference_rate: Option<Rate>,
     pub adopt: bool,
     pub max_inflight: u64,
     /// Global cap on the merge queue across every target (`max_open_prs`).
@@ -531,6 +574,7 @@ impl Repo {
             research_aider: cfg.bool("research_aider", true),
             research_timeout: cfg.u64("research_timeout", 900),
             providers: cfg.providers(),
+            reference_rate: cfg.reference_rate(),
             adopt: cfg.bool("adopt", true),
             max_inflight: cfg.u64("max_inflight", u64::MAX),
             max_open_prs: cfg.max_open_prs(),
@@ -811,6 +855,7 @@ pub fn test_repo(root: &Path, stages: &[&str]) -> Repo {
         research_aider: true,
         research_timeout: 900,
         providers: Vec::new(),
+        reference_rate: None,
         adopt: true,
         max_inflight: u64::MAX,
         max_open_prs: u64::MAX,
@@ -1164,6 +1209,27 @@ mod tests {
         let g: toml::Table = global.parse().unwrap();
         let r: toml::Table = repo.parse().unwrap();
         Layers { global: serde_json::to_value(g).unwrap(), repo: serde_json::to_value(r).unwrap() }
+    }
+
+    #[test]
+    fn reference_rate_is_global_and_prices_in_usd_per_million() {
+        assert_eq!(layers("", "").reference_rate(), None, "no table, no price");
+        let l = layers("[reference_rate]\ninput = 2\noutput = 10.0\ncache_read = 0.2", "");
+        assert_eq!(l.reference_rate(), Some(Rate { input: 2.0, output: 10.0, cache_read: 0.2 }), "an integer and a float both read");
+        let l = layers("[reference_rate]\ninput = 3\noutput = 15", "");
+        assert_eq!(l.reference_rate().unwrap().cache_read, 3.0, "cache_read unset: no discount, the input price");
+        assert_eq!(layers("", "[reference_rate]\ninput = 3\noutput = 15").reference_rate(), None, "the global file only");
+    }
+
+    #[test]
+    fn a_reference_rate_that_is_not_a_price_names_the_key() {
+        let err = layers("[reference_rate]\ninput = 2", "").try_reference_rate().unwrap_err();
+        assert!(err.contains("input and output are both required"), "{err}");
+        let err = layers("[reference_rate]\ninput = 2\noutput = \"cheap\"", "").try_reference_rate().unwrap_err();
+        assert!(err.contains("output = cheap"), "{err}");
+        let err = layers("[reference_rate]\ninput = -1\noutput = 5", "").try_reference_rate().unwrap_err();
+        assert!(err.contains("input = -1"), "a negative price is not one: {err}");
+        assert!(layers("reference_rate = 3", "").try_reference_rate().is_err(), "a scalar is not a table");
     }
 
     #[test]
