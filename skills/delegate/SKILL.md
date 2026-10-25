@@ -7,7 +7,7 @@ description: Writing and labelling a bead for the loop - delegate:local hands it
 
 # Handing a bead to the loop
 
-`bd ready -l delegate:local` is the queue. A bead the loop may work carries that label with its blockers closed, a DESCRIPTION that names the files and the change, and ACCEPTANCE CRITERIA that are a command or a grep. The stages are in `~/.config/bead-loop/config.toml`: the small local model first, the larger local model after its failures, Claude last. Every send-back (the gate failing twice, a REJECT from review, CI red) is one failure, and moves the bead one stage on.
+`bd ready -l <label>` is the queue, `label` from the repo's `.bead-loop.toml` (`delegate:local` unless set). A bead the loop may work carries that label with its blockers closed, a DESCRIPTION that names the files and the change, and ACCEPTANCE CRITERIA that are a command or a grep. The stages are the `[[stages]]` of `~/.config/bead-loop/config.toml`, usually a local model first and Claude last. Every send-back (the gate failing twice, a REJECT from review, CI red) is one failure, and moves the bead one stage on.
 
 # Picking the harness
 
