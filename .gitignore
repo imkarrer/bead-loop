@@ -3,3 +3,8 @@
 
 # cargo
 target/
+
+# nix build links, and the stack launcher's staging (flake.nix)
+result
+result-*
+.agent-stacks/
