@@ -1638,6 +1638,36 @@ case_conflicting_pr_rebased_by_the_last_stage() {
   assert_eq "$(cut -d' ' -f3 "$TEST_CTRL/calls" | head -1)" "stub/senior" "conflict_worker does the rebase"
 }
 
+case_feedback_review_sends_back_to_same_pr() {
+  # bl-yla: a maintainer's CHANGES_REQUESTED review on an open PR of the loop's own sends
+  # the bead back to dev, on the same branch, with the review as the work order — no
+  # second PR, and the comment is never worked twice.
+  setup true auto stub/reviewer "$(printf 'max_inflight = 3\n%s' "$(stages stub/fast:stub/reviewer:2 claude/sonnet:claude/sonnet:1)")"
+  sup work "$REPO"; assert_file "$BEAD_LOOP_STATE/repo/inflight/t-1" "PR up"
+  jq '.reviews=[{state:"CHANGES_REQUESTED", body:"please add tests", author:{login:"maintainer"}, submittedAt:"2026-01-01T00:00:00Z"}]' "$TEST_CTRL/pr.json" >"$TEST_CTRL/pr.tmp" && mv "$TEST_CTRL/pr.tmp" "$TEST_CTRL/pr.json"
+  sup reconcile "$REPO"
+  assert_eq "$(bead .status)" open "back in the dev queue"
+  assert_nofile "$BEAD_LOOP_STATE/repo/inflight/t-1" "out of the merge queue"
+  assert_file "$BEAD_LOOP_STATE/repo/reopen/t-1" "the open PR's url is remembered"
+  assert_file "$BEAD_LOOP_STATE/repo/feedback/t-1" "the watermark is written at send-back, not after the round"
+  assert_eq "$(cat "$BEAD_LOOP_STATE/repo/beads/t-1/failures" 2>/dev/null || echo 0)" 0 "no failure charged"
+  assert_match "$(bead .notes)" "comment(s) from maintainer on https://github.com/example/repo/pull/7; back to dev" "noted"
+  assert_match "$(cat "$T/sup.log")" "comment(s) on https://github.com/example/repo/pull/7 from maintainer → dev queue" "logged"
+  : >"$TEST_CTRL/gh.log"; : >"$TEST_CTRL/calls"; printf 'approve\napprove\n' >"$TEST_CTRL/review"; sup work "$REPO"
+  assert_eq "$(cut -d' ' -f3,4 "$TEST_CTRL/calls" | head -1)" "claude/sonnet claude" "the feedback round runs on the last stage's worker (conflict_worker's precedent)"
+  assert_match "$(cat "$TEST_CTRL/prompt.1")" "maintainer said:" "the author, verbatim"
+  assert_match "$(cat "$TEST_CTRL/prompt.1")" "please add tests" "the comment body, not a summary"
+  assert_file "$BEAD_LOOP_STATE/repo/inflight/t-1" "back in the merge queue"
+  assert_eq "$(cat "$BEAD_LOOP_STATE/repo/inflight/t-1")" "https://github.com/example/repo/pull/7" "the same PR"
+  assert_nofile "$BEAD_LOOP_STATE/repo/reopen/t-1" "reopen cleared once reused"
+  assert_nofile "$BEAD_LOOP_STATE/repo/inflight/.t-1.feedback" "feedback mark cleared"
+  assert_eq "$(grep -c '^pr create' "$TEST_CTRL/gh.log")" 0 "gh pr create not called a second time"
+  # The same review, still on the PR, is not worked again: the watermark holds.
+  : >"$TEST_CTRL/calls"; sup reconcile "$REPO"
+  assert_nofile "$BEAD_LOOP_STATE/repo/reopen/t-1" "no second send-back for the same review"
+  assert_eq "$(bead .status)" in_progress "stays in the merge queue"
+}
+
 case_conflict_pr_closed_parks() {
   # bl-eoq, 21 Sep: PR #64 conflicted, got the conflict mark, then closed on its own (the
   # work had landed on main via PR #63 instead) — and every round after that said "no

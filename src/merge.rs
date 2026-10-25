@@ -642,6 +642,15 @@ fn reconcile_open(repo: &Repo, id: &str, f: &std::path::Path, url: &str, view: &
         return;
     }
 
+    // A maintainer's review or comment on a PR of our own, not yet acted on: the same
+    // send-back the CONFLICTING arm makes for a rebase, but reused for a work order
+    // instead — reopen/ID remembers the url so the next round pushes to it rather than
+    // opening a second PR (round.rs), and feedback/ID (the watermark) means a comment is
+    // never worked twice even if that round fails.
+    if !adopted && check_feedback(repo, id, f, url) {
+        return;
+    }
+
     // Special handling for mergeable UNKNOWN or mergeStateStatus DIRTY/UNKNOWN with empty rollup:
     // GitHub computes mergeability lazily, so right after base moves, it reports UNKNOWN
     // and zero checks falls through to nocheck, but this should be treated as pending
@@ -842,6 +851,139 @@ fn reconcile_open(repo: &Repo, id: &str, f: &std::path::Path, url: &str, view: &
     }
 }
 
+/// One review, review comment, issue comment, or inline review comment on a PR — always
+/// from someone other than the loop's own `gh` login, and carrying when it was made, so
+/// the watermark can tell a worked comment from a new one.
+struct FeedbackItem {
+    author: String,
+    at: String,
+    text: String,
+}
+
+/// `gh pr view URL --json reviews,comments` for reviews (`CHANGES_REQUESTED` or a body)
+/// and issue comments, plus `gh api .../pulls/N/comments` for inline review comments
+/// (path + line), which `pr view` does not carry. Every item not authored by the loop's
+/// own account (`gh api user -q .login`).
+fn pr_feedback(repo: &Repo, url: &str) -> Vec<FeedbackItem> {
+    let login = crate::config::gh_login();
+    let mut items = Vec::new();
+    if let Ok(o) = gh(repo, &["pr", "view", url, "--json", "reviews,comments"]) {
+        if o.status.success() {
+            if let Ok(v) = serde_json::from_str::<Value>(&stdout_str(&o)) {
+                for r in v.get("reviews").and_then(|a| a.as_array()).into_iter().flatten() {
+                    let state = r.get("state").and_then(|s| s.as_str()).unwrap_or("");
+                    let body = r.get("body").and_then(|s| s.as_str()).unwrap_or("").trim();
+                    if state != "CHANGES_REQUESTED" && body.is_empty() {
+                        continue;
+                    }
+                    items.push(FeedbackItem {
+                        author: r.get("author").and_then(|a| a.get("login")).and_then(|l| l.as_str()).unwrap_or("").to_string(),
+                        at: r.get("submittedAt").and_then(|s| s.as_str()).unwrap_or("").to_string(),
+                        text: if body.is_empty() { "requested changes, no comment attached".to_string() } else { body.to_string() },
+                    });
+                }
+                for c in v.get("comments").and_then(|a| a.as_array()).into_iter().flatten() {
+                    let body = c.get("body").and_then(|s| s.as_str()).unwrap_or("").trim();
+                    if body.is_empty() {
+                        continue;
+                    }
+                    items.push(FeedbackItem {
+                        author: c.get("author").and_then(|a| a.get("login")).and_then(|l| l.as_str()).unwrap_or("").to_string(),
+                        at: c.get("createdAt").and_then(|s| s.as_str()).unwrap_or("").to_string(),
+                        text: body.to_string(),
+                    });
+                }
+            }
+        }
+    }
+    if let Some(n) = url.rsplit('/').next().filter(|n| !n.is_empty()) {
+        if let Ok(o) = gh(repo, &["api", &format!("repos/{}/pulls/{n}/comments", repo.pr_repo)]) {
+            if o.status.success() {
+                if let Ok(arr) = serde_json::from_str::<Vec<Value>>(&stdout_str(&o)) {
+                    for c in arr {
+                        let body = c.get("body").and_then(|s| s.as_str()).unwrap_or("").trim();
+                        if body.is_empty() {
+                            continue;
+                        }
+                        let path = c.get("path").and_then(|s| s.as_str()).unwrap_or("");
+                        let text = match (path, c.get("line").and_then(|l| l.as_i64())) {
+                            ("", _) => body.to_string(),
+                            (p, Some(l)) => format!("{p}:{l}: {body}"),
+                            (p, None) => format!("{p}: {body}"),
+                        };
+                        items.push(FeedbackItem {
+                            author: c.get("user").and_then(|u| u.get("login")).and_then(|l| l.as_str()).unwrap_or("").to_string(),
+                            at: c.get("created_at").and_then(|s| s.as_str()).unwrap_or("").to_string(),
+                            text,
+                        });
+                    }
+                }
+            }
+        }
+    }
+    items.retain(|i| !i.author.is_empty());
+    fresh_feedback(items, None, login.as_deref())
+}
+
+/// The pure filter behind feedback: drop anything from the loop's own account, and
+/// anything not strictly newer than the watermark (`None` watermark keeps everything —
+/// a PR adopted mid-thread has no prior work to avoid repeating).
+fn fresh_feedback(items: Vec<FeedbackItem>, watermark: Option<&str>, login: Option<&str>) -> Vec<FeedbackItem> {
+    items
+        .into_iter()
+        .filter(|i| login != Some(i.author.as_str()))
+        .filter(|i| watermark.map(|w| i.at.as_str() > w).unwrap_or(true))
+        .collect()
+}
+
+/// The work order a feedback round carries under the bead: the comments verbatim, not
+/// summarised — the maintainer's words are the instruction.
+fn feedback_order(items: &[FeedbackItem]) -> String {
+    let body = items.iter().map(|i| format!("{} said:\n{}", i.author, i.text)).collect::<Vec<_>>().join("\n\n---\n\n");
+    format!(
+        "\n\nA maintainer commented on this branch's open pull request. Their words below are the work order for this round, verbatim; address every point raised, do not summarise them away. Then run the gate if one is given, make sure the acceptance criteria still hold, and end with DONE: <what you changed> or BLOCKED: <note>.\n\n<feedback>\n{body}\n</feedback>"
+    )
+}
+
+/// A review `CHANGES_REQUESTED` or with a body, an issue comment, or an inline review
+/// comment on a PR of the loop's own, from someone other than the loop's own account and
+/// newer than the watermark: back to dev on the same branch with the comments as the work
+/// order, the model that does a rebase (a maintainer's note is at least as much judgement).
+/// `true` when it sent the bead back (the caller returns without reaching the verdict).
+fn check_feedback(repo: &Repo, id: &str, f: &std::path::Path, url: &str) -> bool {
+    if !repo.feedback {
+        return false;
+    }
+    let watermark = repo.feedback_watermark(id);
+    let mut fresh: Vec<FeedbackItem> = fresh_feedback(pr_feedback(repo, url), watermark.as_deref(), None);
+    if fresh.is_empty() {
+        return false;
+    }
+    fresh.sort_by(|a, b| a.at.cmp(&b.at));
+    let newest = fresh.last().map(|i| i.at.clone()).unwrap_or_default();
+    repo.set_feedback_watermark(id, &newest);
+    let _ = std::fs::remove_file(f);
+    for m in ["nocheck", "red", "held"] {
+        let _ = std::fs::remove_file(repo.mark(id, m));
+    }
+    touch(&repo.mark(id, "fixing"));
+    write_file(&repo.mark(id, "feedback"), &feedback_order(&fresh));
+    write_file(&repo.reopen_path(id), &format!("{url}\n"));
+    repo.release(id);
+    let mut authors: Vec<String> = fresh.iter().map(|i| i.author.clone()).collect();
+    authors.sort();
+    authors.dedup();
+    bd_note(
+        repo,
+        id,
+        &format!("bead-loop {}: {} comment(s) from {} on {url}; back to dev", date_iminutes(), fresh.len(), authors.join(", ")),
+    );
+    bd_status(repo, id, "open");
+    log(&format!("{}: {id}: {} comment(s) on {url} from {} → dev queue", repo.slug, fresh.len(), authors.join(", ")));
+    repo.wake();
+    true
+}
+
 /// When the PR was first seen green under `pipeline`: a marker beside the inflight file.
 fn green_since(repo: &Repo, id: &str) -> i64 {
     let m = repo.mark(id, "green");
@@ -854,6 +996,26 @@ fn green_since(repo: &Repo, id: &str) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn item(author: &str, at: &str) -> FeedbackItem {
+        FeedbackItem { author: author.to_string(), at: at.to_string(), text: "x".to_string() }
+    }
+
+    #[test]
+    fn fresh_feedback_watermark_and_author() {
+        // nothing newer than the watermark = no round
+        let items = vec![item("maintainer", "2026-10-01T00:00:00Z")];
+        assert!(fresh_feedback(items, Some("2026-10-01T00:00:00Z"), None).is_empty());
+
+        // a comment strictly newer than the watermark = a round
+        let items = vec![item("maintainer", "2026-10-02T00:00:00Z")];
+        assert_eq!(fresh_feedback(items, Some("2026-10-01T00:00:00Z"), None).len(), 1);
+
+        // the loop's own account is never feedback, however fresh
+        let items = vec![item("bead-loop-bot", "2026-10-02T00:00:00Z")];
+        assert!(fresh_feedback(items, Some("2026-10-01T00:00:00Z"), Some("bead-loop-bot")).is_empty());
+    }
+
     #[test]
     fn branch_ids() {
         assert_eq!(bead_id_of_branch("bead/t-9-some-slug").as_deref(), Some("t-9"));

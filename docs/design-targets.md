@@ -124,7 +124,7 @@ The watcher's verdicts, against today's table:
 | conflicts with base | rebase round | rebase round |
 | green | merge | **nothing**: "awaiting the maintainer, N days" on the page; no hold, no note |
 | no checks / pending > 2h | held | **nothing** — their CI is their business |
-| review `CHANGES_REQUESTED` | — | later: the review's comments as a send-back note (a follow-up bead, not this one) |
+| review `CHANGES_REQUESTED`, a review comment, an issue comment, or an inline comment, from someone other than the loop | — | send back, on the same branch, with the comment(s) verbatim as the work order (`feedback`, default on; the fix pushes to the same PR, same as a CI red send-back) |
 
 Not a hold: a hold has a backoff and is retried; this is a wait with no timeout of ours,
 and the page shows it as such — with the age, so a PR nobody has looked at in a month is

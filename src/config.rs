@@ -66,6 +66,7 @@ pub struct Target {
     pub max_inflight: Option<u64>,
     pub open_pr: Option<String>,
     pub pr_style: Option<String>,
+    pub feedback: Option<bool>,
 }
 
 /// One `[providers.NAME]` table in the global file: a model endpoint — how its sessions
@@ -340,6 +341,11 @@ impl Layers {
                             .and_then(|x| x.as_u64().or_else(|| x.as_str().and_then(|s| s.trim().parse().ok()))),
                         open_pr: v.get("open_pr").map(scalar),
                         pr_style: v.get("pr_style").map(scalar),
+                        feedback: v.get("feedback").and_then(|x| match x {
+                            Value::Bool(b) => Some(*b),
+                            Value::String(s) => Some(s == "true"),
+                            _ => None,
+                        }),
                     },
                 );
             }
@@ -409,6 +415,10 @@ pub struct Repo {
     /// BEHIND. Defaults to `merge == "auto"`, which is where the loop already did it.
     pub update_behind: bool,
     pub merge_label: String,
+    /// a maintainer's review or comment on an open PR of the loop's own sends the bead
+    /// back to dev, on the same branch, with the comments as the work order; off is
+    /// today's behaviour (CI colour only). default true
+    pub feedback: bool,
     pub setup: String,
     pub gate: String,
     pub model: String,
@@ -509,6 +519,7 @@ impl Repo {
             merge: cfg.str("merge", "auto"),
             update_behind: cfg.bool("update_behind", cfg.str("merge", "auto") == "auto"),
             merge_label: cfg.str("merge_label", "automerge"),
+            feedback: cfg.bool("feedback", true),
             setup: cfg.str("setup", ""),
             gate: cfg.str("gate", ""),
             on_exhaust: cfg.str("on_exhaust", "park"),
@@ -636,6 +647,7 @@ impl Repo {
         r.gate = target.gate.clone().unwrap_or(r.gate);
         r.merge = target.merge.clone().unwrap_or(r.merge);
         r.merge_label = target.merge_label.clone().unwrap_or(r.merge_label);
+        r.feedback = target.feedback.unwrap_or(r.feedback);
         r.adopt = target.adopt.unwrap_or(r.adopt);
         r.max_inflight = target.max_inflight.unwrap_or(r.max_inflight);
         r.open_pr = Some(resolve_open_pr(target.open_pr.as_deref(), &r.pr_repo, gh_login().as_deref()));
@@ -696,7 +708,7 @@ impl Repo {
 /// replaces the one under `beads/ID/`, and a history is appended to rather than replaced.
 /// `attempts/` is older than everything: its counter goes only where there is none.
 pub fn make_state_dirs(rs: &Path) {
-    for d in ["inflight", "logs", "wt", "review", "beads", "held", "parked", "rejoin", "target", "proposed"] {
+    for d in ["inflight", "logs", "wt", "review", "beads", "held", "parked", "rejoin", "target", "proposed", "reopen", "feedback"] {
         let _ = std::fs::create_dir_all(rs.join(d));
     }
     carry_into_beads(rs, "failures", failures_file, true);
@@ -787,6 +799,7 @@ pub fn test_repo(root: &Path, stages: &[&str]) -> Repo {
         label: "delegate:local".into(),
         merge: "auto".into(),
         merge_label: "automerge".into(),
+        feedback: true,
         setup: String::new(),
         gate: String::new(),
         on_exhaust: "park".into(),
@@ -890,7 +903,7 @@ fn remote_owner_repo(dir: &Path, remote: &str) -> String {
 /// This process's `gh api user -q .login`, cached after the first call — a target whose
 /// `open_pr` is unset checks `pr_repo`'s owner against it. `None` on a failed call (no
 /// `gh`, not logged in, no network); the caller treats that as a foreign owner.
-fn gh_login() -> Option<String> {
+pub(crate) fn gh_login() -> Option<String> {
     static LOGIN: OnceLock<Option<String>> = OnceLock::new();
     LOGIN
         .get_or_init(|| {
@@ -1440,6 +1453,7 @@ mod tests {
             "research_aider",
             "merge",
             "merge_label",
+            "feedback",
             "adopt",
             "max_inflight",
             "worker_timeout",
