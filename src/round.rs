@@ -1467,7 +1467,7 @@ pub fn dev_one(repo: &Repo, opts: &Opts, id: Option<&str>, last_id: &mut Option<
     }
     // The gate gets one fix round inside the lane: a compiler message is the cheapest review there is.
     let gate_log = std::path::PathBuf::from(format!("{}.gate", logf.display()));
-    let mut final_text = r.text;
+    let mut final_text = r.full;
     if !run_gate(repo, &wt, &gate_log) {
         cut_short(repo, &id);
         log(&format!("{}: {id}: gate failed, fix round", repo.slug));
@@ -1513,7 +1513,7 @@ pub fn dev_one(repo: &Repo, opts: &Opts, id: Option<&str>, last_id: &mut Option<
             send_back(repo, &id, &wt, false, &format!("{note}{pm}"), &model, st.last, Some(&logf));
             return Pass::Worked;
         }
-        final_text = r2.text;
+        final_text = r2.full;
     }
 
     // Into the review queue, with the worker's last words for the reviewer.
@@ -1543,7 +1543,7 @@ pub fn dev_one(repo: &Repo, opts: &Opts, id: Option<&str>, last_id: &mut Option<
             let why = if pc.empty { "no answer".to_string() } else { format!("exited {}", pc.rc) };
             log(&format!("{}: {id}: precheck ({pm}) skipped: {why}", repo.slug));
         } else {
-            match precheck_verdict(&pc.text) {
+            match precheck_verdict(&pc.full) {
                 Precheck::Pass => log(&format!("{}: {id}: precheck ({pm}): PASS", repo.slug)),
                 Precheck::Unparsed => log(&format!("{}: {id}: precheck ({pm}) skipped: no verdict line", repo.slug)),
                 Precheck::SendBack(block) => {
@@ -1750,8 +1750,11 @@ pub fn review_one(repo: &Repo, opts: &Opts, id: Option<&str>, lane: Option<&Lane
             );
             return Pass::Worked;
         }
-        repo.seat_set_verdict(&id, seat, r.text.trim());
-        let approved = approves(&r.text);
+        // The whole reply, not `r.text`'s last twenty lines: a REJECT: line heads a work order
+        // that runs longer than that, and the bead was sent back "rejected:" with nothing
+        // under it (lib-06g.1 and eleven others, 22-25 Oct 2026).
+        repo.seat_set_verdict(&id, seat, r.full.trim());
+        let approved = approves(&r.full);
         log(&format!("{}: {id}: seat {seat} ({review_model}) {}", repo.slug, if approved { "approved" } else { "rejected" }));
     }
 

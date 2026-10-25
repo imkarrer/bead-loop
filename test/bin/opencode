@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 # Stub opencode for bead-loop tests. `run` only. Behaviour from $TEST_CTRL:
 #   worker      one line per round, the last line for the rest: done | blocked | nocommit | uncommitted |
-#               hang | crash | server-error | stall   (what the implementor leaves behind; stall loops
-#               tool_use/compaction events forever, no edit, until the watchdog or a stop kills it)
+#               longdone (DONE, then more than twenty lines) | hang | crash | server-error | stall
+#               (what the implementor leaves behind; stall loops tool_use/compaction events
+#               forever, no edit, until the watchdog or a stop kills it)
 #   abort-delay seconds the server takes for the next abort, once (curl stub): the stop's race
 #   review      one line per round: approve | explained (a line of reasoning, then APPROVE) | reject | reject2 |
+#               longapprove | longreject (the verdict line, then more than twenty lines) |
 #               hang | crash | server-error | silent
 #   brief       shape (default: WHAT HAPPENED / WHY / QUESTION) | plain (no shape) | crash
 #   postmortem  plain (three numbered lines, default) | crash | server-error
@@ -44,6 +46,9 @@ case $agent in
     case $mode in
       blocked) say "I looked."; say "BLOCKED: lib/x.ts:3 has no such flag" ;;
       nocommit) say "DONE: nothing to do" ;;
+      longdone)   # a DONE line with more than twenty lines of evidence under it
+        echo "work" >>"$dir/work.txt"; git -C "$dir" add -A && git -C "$dir" commit -qm "work: long report"
+        say "DONE: acceptance check printed ok"; say "$(seq -f "evidence line %g" 25)" ;;
       hang) say "working on it"; sleep 30 ;;   # said something, then the clock or a stop ends it
       stall)   # an endless read/compaction loop, no edit: the watchdog trips well before worker_timeout
         while :; do
@@ -66,6 +71,8 @@ case $agent in
     case $v in
       approve) say "APPROVE: checked every criterion" ;;
       explained) say "I read the diff and ran the check."; say "APPROVE: checked every criterion" ;;   # its reasoning first (26 Sep: bl-vol)
+      longapprove) say "APPROVE: checked every criterion"; say "$(seq -f "checked line %g" 25)" ;;   # its verdict first, then more than twenty lines
+      longreject) say "REJECT: work.txt:1 wrong, fix it"; say "$(printf "For the worker:\n- What is wrong: work.txt:1 says round 1\n- What to do: append the word fixed\n"; seq -f "  step %g" 25; printf -- "- How to check: grep -c fixed work.txt prints 1")" ;;   # a work order past twenty lines (22-25 Oct: lib-06g.1)
       hang) say "reading the diff"; sleep 30 ;;   # a stop or the clock ends it
       crash) echo "connection refused" >&2; exit 7 ;;   # the reviewer's server is down
       server-error) server_error ;;   # the server answered an error before the reviewer ran

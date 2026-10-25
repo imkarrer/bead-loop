@@ -19,7 +19,9 @@ use std::path::Path;
 use std::sync::{Arc, Condvar, Mutex};
 
 pub struct AgentRun {
-    /// the last text the agent wrote (the bash printed it; callers grep DONE:/BLOCKED:/APPROVE:)
+    /// the last twenty lines the agent wrote: enough for a last BLOCKED: line or a note's
+    /// "last words", never for a verdict or a report — a REJECT: or DONE: line heads a reply
+    /// that runs on, so those read `full`
     pub text: String,
     /// all of it: what the brief reads, not the last twenty lines
     pub full: String,

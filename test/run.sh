@@ -1450,6 +1450,26 @@ case_review_that_explains_itself_first_approves() {
   assert_nofile "$BEAD_LOOP_STATE/repo/beads/t-1/failures" "no failure charged"
   assert_branch bead/t-1 "and pushed"
 }
+case_long_review_replies_keep_their_verdict() {
+  # A verdict line heads a reply that runs past twenty lines. The harness's `text` is the
+  # last twenty, and reading the verdict from it sent lib-06g.1 and eleven others back
+  # "rejected:" with no work order under it (22-25 Oct 2026); an APPROVE so placed would
+  # have been a REJECT.
+  setup; printf 'longreject\nlongapprove\n' >"$TEST_CTRL/review"; sup work "$REPO"
+  assert_eq "$(calls)" "bead-worker bead-reviewer" "rejected: the round ends"
+  assert_match "$(jq -r .note "$BEAD_LOOP_STATE/repo/beads/t-1/rounds.jsonl" | tr "\n" " ")" "rejected: REJECT: work.txt:1 wrong, fix it" "the REJECT line in the note"
+  assert_match "$(jq -r .note "$BEAD_LOOP_STATE/repo/beads/t-1/rounds.jsonl" | tr '\n' ' ')" "step 25 - How to check: grep -c fixed work.txt prints 1" "and the whole work order under it"
+  sup work "$REPO"
+  assert_match "$(cat "$TEST_CTRL/prompt.3" | tr '\n' ' ')" "REJECT: work.txt:1 wrong, fix it For the worker: - What is wrong" "the next worker gets the work order"
+  assert_match "$(cat "$T/sup.log")" "t-1: review approved" "an APPROVE first, then twenty-five lines: approved"
+  assert_branch bead/t-1 "and pushed"
+}
+case_long_done_report_reaches_the_reviewer() {
+  # The worker's DONE line with more than twenty lines of evidence under it: the review
+  # queue gets the DONE line and what follows, not an empty report.
+  setup; echo longdone >"$TEST_CTRL/worker"; sup work "$REPO"
+  assert_match "$(cat "$TEST_CTRL/prompt.2" | tr '\n' ' ')" "DONE: acceptance check printed ok evidence line 1 .*evidence line 25" "the whole report in the review prompt"
+}
 # The dev and review lanes alone: the lanes case_review_lane_waits_for_dev_to_claim was
 # written for (setup wrote no claude lane before #102). With the claude lane too, two
 # lanes pick slowly (slow-ready: 0.3 s a pass, longer than LANE_WAIT), each keeps finding
