@@ -913,8 +913,19 @@ fn pr_feedback(repo: &Repo, url: &str) -> Vec<FeedbackItem> {
             }
         }
     }
-    items.retain(|i| !i.author.is_empty() && login.as_deref() != Some(i.author.as_str()));
+    items.retain(|i| !i.author.is_empty());
+    fresh_feedback(items, None, login.as_deref())
+}
+
+/// The pure filter behind feedback: drop anything from the loop's own account, and
+/// anything not strictly newer than the watermark (`None` watermark keeps everything —
+/// a PR adopted mid-thread has no prior work to avoid repeating).
+fn fresh_feedback(items: Vec<FeedbackItem>, watermark: Option<&str>, login: Option<&str>) -> Vec<FeedbackItem> {
     items
+        .into_iter()
+        .filter(|i| login != Some(i.author.as_str()))
+        .filter(|i| watermark.map(|w| i.at.as_str() > w).unwrap_or(true))
+        .collect()
 }
 
 /// The work order a feedback round carries under the bead: the comments verbatim, not
@@ -936,8 +947,7 @@ fn check_feedback(repo: &Repo, id: &str, f: &std::path::Path, url: &str) -> bool
         return false;
     }
     let watermark = repo.feedback_watermark(id);
-    let mut fresh: Vec<FeedbackItem> =
-        pr_feedback(repo, url).into_iter().filter(|i| watermark.as_deref().map(|w| i.at.as_str() > w).unwrap_or(true)).collect();
+    let mut fresh: Vec<FeedbackItem> = fresh_feedback(pr_feedback(repo, url), watermark.as_deref(), None);
     if fresh.is_empty() {
         return false;
     }
@@ -978,6 +988,26 @@ fn green_since(repo: &Repo, id: &str) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn item(author: &str, at: &str) -> FeedbackItem {
+        FeedbackItem { author: author.to_string(), at: at.to_string(), text: "x".to_string() }
+    }
+
+    #[test]
+    fn fresh_feedback_watermark_and_author() {
+        // nothing newer than the watermark = no round
+        let items = vec![item("maintainer", "2026-10-01T00:00:00Z")];
+        assert!(fresh_feedback(items, Some("2026-10-01T00:00:00Z"), None).is_empty());
+
+        // a comment strictly newer than the watermark = a round
+        let items = vec![item("maintainer", "2026-10-02T00:00:00Z")];
+        assert_eq!(fresh_feedback(items, Some("2026-10-01T00:00:00Z"), None).len(), 1);
+
+        // the loop's own account is never feedback, however fresh
+        let items = vec![item("bead-loop-bot", "2026-10-02T00:00:00Z")];
+        assert!(fresh_feedback(items, Some("2026-10-01T00:00:00Z"), Some("bead-loop-bot")).is_empty());
+    }
+
     #[test]
     fn branch_ids() {
         assert_eq!(bead_id_of_branch("bead/t-9-some-slug").as_deref(), Some("t-9"));
