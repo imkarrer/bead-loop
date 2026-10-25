@@ -588,8 +588,10 @@ fn bead_labels(json: &Value) -> Vec<&str> {
 /// the named stage's first count, once — the next round's count is already there. A label
 /// naming no stage is logged and ignored (the bead runs from stage 1: a typo must not hold
 /// work).
-fn apply_stage_label(repo: &Repo, id: &str, labels: &[&str]) {
-    let Some(label) = labels.iter().find(|l| l.starts_with("stage:")) else { return };
+/// True when the label raised the count, so the round's stage may not be the one the lane
+/// picked the bead for.
+fn apply_stage_label(repo: &Repo, id: &str, labels: &[&str]) -> bool {
+    let Some(label) = labels.iter().find(|l| l.starts_with("stage:")) else { return false };
     let name = &label["stage:".len()..];
     match stage_start(&repo.stages, name) {
         Some(start) if start > repo.failures_of(id) => {
@@ -600,9 +602,13 @@ fn apply_stage_label(repo: &Repo, id: &str, labels: &[&str]) {
                 id,
                 &format!("bead-loop {}: label stage:{name}: starting on stage {name} ({index}), failures set to {start}", date_iminutes()),
             );
+            true
         }
-        Some(_) => {}
-        None => log(&format!("{}: {id}: label stage:{name} names no stage; ignored", repo.slug)),
+        Some(_) => false,
+        None => {
+            log(&format!("{}: {id}: label stage:{name} names no stage; ignored", repo.slug));
+            false
+        }
     }
 }
 
@@ -1173,7 +1179,7 @@ pub fn dev_one(repo: &Repo, opts: &Opts, id: Option<&str>, last_id: &mut Option<
     let repo = &repo;
     // The bead's stage:NAME label (docs/design-providers.md): floors the failure count
     // before the stage is picked, so a bead labelled past stage 1 starts there.
-    apply_stage_label(repo, &id, &labels);
+    let floored = apply_stage_label(repo, &id, &labels);
     let n = repo.failures_of(&id);
     let st: StageHit = match repo.stage_for(n) {
         Some(s) => s,
@@ -1186,6 +1192,17 @@ pub fn dev_one(repo: &Repo, opts: &Opts, id: Option<&str>, last_id: &mut Option<
             return Pass::Worked;
         }
     };
+    // The lane picked the bead by its count before the floor: a label that moved it to a
+    // stage this lane does not run sends it back to the queue, the floor kept, for the
+    // lane that does (lib-f24.62's Sonnet round held the gpu lane while devbox sat idle).
+    // A conflict round's worker is not the stage's, and the picker already chose by it.
+    if let Some(l) = lane {
+        if floored && opts.model_flag.is_none() && !repo.mark(&id, "conflict").exists() && !l.takes(&st.model) {
+            log(&format!("{}: {id}: its stage label moved it to {}, not the {} lane's; back to the queue", repo.slug, st.model, l.name));
+            repo.wake();
+            return Pass::Worked;
+        }
+    }
     let mut model = opts.model_flag.clone().unwrap_or_else(|| st.model.clone());
     let review_model = st.review.clone();
     let timeout = st.timeout;
