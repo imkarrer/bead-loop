@@ -3,7 +3,7 @@ name: delegate
 description: Writing and labelling a bead for the loop - delegate:local hands it over, harness:aider when the files to edit are known, and the shape each harness needs from the description. Use when creating or labelling a bead the loop will work, or judging whether a bead is ready to delegate.
 ---
 
-`bd` syntax is in the `beads` skill; what the worker does with a bead is in `bead-workflow`. This is what the planner decides before the loop takes one: whether, and under which harness.
+`bd` syntax is in the `beads` skill; what the worker does with a bead is in `bead-workflow`. This is what the planner decides before the loop takes one: whether, and under which harness. Cutting a project into beads is `breakdown`.
 
 # Handing a bead to the loop
 
