@@ -41,7 +41,9 @@
   **Rounds per landing**, **Time to land** (first claim to merge), **Needed you**; under
   them where rounds go back (by reason: no commit, gate, review, CI red, blocked, timed
   out, crashed), by model, model cost by role (what each session's own transcript says it
-  spent — $0 for a local model) with the **empty rounds** (a session the server never
+  spent — $0 for a local model), the **avoided cost** beside it (the local models' tokens at the
+  `[reference_rate]` in the global config: an estimate of what a metered model would have
+  charged, not a bill) with the **empty rounds** (a session the server never
   answered), and the beads finished, newest first. Read from what the beads and the
   session logs already carry, once a minute (`bead-supervisor --json stats`).
 - **Per repo**, with **★ make priority** on its heading and its config (base, merge mode,

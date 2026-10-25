@@ -254,6 +254,8 @@
   .bars .bar { height: 10px; border-radius: 3px; background: rgba(38, 139, 210, .18); overflow: hidden; }
   .bars .bar i { display: block; height: 100%; background: var(--blue); border-radius: 3px; transition: width .4s; }
   .score-cols .note { font-size: 12.5px; color: var(--muted); margin-top: 8px; line-height: 1.5; }
+  .score-cols .avoid { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; margin-top: 14px; font-size: 13px; }
+  .score-cols .avoid .n { color: var(--bright); font: 500 18px var(--mono); }
   td.num { text-align: right; font: 500 13px var(--mono); white-space: nowrap; color: var(--bright); }
   th.num { text-align: right; white-space: nowrap; }
   td.reasons { color: var(--muted); font-size: 12.5px; white-space: nowrap; }
@@ -863,6 +865,8 @@ const FINISHED_SHOWN = 8;
 const dur = (s) => { if (s == null) return '–'; const m = Math.round(s / 60); return m < 60 ? `${m}m` : m < 60 * 48 ? `${Math.floor(m / 60)}h${String(m % 60).padStart(2, '0')}` : `${(m / 1440).toFixed(1)}d`; };
 const hours = (s) => `${(s / 3600).toFixed(1)}h`;
 const usd = (n) => `$${n.toFixed(2)}`;
+const mtok = (n) => n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${Math.round(n / 1e3)}k` : `${n}`;
+const price = (n) => String(Number(n.toFixed(3)));
 const pct = (n, of) => of ? `${Math.round(n * 100 / of)}%` : '–';
 const tile = (label, value, sub, cls) => `<div class="tile" data-key="${esc(label)}"><div class="label">${label}</div><div class="value ${cls || ''}">${value}</div><div class="sub">${sub}</div></div>`;
 function scoreboard(s) {
@@ -907,6 +911,16 @@ function scoreboard(s) {
     <span class="k">worker</span><span class="bar" title="${usd(mt.worker_usd)} · ${hours(mt.worker_s)}"><i style="width:${Math.min(100, Math.round(mt.worker_usd * 100 / totalUsd))}%"></i></span><span class="n">${usd(mt.worker_usd)}</span>
     <span class="k">reviewer</span><span class="bar" title="${usd(mt.review_usd)} · ${hours(mt.review_s)}"><i style="width:${Math.min(100, Math.round(mt.review_usd * 100 / totalUsd))}%"></i></span><span class="n">${usd(mt.review_usd)}</span>
   </div><div class="note">${mt.worker_rounds} worker round${mt.worker_rounds === 1 ? '' : 's'} (${hours(mt.worker_s)}), ${mt.review_rounds} review round${mt.review_rounds === 1 ? '' : 's'} (${hours(mt.review_s)}) · ${usd(mt.worker_usd + mt.review_usd)} this window${mt.empty_rounds ? ` · <span class="chip warn" title="a session the harness or server never answered — Claude signed out, a model server down — retried by the loop">${mt.empty_rounds} empty round${mt.empty_rounds > 1 ? 's' : ''}</span>` : ''}</div>`;
+  // avoided cost: an estimate, never a bill — the tokens the local models handled, priced at
+  // the reference rate in the global config (what a metered model would have charged for
+  // them). Without a rate the tokens are shown and nothing is priced.
+  const av = w.avoided || { input_tokens: 0, output_tokens: 0, cache_read_tokens: 0, usd: null };  // absent from a supervisor older than the page
+  const avTokens = `${mtok(av.input_tokens)} in · ${mtok(av.cache_read_tokens)} cached · ${mtok(av.output_tokens)} out`;
+  const avoided = av.input_tokens + av.cache_read_tokens + av.output_tokens === 0 ? '' : av.usd == null
+    ? `<div class="avoid"><span class="k">avoided</span><span class="chip" title="no [reference_rate] in the global config">not priced</span></div>
+       <div class="note">local models handled ${avTokens}. Set <span class="mono">[reference_rate]</span> in the global config to price them.</div>`
+    : `<div class="avoid" title="what a metered model would have charged for the tokens local models handled — not a bill"><span class="n">≈ ${usd(av.usd)}</span><span class="k">avoided</span><span class="chip">estimate</span></div>
+       <div class="note">local models handled ${avTokens}, priced at $${price(av.rate.input)} / $${price(av.rate.output)} / $${price(av.rate.cache_read)} per M tokens (in / out / cached), the reference rate in config</div>`;
   // the beads finished in the window, newest first
   const from = scoreWin === 'all' ? 0 : st.now - { '24h': 86400, '7d': 7 * 86400, '30d': 30 * 86400 }[scoreWin];
   const fin = st.finished.filter((b) => b.closed >= from);
@@ -924,7 +938,7 @@ function scoreboard(s) {
     <div class="score-cols">
       <div><h3>Where rounds go back<span class="n">${sb.total}</span></h3>${bars}${extra ? `<div class="note">${extra}</div>` : ''}</div>
       <div><h3>By model</h3>${modelRows}</div>
-      <div><h3>Model cost</h3>${time}</div>
+      <div><h3>Model cost</h3>${time}${avoided}</div>
     </div>
     <h3>Finished<span class="n">${fin.length}</span><span class="note">newest first · rounds counts the one that landed</span>${more}</h3>${finished}
   </section>`;

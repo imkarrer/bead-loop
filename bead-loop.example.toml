@@ -1,6 +1,7 @@
 # Copy to <repo>/.bead-loop.toml. TOML; every key optional. Any key from the global
 # ~/.config/bead-loop/config.toml may appear here too and wins for this repo.
 # providers are global: ~/.config/bead-loop/config.toml, [providers.NAME]: harness, parallel, cost, probe (docs/config.md, Providers)
+# so is [reference_rate]: what the scoreboard prices the local models' tokens at, for its avoided-cost estimate (docs/config.md, Reference rate)
 label = "delegate:qwen30b"            # bd ready -l LABEL picks the work           (default "delegate:local")
 base = "master"                        # branch to fork from and PR into           (default: origin's HEAD)
 setup = "npm ci"                       # runs in the fresh worktree before the worker (no node_modules there)

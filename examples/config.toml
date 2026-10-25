@@ -27,6 +27,15 @@ harness = "claude-code"
 parallel = 2
 cost = "metered"
 
+# What the scoreboard prices the local models' tokens at, for its "avoided" line (an
+# estimate of what the last stage would have charged, shown beside the real Model cost).
+# USD per million tokens; cache_read is for the prompt a server already held, and
+# defaults to the input price. Keep these in step with the provider's price list.
+[reference_rate]
+input = 2.00
+output = 10.00
+cache_read = 0.20
+
 # Escalation, in order: two GPU attempts, then Sonnet once; after that the bead parks
 # for you (on_exhaust = "park"). A stage:NAME label on a bead starts it at that stage.
 [[stages]]
