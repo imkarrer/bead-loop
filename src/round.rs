@@ -1487,7 +1487,7 @@ pub fn dev_one(repo: &Repo, opts: &Opts, id: Option<&str>, last_id: &mut Option<
     }
 
     // Into the review queue, with the worker's last words for the reviewer.
-    let done = last_line_starting(&final_text, "DONE:").unwrap_or_default();
+    let done = done_report(&final_text);
     if !repo.precheck_model.is_empty() {
         // The precheck never blocks a round and never holds a bead: a skip falls through
         // to the review queue exactly as a bare `precheck_model` would.
@@ -1548,6 +1548,17 @@ pub fn dev_one(repo: &Repo, opts: &Opts, id: Option<&str>, last_id: &mut Option<
 /// `grep '^PREFIX' | tail -1`
 fn last_line_starting(text: &str, prefix: &str) -> Option<String> {
     text.lines().rfind(|l| l.starts_with(prefix)).map(str::to_string)
+}
+
+/// The worker's report for the review queue: its last `DONE:` line and everything after
+/// it, so evidence pasted below the line (a fenced test tail) reaches the reviewer.
+/// Empty when there is no DONE line; cut at 4000 bytes.
+fn done_report(text: &str) -> String {
+    let start = match text.lines().rfind(|l| l.starts_with("DONE:")) {
+        Some(l) => l.as_ptr() as usize - text.as_ptr() as usize,
+        None => return String::new(),
+    };
+    cut_bytes(text[start..].trim_end(), 4000).to_string()
 }
 
 /// The reply's last line that is not blank, when it is a `BLOCKED:` line. The second
@@ -1790,7 +1801,7 @@ pub fn review_one(repo: &Repo, opts: &Opts, id: Option<&str>, lane: Option<&Lane
         Err(e) => die(&format!("git push: {e}")),
     }
     let ac = json.get(0).and_then(|b| b.get("acceptance_criteria")).and_then(|v| v.as_str()).unwrap_or("");
-    let worker_line = cut_bytes(final_text.lines().last().unwrap_or(""), 500).to_string();
+    let worker_line = cut_bytes(final_text.lines().next().unwrap_or(""), 500).to_string();
     let reviewer_line = verdict;
     let body = if repo.pr_style == "plain" {
         let desc = json.get(0).and_then(|b| b.get("description")).and_then(|v| v.as_str()).unwrap_or("");
@@ -1910,6 +1921,14 @@ mod tests {
     fn last_line() {
         assert_eq!(last_line_starting("x\nDONE: a\nDONE: b\n", "DONE:").as_deref(), Some("DONE: b"));
         assert!(last_line_starting("nothing", "DONE:").is_none());
+    }
+    #[test]
+    fn done_report_keeps_what_follows_the_done_line() {
+        let reply = "thinking\nDONE: an early guess\nmore work\nDONE: tests pass — last 5 lines:\n```\n  494 passing (265ms)\n```\n(full run also passed.)\n\n";
+        assert_eq!(done_report(reply), "DONE: tests pass — last 5 lines:\n```\n  494 passing (265ms)\n```\n(full run also passed.)");
+        assert_eq!(done_report("x\nDONE: a\n"), "DONE: a");
+        assert_eq!(done_report("no verdict"), "");
+        assert_eq!(done_report(&format!("DONE: big\n{}", "y".repeat(9000))).len(), 4000);
     }
     #[test]
     fn render_bead_carries_everything_the_prompt_needs() {
