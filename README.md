@@ -192,6 +192,11 @@ you, says what a bead needs before it goes), copy `bead-loop.example.toml` to `<
 config, and have CI report a status on the repo's PRs with `gh` logged in. Every key:
 [docs/config.md](docs/config.md).
 
+The skills for writing those beads (`breakdown`, `delegate`, `beads`, `bead-workflow`) are
+also an [agent-stacks](https://agent-stacks.org) plugin, for a repo whose agents run from a
+stack: `flake.nix` builds `agent-plugin-bead-loop` for a stack to list in its `plugins`,
+and `nix run github:imkarrer/bead-loop#planner` is Claude Code with them and nothing else.
+
 ## Your setup
 
 - [docs/examples/homelab.md](docs/examples/homelab.md) — this box: two local providers,
