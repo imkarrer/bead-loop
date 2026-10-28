@@ -62,7 +62,7 @@ brief, research — writes one line to `beads/ID/stamps.jsonl` saying what produ
 | field | source |
 | --- | --- |
 | `round`, `kind`, `log` | the round number, the session's kind, its log stem (the join to `logs/`) |
-| `loop_sha`, `dirty` | the bead-loop commit the running binary was built from (`build.rs`; the flake passes `self.rev`) |
+| `loop_sha`, `dirty` | the bead-loop commit the running binary was built from (`build.rs`, from git) |
 | `prompt_hash` | content hash of the agent file the session's harness was handed |
 | `skills_hash` | content hash of the `skills/` tree the session could load |
 | `base_sha` | the target commit the worktree was cut from, or the kept branch's head on a resumed round |
@@ -204,7 +204,8 @@ Done by the grill: `AGENTS.md`, `docs/agents/`, the `dev` stack in `flake.nix`, 
 2. **After-merge window:** 14 days; a defect is a revert of the bead's commit or a later
    bead naming it as the cause (ADR 0002).
 3. **The stamp hashes by content.** `loop_sha` and a dirty flag, compiled in by a new
-   `build.rs` (the flake passes `self.rev`: a Nix build has no `.git`), plus content
+   `build.rs` from git, `unknown` without it (the flake does not build the binary;
+   `install.sh`'s `cargo build` does), plus content
    hashes of the agent file the round was handed and the skills tree it could load —
    `install.sh` links both into the working tree, so they can differ from the binary's
    commit (ADR 0001).
@@ -241,6 +242,9 @@ Done by the grill: `AGENTS.md`, `docs/agents/`, the `dev` stack in `flake.nix`, 
     label, so routing is unchanged; the claim line's `linted` reads it. The note is a
     person's line, so it reaches the worker's prompt like any other: a few words of
     difference between the arms, accepted.
+
+**Beads:** epic `bl-ayv`, `.1`–`.6`: `build.rs`, `src/stamp.rs`, the session stamp,
+the claim line, `stats --rows`, the guardrail.
 
 **Build order:** piece 1 ships first and alone, since it loses data every day it is
 missing; piece 3 is the definitions above; piece 2 next; then piece 4's design pass.
