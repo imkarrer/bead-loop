@@ -1,6 +1,6 @@
 # Design: the replay bench
 
-Status: proposed. Written 2026-10-28 from decisions 5, 6 and 26–29 of
+Status: proposed; grilled 2026-10-28 (decisions 30–35 below). Written from decisions 5, 6 and 26–29 of
 [design-measurement.md](design-measurement.md) and ADR 0003. Nothing here is built.
 
 ## What it is for
@@ -43,7 +43,7 @@ flowchart LR
 - **Isolation (decision 5).** No `bd`, no `gh`, no push. The worktree is a fresh repo
   that fetched only `base_sha` (`git init && git fetch SRC BASE_SHA`), so the merge
   and everything after it are not in its object store: the answer cannot be read from
-  history.
+  history. It keeps `.beads/` as the base had it (decision 34).
 - **Slots (decision 5).** Provider slots move from an in-process counter
   (`harness.rs` `provider_slot`) to lock files under `$STATE_DIR`, shared by the
   supervisor and a bench process. The bench only *tries* for a slot and waits when it
@@ -75,23 +75,27 @@ Per arm: the pass rate over cases with an interval; per case, the fraction of re
 that passed. Beside it, the piece 2 diagnostics for the bench's rounds: send-backs by
 reason, rounds, metered USD, model time.
 
-## Open questions for the next round
+## Decisions (round 4, 2026-10-28)
 
-1. **Comparison:** the arms run on the same cases, so the comparison is paired. Report
-   the per-case difference with a bootstrap interval over cases, or McNemar on
-   majority-of-repeats outcomes?
-2. **What the merge's tests lean on:** a transplanted test can call a helper or fixture
-   the merge also added inside `mod tests`, or a stub it changed in `test/bin`. Carry
-   those too (named helpers in the test module, `test/bin` whole from the merge), or
-   count the test inconclusive?
-3. **The dev round's extras:** run the pre-check and the research round as in
-   production, or off by default like the reviewer?
-4. **Freezing the text:** a bead's description can change after its first round (a
-   planner's edit, an answer). Freeze the text the first round saw — which needs the
-   claim line of piece 2, so only beads claimed after it ships — or today's text for
-   older beads, marked as such?
-5. **`.beads/` in the clone:** the base commit carries `.beads/issues.jsonl` as it was
-   then, as production's worktree carries today's. Keep it, so the worker's view is
-   production's, or strip it?
-6. **Where cases live:** in the state dir, in the repo (`bench/cases/`, reviewable,
-   shared with anyone who clones), or built on demand from history each run?
+30. **The comparison is paired**: per case, the difference in the fraction of repeats
+    that passed, averaged over cases, with a bootstrap interval over cases. It uses
+    every repeat, and it reads as "B passes 0.18 more of a case's repeats, 0.05–0.31".
+31. **A transplanted test brings what it leans on**: the helpers in the merge's `mod
+    tests` that the transplanted tests call by name, and the merge's `test/bin` whole.
+    The stubs advantage neither arm; without them most `case_` tests would be
+    inconclusive.
+32. **Pre-check and research run as in production**; either off is an arm. They are
+    part of the dev round being measured, and a pre-check send-back is an outcome.
+33. **A case's text is marked by where it came from**: `text: first_round` from piece
+    2's claim line, or `text: current` for beads claimed before it, reported apart
+    until the first-round set can stand alone.
+34. **The clone keeps `.beads/`** as the base commit had it, as production's worktree
+    carries its own.
+35. **Cases live in the repo** under `bench/cases/`, written by `bead-supervisor bench
+    freeze`: reviewed and versioned, the same for everyone benching one commit, and a
+    wrongly frozen case is fixed in a PR.
+
+## Open
+
+The build order of the bench's parts, and whether the slot lock files (decision 5) ship
+on their own first, since production gains nothing from them until a bench runs.
