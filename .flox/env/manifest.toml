@@ -30,6 +30,17 @@ rustc.pkg-path = "rustc"
 clippy.pkg-path = "clippy"
 rustfmt.pkg-path = "rustfmt"
 gcc.pkg-path = "gcc"            # the linker cargo calls as cc
+# Rust's std links -liconv on macOS, and nixpkgs' gcc there does not bring it.
+libiconv.pkg-path = "libiconv"
+libiconv.systems = ["aarch64-darwin"]
+# test/run.sh speaks GNU and util-linux: timeout, date -d, sed -i, flock, setsid. Linux
+# has them; macOS has BSD versions or none.
+coreutils.pkg-path = "coreutils"
+coreutils.systems = ["aarch64-darwin"]
+gnused.pkg-path = "gnused"
+gnused.systems = ["aarch64-darwin"]
+util-linux.pkg-path = "util-linux"
+util-linux.systems = ["aarch64-darwin"]
 
 [vars]
 # Where the UI listens. bin/bead-loop-ui reads these; systemd/bead-loop-ui.service
@@ -42,6 +53,9 @@ on-activate = '''
   # the release binary first, then debug (a checkout being worked on), then bin/ (the UI server)
   export PATH="$FLOX_ENV_PROJECT/target/release:$FLOX_ENV_PROJECT/target/debug:$FLOX_ENV_PROJECT/bin:$PATH"
   export BEAD_LOOP_HOME="$FLOX_ENV_PROJECT"
+  # nixpkgs' Rust std on macOS is built for 14.0; gcc links for 11.0 unless told, and
+  # warns about every object file.
+  if [ "$(uname -s)" = Darwin ]; then export MACOSX_DEPLOYMENT_TARGET=14.0; fi
 '''
 
 # The three long-running things, for a machine without the systemd units:

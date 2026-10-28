@@ -28,10 +28,9 @@ pub fn sessions_json(repo: &Repo, dir: &Path) -> Value {
         curl_get(&format!("{}/session/status", repo.attach), Some(&d), 3).and_then(|s| serde_json::from_str(&s).ok()).unwrap_or(json!({}));
     let list: Value =
         curl_get(&format!("{}/session", repo.attach), Some(&d), 3).and_then(|s| serde_json::from_str(&s).ok()).unwrap_or(json!([]));
-    let clients: i64 = output(cmd("pgrep").args(["-fc", "--", &format!("opencode run --dir {d} ")]))
-        .ok()
-        .and_then(|o| stdout_str(&o).trim().parse().ok())
-        .unwrap_or(0);
+    // One pid a line, counted here: macOS's pgrep has no -c.
+    let clients: i64 =
+        output(cmd("pgrep").args(["-f", "--", &format!("opencode run --dir {d} ")])).ok().map(|o| count_pids(&stdout_str(&o))).unwrap_or(0);
     let url = format!("{}/{}", repo.attach, base64url(&d));
     let mut top: Vec<&Value> =
         list.as_array().map(|a| a.iter().filter(|s| s.get("parentID").map(|p| p.is_null()).unwrap_or(true)).collect()).unwrap_or_default();
@@ -69,6 +68,11 @@ pub fn sessions_json(repo: &Repo, dir: &Path) -> Value {
 }
 
 /// The `why` of a parked bead: the last note the loop left, split into when and what.
+/// How many pids `pgrep` printed, one a line.
+fn count_pids(out: &str) -> i64 {
+    out.lines().filter(|l| !l.trim().is_empty()).count() as i64
+}
+
 fn why_of(notes: &str) -> Value {
     let line = match notes.lines().rfind(|l| l.starts_with("bead-loop")) {
         Some(l) => l,
@@ -1021,6 +1025,13 @@ mod tests {
         let repo = crate::config::test_repo(&d, &["a"]);
         assert_eq!(sessions_json(&repo, &d), json!([]));
         let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn pids_are_counted_by_line() {
+        assert_eq!(count_pids(""), 0, "pgrep matched nothing");
+        assert_eq!(count_pids("4242\n"), 1);
+        assert_eq!(count_pids("4242\n4243\n"), 2);
     }
 
     #[test]

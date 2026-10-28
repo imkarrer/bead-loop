@@ -12,6 +12,12 @@
       "clippy": {
         "pkg-path": "clippy"
       },
+      "coreutils": {
+        "pkg-path": "coreutils",
+        "systems": [
+          "aarch64-darwin"
+        ]
+      },
       "curl": {
         "pkg-path": "curl",
         "outputs": "all"
@@ -26,9 +32,21 @@
         "pkg-path": "git",
         "outputs": "all"
       },
+      "gnused": {
+        "pkg-path": "gnused",
+        "systems": [
+          "aarch64-darwin"
+        ]
+      },
       "jq": {
         "pkg-path": "jq",
         "outputs": "all"
+      },
+      "libiconv": {
+        "pkg-path": "libiconv",
+        "systems": [
+          "aarch64-darwin"
+        ]
       },
       "nodejs": {
         "pkg-path": "nodejs"
@@ -47,6 +65,12 @@
       "shellcheck": {
         "pkg-path": "shellcheck",
         "outputs": "all"
+      },
+      "util-linux": {
+        "pkg-path": "util-linux",
+        "systems": [
+          "aarch64-darwin"
+        ]
       }
     },
     "vars": {
@@ -54,7 +78,7 @@
       "BEAD_LOOP_UI_PORT": "4097"
     },
     "hook": {
-      "on-activate": "  # the release binary first, then debug (a checkout being worked on), then bin/ (the UI server)\n  export PATH=\"$FLOX_ENV_PROJECT/target/release:$FLOX_ENV_PROJECT/target/debug:$FLOX_ENV_PROJECT/bin:$PATH\"\n  export BEAD_LOOP_HOME=\"$FLOX_ENV_PROJECT\"\n"
+      "on-activate": "  # the release binary first, then debug (a checkout being worked on), then bin/ (the UI server)\n  export PATH=\"$FLOX_ENV_PROJECT/target/release:$FLOX_ENV_PROJECT/target/debug:$FLOX_ENV_PROJECT/bin:$PATH\"\n  export BEAD_LOOP_HOME=\"$FLOX_ENV_PROJECT\"\n  # nixpkgs' Rust std on macOS is built for 14.0; gcc links for 11.0 unless told, and\n  # warns about every object file.\n  if [ \"$(uname -s)\" = Darwin ]; then export MACOSX_DEPLOYMENT_TARGET=14.0; fi\n"
     },
     "options": {
       "systems": [
@@ -76,6 +100,96 @@
     }
   },
   "packages": [
+    {
+      "attr_path": "opencode",
+      "broken": false,
+      "derivation": "/nix/store/m075lww0f6887xn893l4ayvp43m61aii-opencode-1.18.29.drv",
+      "description": "AI coding agent built for the terminal",
+      "install_id": "opencode",
+      "license": "MIT",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=8ce4ef6cb6f871616146b9fe26d2a5ae594e94fe",
+      "name": "opencode-1.18.29",
+      "pname": "opencode",
+      "rev": "8ce4ef6cb6f871616146b9fe26d2a5ae594e94fe",
+      "rev_count": 1070770,
+      "rev_date": "2026-09-10T02:20:05Z",
+      "scrape_date": "2026-09-11T04:58:36.554364Z",
+      "stabilities": [
+        "unstable",
+        "staging"
+      ],
+      "unfree": false,
+      "version": "1.18.29",
+      "outputs_to_install": [
+        "out"
+      ],
+      "outputs": {
+        "out": "/nix/store/vrx105gx82gkhw3bbk404y605nv3nd0a-opencode-1.18.29"
+      },
+      "system": "aarch64-darwin",
+      "group": "opencode",
+      "priority": 5
+    },
+    {
+      "attr_path": "opencode",
+      "broken": false,
+      "derivation": "/nix/store/0dygf77vkaljlw6mj970h9dc1yniaclf-opencode-1.18.29.drv",
+      "description": "AI coding agent built for the terminal",
+      "install_id": "opencode",
+      "license": "MIT",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=8ce4ef6cb6f871616146b9fe26d2a5ae594e94fe",
+      "name": "opencode-1.18.29",
+      "pname": "opencode",
+      "rev": "8ce4ef6cb6f871616146b9fe26d2a5ae594e94fe",
+      "rev_count": 1070770,
+      "rev_date": "2026-09-10T02:20:05Z",
+      "scrape_date": "2026-09-11T05:31:07.767557Z",
+      "stabilities": [
+        "unstable",
+        "staging"
+      ],
+      "unfree": false,
+      "version": "1.18.29",
+      "outputs_to_install": [
+        "out"
+      ],
+      "outputs": {
+        "out": "/nix/store/bggjqhxp5sapm7qnbd8jcwhmmwnbv9gh-opencode-1.18.29"
+      },
+      "system": "aarch64-linux",
+      "group": "opencode",
+      "priority": 5
+    },
+    {
+      "attr_path": "opencode",
+      "broken": false,
+      "derivation": "/nix/store/npzz9h3a43b1bnlgabvcwydaka2nzkdn-opencode-1.18.29.drv",
+      "description": "AI coding agent built for the terminal",
+      "install_id": "opencode",
+      "license": "MIT",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=8ce4ef6cb6f871616146b9fe26d2a5ae594e94fe",
+      "name": "opencode-1.18.29",
+      "pname": "opencode",
+      "rev": "8ce4ef6cb6f871616146b9fe26d2a5ae594e94fe",
+      "rev_count": 1070770,
+      "rev_date": "2026-09-10T02:20:05Z",
+      "scrape_date": "2026-09-11T06:07:29.555347Z",
+      "stabilities": [
+        "unstable",
+        "staging"
+      ],
+      "unfree": false,
+      "version": "1.18.29",
+      "outputs_to_install": [
+        "out"
+      ],
+      "outputs": {
+        "out": "/nix/store/6pw7n475sa1d4scq8sy1qkdn2bcy0glc-opencode-1.18.29"
+      },
+      "system": "x86_64-linux",
+      "group": "opencode",
+      "priority": 5
+    },
     {
       "attr_path": "beads",
       "broken": false,
@@ -340,6 +454,40 @@
       "priority": 5
     },
     {
+      "attr_path": "coreutils",
+      "broken": false,
+      "derivation": "/nix/store/qxhlrgpgdixhssavarmh8dmywg7k0nmj-coreutils-9.11.drv",
+      "description": "GNU Core Utilities",
+      "install_id": "coreutils",
+      "license": "GPL-3.0-or-later",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=ef34387ddd751e1ab8857adf4676492d32eb24ec",
+      "name": "coreutils-9.11",
+      "pname": "coreutils",
+      "rev": "ef34387ddd751e1ab8857adf4676492d32eb24ec",
+      "rev_count": 1073009,
+      "rev_date": "2026-09-13T08:01:44Z",
+      "scrape_date": "2026-09-15T04:58:08.131400Z",
+      "stabilities": [
+        "unstable"
+      ],
+      "unfree": false,
+      "version": "9.11",
+      "outputs_to_install": [
+        "out",
+        "out",
+        "out",
+        "out",
+        "out"
+      ],
+      "outputs": {
+        "info": "/nix/store/0j9sq91jq78i9d3vxf3x7m1drz20iqqj-coreutils-9.11-info",
+        "out": "/nix/store/bv38kxd78jkqh1qwj30a8fl9z97m5pb8-coreutils-9.11"
+      },
+      "system": "aarch64-darwin",
+      "group": "toplevel",
+      "priority": 5
+    },
+    {
       "attr_path": "curl",
       "broken": false,
       "derivation": "/nix/store/qdwddmvy38qd1scwqhbzl9lac5m02v3b-curl-8.22.0.drv",
@@ -361,6 +509,9 @@
       "outputs_to_install": [
         "bin",
         "bin",
+        "bin",
+        "bin",
+        "man",
         "man",
         "man"
       ],
@@ -398,6 +549,9 @@
         "bin",
         "bin",
         "bin",
+        "bin",
+        "bin",
+        "man",
         "man",
         "man",
         "man"
@@ -437,6 +591,9 @@
         "bin",
         "bin",
         "bin",
+        "bin",
+        "bin",
+        "man",
         "man",
         "man",
         "man"
@@ -508,6 +665,7 @@
         "man",
         "out",
         "out",
+        "out",
         "out"
       ],
       "outputs": {
@@ -541,6 +699,7 @@
       "outputs_to_install": [
         "man",
         "man",
+        "out",
         "out",
         "out",
         "out",
@@ -666,6 +825,7 @@
       "version": "2.55.0",
       "outputs_to_install": [
         "out",
+        "out",
         "out"
       ],
       "outputs": {
@@ -696,6 +856,7 @@
       "unfree": false,
       "version": "2.55.0",
       "outputs_to_install": [
+        "out",
         "out",
         "out"
       ],
@@ -729,6 +890,9 @@
       "version": "2.55.0",
       "outputs_to_install": [
         "out",
+        "out",
+        "out",
+        "out",
         "out"
       ],
       "outputs": {
@@ -737,6 +901,38 @@
         "out": "/nix/store/msr1v91ybfw6j12rs5mfl8ghb2rqsnsr-git-2.55.0"
       },
       "system": "x86_64-linux",
+      "group": "toplevel",
+      "priority": 5
+    },
+    {
+      "attr_path": "gnused",
+      "broken": false,
+      "derivation": "/nix/store/445p0k53zdfqyab4irvlwfivxv515yb9-gnused-4.10.drv",
+      "description": "GNU sed, a batch stream editor",
+      "install_id": "gnused",
+      "license": "GPL-3.0-or-later",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=ef34387ddd751e1ab8857adf4676492d32eb24ec",
+      "name": "gnused-4.10",
+      "pname": "gnused",
+      "rev": "ef34387ddd751e1ab8857adf4676492d32eb24ec",
+      "rev_count": 1073009,
+      "rev_date": "2026-09-13T08:01:44Z",
+      "scrape_date": "2026-09-15T04:58:09.084877Z",
+      "stabilities": [
+        "unstable"
+      ],
+      "unfree": false,
+      "version": "4.10",
+      "outputs_to_install": [
+        "out",
+        "out",
+        "out"
+      ],
+      "outputs": {
+        "info": "/nix/store/sx09z053maag63hl6sz53imqn8ym8sxk-gnused-4.10-info",
+        "out": "/nix/store/bp2b9k4zj6yhgc6b7pywxqyq3k5vrw6b-gnused-4.10"
+      },
+      "system": "aarch64-darwin",
       "group": "toplevel",
       "priority": 5
     },
@@ -760,6 +956,7 @@
       "unfree": false,
       "version": "1.8.2",
       "outputs_to_install": [
+        "bin",
         "bin",
         "bin",
         "man",
@@ -796,6 +993,7 @@
       "unfree": false,
       "version": "1.8.2",
       "outputs_to_install": [
+        "bin",
         "bin",
         "bin",
         "bin",
@@ -836,6 +1034,10 @@
         "bin",
         "bin",
         "bin",
+        "bin",
+        "bin",
+        "bin",
+        "bin",
         "man",
         "man"
       ],
@@ -847,6 +1049,42 @@
         "out": "/nix/store/bkxqspw3p2d70my28z2skx5d84xkxi40-jq-1.8.2"
       },
       "system": "x86_64-linux",
+      "group": "toplevel",
+      "priority": 5
+    },
+    {
+      "attr_path": "libiconv",
+      "broken": false,
+      "derivation": "/nix/store/20a0li6nf6fhvx991d5bfxqa8l113c06-libiconv-115.100.1.drv",
+      "description": "Iconv(3) implementation",
+      "install_id": "libiconv",
+      "license": "[ BSD-2-Clause, BSD-3-Clause, APSL-1.0 ]",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=ef34387ddd751e1ab8857adf4676492d32eb24ec",
+      "name": "libiconv-115.100.1",
+      "pname": "libiconv",
+      "rev": "ef34387ddd751e1ab8857adf4676492d32eb24ec",
+      "rev_count": 1073009,
+      "rev_date": "2026-09-13T08:01:44Z",
+      "scrape_date": "2026-09-15T04:58:26.144587Z",
+      "stabilities": [
+        "unstable"
+      ],
+      "unfree": false,
+      "version": "115.100.1",
+      "outputs_to_install": [
+        "out",
+        "out",
+        "out",
+        "out",
+        "out",
+        "out",
+        "out"
+      ],
+      "outputs": {
+        "dev": "/nix/store/2gydsp69sx90iq1adjghdi033k1z1xln-libiconv-115.100.1-dev",
+        "out": "/nix/store/ls125wfdax9gk2ryq7fgzrncpi6x5v2s-libiconv-115.100.1"
+      },
+      "system": "aarch64-darwin",
       "group": "toplevel",
       "priority": 5
     },
@@ -870,6 +1108,7 @@
       "unfree": false,
       "version": "24.20.0",
       "outputs_to_install": [
+        "out",
         "out",
         "out"
       ],
@@ -901,6 +1140,7 @@
       "version": "24.20.0",
       "outputs_to_install": [
         "out",
+        "out",
         "out"
       ],
       "outputs": {
@@ -930,6 +1170,9 @@
       "unfree": false,
       "version": "24.20.0",
       "outputs_to_install": [
+        "out",
+        "out",
+        "out",
         "out",
         "out"
       ],
@@ -1215,6 +1458,7 @@
       "outputs_to_install": [
         "bin",
         "bin",
+        "bin",
         "doc",
         "man"
       ],
@@ -1229,93 +1473,39 @@
       "priority": 5
     },
     {
-      "attr_path": "opencode",
+      "attr_path": "util-linux",
       "broken": false,
-      "derivation": "/nix/store/m075lww0f6887xn893l4ayvp43m61aii-opencode-1.18.29.drv",
-      "description": "AI coding agent built for the terminal",
-      "install_id": "opencode",
-      "license": "MIT",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=8ce4ef6cb6f871616146b9fe26d2a5ae594e94fe",
-      "name": "opencode-1.18.29",
-      "pname": "opencode",
-      "rev": "8ce4ef6cb6f871616146b9fe26d2a5ae594e94fe",
-      "rev_count": 1070770,
-      "rev_date": "2026-09-10T02:20:05Z",
-      "scrape_date": "2026-09-11T04:58:36.554364Z",
+      "derivation": "/nix/store/s3r6ylm62xyrpbjh01f8cifmy1w03388-util-linux-2.42.3.drv",
+      "description": "Set of system utilities for Linux",
+      "install_id": "util-linux",
+      "license": "[ GPL-1.0-or-later, GPL-2.0-only, GPL-2.0-or-later, GPL-3.0-or-later, LGPL-2.1-or-later, MIT, BSD-2-Clause, BSD-3-Clause, EUPL-1.2, Public Domain ]",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=ef34387ddd751e1ab8857adf4676492d32eb24ec",
+      "name": "util-linux-2.42.3",
+      "pname": "util-linux",
+      "rev": "ef34387ddd751e1ab8857adf4676492d32eb24ec",
+      "rev_count": 1073009,
+      "rev_date": "2026-09-13T08:01:44Z",
+      "scrape_date": "2026-09-15T05:00:54.669866Z",
       "stabilities": [
-        "unstable",
-        "staging"
+        "unstable"
       ],
       "unfree": false,
-      "version": "1.18.29",
+      "version": "2.42.3",
       "outputs_to_install": [
-        "out"
+        "bin",
+        "bin",
+        "man"
       ],
       "outputs": {
-        "out": "/nix/store/vrx105gx82gkhw3bbk404y605nv3nd0a-opencode-1.18.29"
+        "bin": "/nix/store/r5r9hryfvg1ry166ppd151svfyv4fa3r-util-linux-2.42.3-bin",
+        "dev": "/nix/store/plma2nrwiasdk01n5r8nfbpyhs4va83x-util-linux-2.42.3-dev",
+        "lib": "/nix/store/khclb302wg4gwlr0q2h76q8ifrb1xnmr-util-linux-2.42.3-lib",
+        "login": "/nix/store/i0ylgg894pfj2w8xnl34h12ca7gj5vh2-util-linux-2.42.3-login",
+        "man": "/nix/store/h1wmvivrd5ni7dxqzwrz9srrizxx3dx2-util-linux-2.42.3-man",
+        "out": "/nix/store/n5l7b7id29f309vyi3fk7i7p57c7wqx1-util-linux-2.42.3"
       },
       "system": "aarch64-darwin",
-      "group": "opencode",
-      "priority": 5
-    },
-    {
-      "attr_path": "opencode",
-      "broken": false,
-      "derivation": "/nix/store/0dygf77vkaljlw6mj970h9dc1yniaclf-opencode-1.18.29.drv",
-      "description": "AI coding agent built for the terminal",
-      "install_id": "opencode",
-      "license": "MIT",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=8ce4ef6cb6f871616146b9fe26d2a5ae594e94fe",
-      "name": "opencode-1.18.29",
-      "pname": "opencode",
-      "rev": "8ce4ef6cb6f871616146b9fe26d2a5ae594e94fe",
-      "rev_count": 1070770,
-      "rev_date": "2026-09-10T02:20:05Z",
-      "scrape_date": "2026-09-11T05:31:07.767557Z",
-      "stabilities": [
-        "unstable",
-        "staging"
-      ],
-      "unfree": false,
-      "version": "1.18.29",
-      "outputs_to_install": [
-        "out"
-      ],
-      "outputs": {
-        "out": "/nix/store/bggjqhxp5sapm7qnbd8jcwhmmwnbv9gh-opencode-1.18.29"
-      },
-      "system": "aarch64-linux",
-      "group": "opencode",
-      "priority": 5
-    },
-    {
-      "attr_path": "opencode",
-      "broken": false,
-      "derivation": "/nix/store/npzz9h3a43b1bnlgabvcwydaka2nzkdn-opencode-1.18.29.drv",
-      "description": "AI coding agent built for the terminal",
-      "install_id": "opencode",
-      "license": "MIT",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=8ce4ef6cb6f871616146b9fe26d2a5ae594e94fe",
-      "name": "opencode-1.18.29",
-      "pname": "opencode",
-      "rev": "8ce4ef6cb6f871616146b9fe26d2a5ae594e94fe",
-      "rev_count": 1070770,
-      "rev_date": "2026-09-10T02:20:05Z",
-      "scrape_date": "2026-09-11T06:07:29.555347Z",
-      "stabilities": [
-        "unstable",
-        "staging"
-      ],
-      "unfree": false,
-      "version": "1.18.29",
-      "outputs_to_install": [
-        "out"
-      ],
-      "outputs": {
-        "out": "/nix/store/6pw7n475sa1d4scq8sy1qkdn2bcy0glc-opencode-1.18.29"
-      },
-      "system": "x86_64-linux",
-      "group": "opencode",
+      "group": "toplevel",
       "priority": 5
     }
   ]
