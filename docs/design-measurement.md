@@ -121,6 +121,8 @@ Written down before any tuning, so no experiment picks its own success criterion
 
 ### 4. The replay bench
 
+The design is [design-bench.md](design-bench.md); this is its outline.
+
 The controlled experiment. Production is observational; the bench runs the same beads
 under both arms.
 
@@ -265,6 +267,23 @@ Round 2:
     branch both commit to is its own question.
 
 `bl-ayv.1`, `.3` and `.4` carry decisions 18–21.
+
+Round 3:
+
+24. **"Names it as the cause" is a `caused-by` dependency** (`bd dep add NEW OLD -t
+    caused-by`), never a mention in the text: beads in a chain mention each other, and
+    a substring match counts `bl-ayv` as named by every `bl-ayv.3`. The `beads` skill
+    tells the planner to add the link when filing a fix. `bl-ayv.6` carries it.
+25. **The loop builds pieces 1–2 itself.** Every `bl-ayv` child gets `delegate:local`
+    once this branch is on `main`: the beads cite `CONTEXT.md`, the ADRs and this doc,
+    and the loop cuts its worktrees from `origin/main`. `.2`, `.4` and `.5` keep
+    `stage:frontier`.
+26. **The hidden check is transplanted by name** (`design-bench.md`).
+27. **The first case set** is the landed beads whose merge added a test, plus the parked
+    beads; gate-only beads are a set of their own, never mixed into a pass rate
+    (`design-bench.md`).
+28. **The reviewer is off in a bench run by default**, and an arm when on.
+29. **Piece 4's design is its own doc**, [design-bench.md](design-bench.md).
 
 **Beads:** epic `bl-ayv`, `.1`–`.6`: `build.rs`, `src/stamp.rs`, the session stamp,
 the claim line, `stats --rows`, the guardrail.

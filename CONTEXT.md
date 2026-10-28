@@ -61,7 +61,7 @@ _Avoid_: cost per bead (it hides parks), score
 A metric a change must not worsen even when the headline improves; today, defects after merge.
 
 **Defect after merge**:
-Within 14 days of a bead landing, a revert of its commit or a later bead naming it as the cause.
+Within 14 days of a bead landing, a revert of its commit or a later bead linked to it by a `caused-by` dependency (a mention in the text is not one).
 _Avoid_: regression, bug
 
 **Diagnostic**:

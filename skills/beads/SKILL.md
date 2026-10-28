@@ -35,6 +35,10 @@ A PR that delivers what an open bead asks for closes that bead, whatever else th
 - On any other branch, when you open the PR: name the bead in its body (`Delivers bl-grj.2`), then take it off the loop's queue with a note: `bd update <id> --remove-label <label> --append-notes "<who> <date>: delivered by <PR url>; close it when that merges"`. `label` is in the repo's `.bead-loop.toml`. When the PR merges: `bd close <id> --reason "<PR url> merged: <how each criterion holds>"`.
 - A bead the loop is on now (a lane, the review or merge queue in `bead-supervisor status`) keeps its round; close it once that round has ended, since a send-back reopens a bead closed under it.
 
+# A bead that fixes a landed one
+
+When a new bead repairs what a closed bead landed, link it: `bd dep add <new> <closed> -t caused-by`. That link, not a mention of the id in the text, is how the loop counts a defect after merge; a bead that only builds on the closed one gets no link.
+
 # Git
 
 `.beads/issues.jsonl` is tracked and the owner commits it. Leave `.beads/` out of task commits.
