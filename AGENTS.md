@@ -56,3 +56,17 @@ Every change ships with its test.
 The subject is `<bead-id>: <what changed>`, or `<area>: <what changed>` without a bead.
 The body is prose: what was wrong, what the change does now, and how it was verified.
 PRs go to `main` and squash-merge.
+
+## Agent skills
+
+### Issue tracker
+
+Issues are beads in `.beads/`, worked with the `bd` CLI. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+The five default triage labels, applied as bd labels. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: `CONTEXT.md` and `docs/adr/` at the root, with `docs/design-*.md` as the existing decision notes. See `docs/agents/domain.md`.

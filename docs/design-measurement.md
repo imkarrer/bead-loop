@@ -1,6 +1,7 @@
 # Design: measuring a change — to the loop, or to a config
 
-Status: proposed, for a grill. Written 2026-10-28. Nothing here is built; no beads yet.
+Status: proposed; grilled 2026-10-28 (decisions below, ADRs 0001–0003). Nothing here is
+built; no beads yet.
 
 ## What is wrong now
 
@@ -54,20 +55,27 @@ completes the cost side once there is a row to attach it to.
 
 ### 1. A stamp on every round
 
-Each round record (`beads/ID/rounds.jsonl` and the round's log file) carries what
-produced it:
+Every model session — worker, gate fix, each review seat, pre-check, post-mortem,
+brief, research — writes one line to `beads/ID/stamps.jsonl` saying what produced it
+(decisions 3, 4 and 9–12; ADR 0001):
 
 | field | source |
 | --- | --- |
-| `loop_sha` | the bead-loop commit the running binary was built from |
-| `prompt_hash` | hash of the `agents/*.md` the round's harness was handed |
-| `skills_hash` | hash of the `skills/` the round could load |
-| `stage`, `provider`, `model`, `harness` | the stage and seat as resolved |
-| `config_hash` | hash of the resolved stage + target config for this bead |
-| `server` | what the provider reports about itself, where it does (quantisation, context) |
+| `round`, `kind`, `log` | the round number, the session's kind, its log stem (the join to `logs/`) |
+| `loop_sha`, `dirty` | the bead-loop commit the running binary was built from (`build.rs`; the flake passes `self.rev`) |
+| `prompt_hash` | content hash of the agent file the session's harness was handed |
+| `skills_hash` | content hash of the `skills/` tree the session could load |
+| `base_sha` | the target commit the worktree was cut from, or the kept branch's head on a resumed round |
+| `stage`, `provider`, `model`, `harness` | the stage and seat as resolved, in plain text |
+| `config_hash` | hash of the resolved stage (worker, seats, approvals, harness, provider name, model, `parallel`, `cost`) and the target keys that change a round (`gate`, `setup`, `base`); never credentials or URLs |
 
-Today a round record carries the round, the model, the reason and the gate output
-(`src/park.rs`); the log name carries the bead and the start time. Nothing else.
+Deferred: `server` (what the provider reports about itself: quantisation, context),
+until a hypothesis needs it.
+
+Today a send-back record carries the round, the model, the stage, when, the whole note
+(the reason, the gate output) and its log files' names (`src/park.rs` `record_round`);
+every model session, the landing one included, has a log `logs/ID.STAMP.KIND.jsonl`
+whose name carries the bead and the start time. Nothing records what produced them.
 
 `rounds.jsonl` holds send-backs only (`park.rs` `record_round`), and it is prompt input:
 the worker reads the last three records. The round that lands has no record, so the
@@ -79,24 +87,34 @@ worker's prompt.
 `bead-supervisor stats --rows` emits JSONL, one row per bead, so the stamp can slice it.
 The scoreboard already computes most of this; it sums it away.
 
-- **Features at claim time** (the covariates — "the beads got easier" vs "the loop got
+Rows cover every bead the loop touched (`stats.rs` `bead_of`'s test), whatever its
+outcome, and are not windowed: the reader filters (decision 15).
+
+- **Features at claim time**, captured at the first claim as a `claim` line in
+  `stamps.jsonl`, never rebuilt later (decision 14) (the covariates — "the beads got easier" vs "the loop got
   better"): files named; how many exist on base; description length; acceptance is a
   command or prose; harness; starting stage; greenfield (a named file is created) or
-  not; the `planned-in` session, when known.
+  not; `linted`, from the `lint` note (decision 17); the `planned-in` session, when known.
 - **Outcome**: landed, parked or open; first try; rounds; send-back reasons in order;
   stage it landed on; metered USD; local tokens; wall time to land; model time by role;
-  **human touches** (answers, unparks, operator commits on the bead's branch).
+  `reverted` and `named_by` (the guardrail; null until 14 days after the merge,
+  decision 16); **human touches** (answers, unparks, escalations, operator notes — from the bead's
+  notes, which `stats.rs` already parses; operator commits on the bead's branch are not
+  counted yet).
 
 ### 3. The metric definitions, fixed once
 
 Written down before any tuning, so no experiment picks its own success criterion.
 
-- **Headline: cost per landed bead** = metered USD + human minutes × an owner rate the
-  config sets, over landed beads. Always reported beside **landing rate**, so a config
-  cannot win by parking everything hard.
-- **Guardrail: quality after merge.** Within N days of a bead's merge: a revert of its
-  commit, a red required check on the base traced to it, or a later bead whose files
-  overlap and whose description names it. None of this is measured today.
+- **Headline: metered USD per landed bead**, always reported beside **landing rate**
+  (so a config cannot win by parking everything hard) and **human touches per landed
+  bead** (answers, unparks, escalations, operator notes and commits). Human time is
+  counted, not priced: no minutes are measured, and a rate would hide a trade of the
+  owner's time for dollars (ADR 0002).
+- **Guardrail: defects after merge.** Within 14 days of a bead's merge: a revert of its
+  squash commit on the base, or a later bead whose text names it as the cause. A red
+  check on the base traced to it is left out until it can be attributed without false
+  positives. None of this is measured today.
 - **Diagnostics, never targets:** send-backs by reason, empty rounds, pre-check
   catch rate, gate fix rate, time to land.
 
@@ -132,9 +150,9 @@ taking a production lane's slots.
   OpenTelemetry cost metrics, split across the beads created in it. Needs a
   `planned-in:<session>` mark on the bead, set by the `breakdown`/`delegate` skills.
 - **Aider's tokens**, which today add nothing to any total.
-- **A direct-to-frontier control**: a small share of beads (~5%) sent straight to the
-  last stage. That is the measured "just do it with frontier" baseline the delegation
-  question needs.
+- **A direct-to-frontier control**: the measured "just do it with frontier" baseline the
+  delegation question needs — a bench arm with the last stage only, not a share of
+  production beads (decision 6, ADR 0003).
 
 Then, per bead: `net = C_direct − (C_plan_share + C_escalation + rate × T_human)`,
 reported by bead shape.
@@ -158,9 +176,10 @@ What the measurement is for. Each stays a candidate until the bench says otherwi
 | a cheap metered stage before the last | cost per landed ↓ | escalated beads |
 | a landing-probability router for the planner | cost per landed ↓, parks ↓ | at planning time |
 
-## Groundwork this repo is missing
+## Groundwork
 
-Found while writing this; needed before the grill and for iterating on bead-loop itself.
+Done by the grill: `AGENTS.md`, `docs/agents/`, the `dev` stack in `flake.nix`, and
+`CONTEXT.md` with `docs/adr/`. As it stood when this was written:
 
 - **No domain docs.** There is no `AGENTS.md`, `CLAUDE.md`, `CONTEXT.md` or `docs/adr/` at the
   root. The `breakdown` skill tells a planner to read a target's `AGENTS.md` and
@@ -178,26 +197,59 @@ Found while writing this; needed before the grill and for iterating on bead-loop
   (`cargo fmt`), the integration suite (`test/run.sh`) and the docs map — the same thing
   `breakdown` asks of every target.
 
-## Open questions for the grill
+## Decisions from the grill (2026-10-28)
 
-1. Is cost per landed bead the right headline, and how is human time priced — a rate, or
-   reported apart in minutes?
-2. What N for the after-merge window, and which signals count as a defect?
-3. Does the stamp hash prompts and skills by content, or record the `loop_sha` alone and
-   derive the rest?
-4. The stamp's home: a new per-round record beside `rounds.jsonl` (which is send-backs
-   only and prompt input), or a field on the log file?
-5. Bench isolation: fully offline (no `bd`, no `gh`), and on which provider slots?
-6. Is the direct-to-frontier control worth its cost, or is the Claude stage's record on
-   escalated beads a good enough baseline?
-7. The dev stack: in this repo's `flake.nix` beside `planner`, or in the flox env?
-8. Which of the hypotheses goes first once 1–3 land?
+1. **Headline:** metered USD per landed bead, beside landing rate and human touches per
+   landed bead; human time counted, never priced (ADR 0002).
+2. **After-merge window:** 14 days; a defect is a revert of the bead's commit or a later
+   bead naming it as the cause (ADR 0002).
+3. **The stamp hashes by content.** `loop_sha` and a dirty flag, compiled in by a new
+   `build.rs` (the flake passes `self.rev`: a Nix build has no `.git`), plus content
+   hashes of the agent file the round was handed and the skills tree it could load —
+   `install.sh` links both into the working tree, so they can differ from the binary's
+   commit (ADR 0001).
+4. **The stamp's home:** a new `beads/ID/stamps.jsonl`, one line per round including the
+   one that lands, carrying the log stem it joins on; never prompt input (ADR 0001).
+5. **Bench isolation:** fully offline — no `bd`, `gh` or push; the worktree cut from a
+   clone holding history only up to the case's base. Provider slots, today a counter
+   inside one process (`harness.rs` `provider_slot`), move to lock files under
+   `$STATE_DIR` so a bench process shares them, and the bench only *tries* for a slot,
+   never queueing ahead of production. The rest is piece 4's design pass.
+6. **The frontier control is a bench arm** (last stage only, same cases), not ~5% of
+   production. Until the bench exists, the last stage's record on escalated beads
+   stands in, read as biased toward hard beads (ADR 0003).
+7. **The dev stack** is `dev` in `flake.nix` (built).
+8. **Which hypothesis first:** `bead-supervisor lint`. Its predicted movement (fewer
+   `false claim` send-backs) is already counted by reason, so pieces 1–2 confirm it in
+   production without the bench; it is deterministic and cheap; and running a check
+   against the base commit is the machinery piece 4's hidden check needs.
+9. **A stamp per model session**, not per round: each carries its round number, kind
+   and log stem; a round is the lines sharing a number.
+10. **`base_sha` in the stamp**: what code the session started from, and what a case needs.
+11. **`config_hash`** covers the resolved stage and the round-changing target keys,
+    never credentials or URLs; the stage fields are also written in plain text.
+12. **`server` is deferred** until a hypothesis needs it.
+13. **Human touches, first version:** from the bead's notes only; operator commits on the
+    branch are a known gap.
+
+14. **Row features are captured at the first claim**, as a `claim` line in
+    `stamps.jsonl`; beads from before it have none.
+15. **Rows cover every touched bead**, unwindowed; `stats --rows` emits them all.
+16. **Piece 2 computes the guardrail**: `reverted` and `named_by` per row, null until 14
+    days after the merge.
+17. **`lint` marks the bead with a dated note** (`lint DATE: pass`, or the failures), not a
+    label, so routing is unchanged; the claim line's `linted` reads it. The note is a
+    person's line, so it reaches the worker's prompt like any other: a few words of
+    difference between the arms, accepted.
+
+**Build order:** piece 1 ships first and alone, since it loses data every day it is
+missing; piece 3 is the definitions above; piece 2 next; then piece 4's design pass.
 
 ## Sequence
 
-1. Groundwork: `AGENTS.md`, `docs/agents/`, the dev stack.
-2. Grill this doc with `grill-with-docs`; `CONTEXT.md` and any ADRs come out of it.
-3. Pieces 1–3, together.
+1. Groundwork: `AGENTS.md`, `docs/agents/`, the dev stack. (Done.)
+2. Grill this doc with `grill-with-docs`; `CONTEXT.md` and any ADRs come out of it. (Under way.)
+3. Piece 1 alone; then piece 2, with piece 3's definitions.
 4. Piece 4's own design pass, then the build.
 5. Piece 5.
 6. The hypotheses, one at a time, each benched before it ships.
