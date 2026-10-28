@@ -92,7 +92,7 @@ outcome, and are not windowed: the reader filters (decision 15).
 
 - **Features at claim time**, captured at the first claim as a `claim` line in
   `stamps.jsonl`, never rebuilt later (decision 14) (the covariates — "the beads got easier" vs "the loop got
-  better"): files named; how many exist on base; description length; acceptance is a
+  better"): files named (aider's rule, `harness.rs` `files_named`, decision 21); how many exist on base; description length; acceptance is a
   command or prose; harness; starting stage; greenfield (a named file is created) or
   not; `linted`, from the `lint` note (decision 17); the `planned-in` session, when known.
 - **Outcome**: landed, parked or open; first try; rounds; send-back reasons in order;
@@ -108,7 +108,8 @@ Written down before any tuning, so no experiment picks its own success criterion
 
 - **Headline: metered USD per landed bead**, always reported beside **landing rate**
   (so a config cannot win by parking everything hard) and **human touches per landed
-  bead** (answers, unparks, escalations, operator notes and commits). Human time is
+  bead** (answers, unparks, escalations, operator notes; operator commits once they can
+  be told from the worker's, decision 23). Human time is
   counted, not priced: no minutes are measured, and a rate would hide a trade of the
   owner's time for dollars (ADR 0002).
 - **Guardrail: defects after merge.** Within 14 days of a bead's merge: a revert of its
@@ -119,6 +120,8 @@ Written down before any tuning, so no experiment picks its own success criterion
   catch rate, gate fix rate, time to land.
 
 ### 4. The replay bench
+
+The design is [design-bench.md](design-bench.md); this is its outline.
 
 The controlled experiment. Production is observational; the bench runs the same beads
 under both arms.
@@ -154,8 +157,9 @@ taking a production lane's slots.
   delegation question needs — a bench arm with the last stage only, not a share of
   production beads (decision 6, ADR 0003).
 
-Then, per bead: `net = C_direct − (C_plan_share + C_escalation + rate × T_human)`,
-reported by bead shape.
+Then, per bead: `net USD = C_direct − (C_plan_share + C_escalation)`, reported by bead
+shape and always beside the change in human touches, never priced (decision 22, ADR
+0002).
 
 ## The candidate changes, as hypotheses
 
@@ -238,10 +242,48 @@ Done by the grill: `AGENTS.md`, `docs/agents/`, the `dev` stack in `flake.nix`, 
 15. **Rows cover every touched bead**, unwindowed; `stats --rows` emits them all.
 16. **Piece 2 computes the guardrail**: `reverted` and `named_by` per row, null until 14
     days after the merge.
-17. **`lint` marks the bead with a dated note** (`lint DATE: pass`, or the failures), not a
-    label, so routing is unchanged; the claim line's `linted` reads it. The note is a
-    person's line, so it reaches the worker's prompt like any other: a few words of
-    difference between the arms, accepted.
+17. **`lint` marks the bead with a dated note**, not a label, so routing is unchanged;
+    the claim line's `linted` reads it.
+
+Round 2:
+
+18. **The lint note is the loop's own line**: `bead-loop lint DATE: pass`, or the
+    failures. `round.rs` `people_notes` keeps `bead-loop` lines out of the worker's
+    prompt, so linted and unlinted arms see the same prompt.
+19. **`build.rs` names its rerun list**: `build.rs`, `Cargo.toml`, `src`, `agents`,
+    `skills`, and the git files `git rev-parse --git-path` gives for `HEAD`, `index`,
+    `packed-refs` and the ref HEAD names. Naming any path turns off cargo's
+    rerun-on-every-file default, so a short list would go stale on a commit that
+    changes no file; and in a worktree `.git` is a file, so `.git/HEAD` is never
+    written literally.
+20. **The stamp is written in `run_agent`**, after the slot is taken: every harness
+    (opencode, claude-code, aider, command) dispatches inside it. A session picked up
+    by `rejoin_session` after a restart writes none; its stamp is the one from its start.
+21. **"Files named" is aider's rule**: `harness.rs` `files_named`'s tokens, split out
+    as `path_tokens` with no existence check, so the claim features, `lint`'s "paths
+    exist" and aider's file list cannot disagree.
+22. **Piece 5's net is in USD only**, beside the change in human touches.
+23. **Operator commits are not a human touch yet**: telling one from the worker's on a
+    branch both commit to is its own question.
+
+`bl-ayv.1`, `.3` and `.4` carry decisions 18–21.
+
+Round 3:
+
+24. **"Names it as the cause" is a `caused-by` dependency** (`bd dep add NEW OLD -t
+    caused-by`), never a mention in the text: beads in a chain mention each other, and
+    a substring match counts `bl-ayv` as named by every `bl-ayv.3`. The `beads` skill
+    tells the planner to add the link when filing a fix. `bl-ayv.6` carries it.
+25. **The loop builds pieces 1–2 itself.** Every `bl-ayv` child gets `delegate:local`
+    once this branch is on `main`: the beads cite `CONTEXT.md`, the ADRs and this doc,
+    and the loop cuts its worktrees from `origin/main`. `.2`, `.4` and `.5` keep
+    `stage:frontier`.
+26. **The hidden check is transplanted by name** (`design-bench.md`).
+27. **The first case set** is the landed beads whose merge added a test, plus the parked
+    beads; gate-only beads are a set of their own, never mixed into a pass rate
+    (`design-bench.md`).
+28. **The reviewer is off in a bench run by default**, and an arm when on.
+29. **Piece 4's design is its own doc**, [design-bench.md](design-bench.md).
 
 **Beads:** epic `bl-ayv`, `.1`–`.6`: `build.rs`, `src/stamp.rs`, the session stamp,
 the claim line, `stats --rows`, the guardrail.

@@ -40,7 +40,7 @@ A bead the loop merged and closed.
 _Avoid_: done, finished, shipped
 
 **Human touch**:
-One act by a person that a bead needed to move: an answer, an unpark, an escalation, an operator note or commit.
+One act by a person that a bead needed to move: an answer, an unpark, an escalation, an operator note. (An operator's commit on the bead's branch is one too, not yet counted.)
 _Avoid_: intervention, human minutes
 
 ### Measurement
@@ -61,7 +61,7 @@ _Avoid_: cost per bead (it hides parks), score
 A metric a change must not worsen even when the headline improves; today, defects after merge.
 
 **Defect after merge**:
-Within 14 days of a bead landing, a revert of its commit or a later bead naming it as the cause.
+Within 14 days of a bead landing, a revert of its commit or a later bead linked to it by a `caused-by` dependency (a mention in the text is not one).
 _Avoid_: regression, bug
 
 **Diagnostic**:
