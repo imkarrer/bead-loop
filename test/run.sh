@@ -41,7 +41,9 @@ stages() {
   done; true
 }
 setup() {  # setup [GATE] [MERGE] [REVIEW_MODEL] [EXTRA_TOML]
-  T=$(mktemp -d); export T
+  # The real path: macOS hands out /var/folders/..., an alias of /private/var/..., and
+  # the binary reports the paths git and the shell resolve.
+  T=$(cd "$(mktemp -d)" && pwd -P); export T
   export BEAD_LOOP_CONFIG=$T/config BEAD_LOOP_STATE=$T/state TEST_CTRL=$T/ctrl BD_STATE=$T/bd
   mkdir -p "$BEAD_LOOP_CONFIG" "$TEST_CTRL" "$BD_STATE"
   git init -q --bare "$T/origin.git"

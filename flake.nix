@@ -3,6 +3,10 @@
 # `agent-plugin-bead-loop` in its plugins. `planner` is that stack with Claude Code alone,
 # for writing beads in a repo that has no stack of its own:
 #   nix run github:imkarrer/bead-loop#planner
+# `dev` is the stack for working on bead-loop itself: the same plugin plus Matt Pocock's
+# engineering skills (grill-with-docs, domain-modeling, tdd, ...). The toolchain is the
+# flox env's, so it runs inside it:
+#   flox activate -- nix run .#dev
 # The loop itself is installed by install.sh, not by this flake.
 {
   description = "bead-loop's skills for writing beads the loop lands, as an agent plugin and a Claude Code stack";
@@ -39,6 +43,11 @@
             name = "bead-loop-planner";
             harness = agent-pkgs.packages.${system}.claude-code;
             plugins = [ agent-plugin-bead-loop ];
+          };
+          dev = mkAgentStack {
+            name = "bead-loop-dev";
+            harness = agent-pkgs.packages.${system}.claude-code;
+            plugins = [ agent-plugin-bead-loop agent-pkgs.packages.${system}.agent-plugin-mattpocock-skills ];
           };
           default = agent-plugin-bead-loop;
         });
