@@ -40,7 +40,7 @@ A bead the loop merged and closed.
 _Avoid_: done, finished, shipped
 
 **Human touch**:
-One act by a person that a bead needed to move: an answer, an unpark, an escalation, an operator note or commit.
+One act by a person that a bead needed to move: an answer, an unpark, an escalation, an operator note. (An operator's commit on the bead's branch is one too, not yet counted.)
 _Avoid_: intervention, human minutes
 
 ### Measurement
