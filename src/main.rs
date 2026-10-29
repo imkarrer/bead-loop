@@ -46,6 +46,7 @@ mod park;
 mod round;
 mod shell;
 mod signals;
+mod stamp;
 mod state;
 mod stats;
 mod status;
