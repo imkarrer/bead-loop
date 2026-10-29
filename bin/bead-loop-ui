@@ -38,7 +38,22 @@ const run = (cmd, args, opts = {}) => new Promise((resolve) => {
 const jsonLines = (s) => s.split('\n').filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
 
 // ---- what the page reads -------------------------------------------------------------
+// On macOS launchd runs the loop (install.sh's agent dev.bead-loop.supervisor), not
+// systemd: its state comes from `launchctl print`, and there is no keeper timer, since the
+// agent's KeepAlive is the keeper. BEAD_LOOP_OS=Darwin drives this path in the suite.
+const LAUNCHD = (process.env.BEAD_LOOP_OS || os.type()) === 'Darwin';
+const AGENT = 'dev.bead-loop.supervisor';
+const agentTarget = () => `gui/${process.getuid()}/${AGENT}`;
+async function launchdState() {
+  const r = await run('launchctl', ['print', agentTarget()]);
+  if (!r.ok) return { available: true, active: 'inactive', sub: 'not loaded', since: null, result: null };
+  const state = (r.stdout.match(/^\s*state = (\S+)/m) || [])[1] || 'unknown';
+  const code = (r.stdout.match(/last exit code = (-?\d+)/) || [])[1];
+  return { available: true, active: state === 'running' ? 'active' : 'inactive', sub: state, since: null,
+           result: code && code !== '0' ? `exit ${code}` : null };
+}
 async function unitState(name) {
+  if (LAUNCHD) return name.endsWith('.service') ? launchdState() : { available: false };
   const r = await run('systemctl', ['--user', 'show', name, '-p', 'ActiveState,SubState,ExecMainStartTimestamp,LastTriggerUSec,NextElapseUSecRealtime,Result,TimersMonotonic']);
   if (!r.ok) return { available: false };
   const p = Object.fromEntries(r.stdout.split('\n').filter(Boolean).map((l) => l.split(/=(.*)/s).slice(0, 2)));
@@ -278,14 +293,23 @@ const actions = {
   },
   // stop: the loop's TERM handler aborts the sessions it is on; the keeper timer starts it
   // again in a minute unless the timer is stopped too (loop {on:false}).
-  async stop() { return systemctl('stop', `${UNIT}.service`); },
+  // Under launchd, TERM to the agent: KeepAlive starts it again (ThrottleInterval, 10 s).
+  async stop() { return LAUNCHD ? launchctl('kill', 'TERM', agentTarget()) : systemctl('stop', `${UNIT}.service`); },
   // loop {on}: the loop and its keeper together — off is a real stop, on brings it back now.
+  // Under launchd, off unloads the agent and on loads it again from its plist.
   async loop({ on }) {
+    if (LAUNCHD) {
+      return on ? launchctl('bootstrap', `gui/${process.getuid()}`, path.join(os.homedir(), 'Library', 'LaunchAgents', `${AGENT}.plist`))
+        : launchctl('bootout', agentTarget());
+    }
     if (on) return systemctl('start', `${UNIT}.timer`);
     await systemctl('stop', `${UNIT}.timer`);
     return systemctl('stop', `${UNIT}.service`);
   },
-  async timer({ on }) { return systemctl(on ? 'start' : 'stop', `${UNIT}.timer`); },
+  async timer({ on }) {
+    if (LAUNCHD) throw new Error('no keeper timer under launchd: the agent keeps itself up');
+    return systemctl(on ? 'start' : 'stop', `${UNIT}.timer`);
+  },
   // priority {repo}: the repo the lanes look at first on every pass; 'none' clears it.
   async priority({ repo }) {
     const repos = await knownRepos();
@@ -408,6 +432,11 @@ const actions = {
     return { published: id };
   },
 };
+async function launchctl(...args) {
+  const r = await run('launchctl', args);
+  if (!r.ok) throw new Error(r.stderr.trim() || `launchctl exited ${r.code}`);
+  return { ran: `launchctl ${args.join(' ')}` };
+}
 async function systemctl(...args) {
   const r = await run('systemctl', ['--user', ...args]);
   if (!r.ok) throw new Error(r.stderr.trim() || `systemctl exited ${r.code}`);

@@ -48,8 +48,13 @@ pub fn gh_probe() -> ProbeResult {
 }
 
 /// `claude auth status`: JSON on stdout either way (`loggedIn`), exit 1 when signed out —
-/// the JSON is read regardless of the exit code, the same as `harness::claude_ok`.
-pub fn claude_probe() -> ProbeResult {
+/// the JSON is read regardless of the exit code, the same as `harness::claude_ok`. Asked
+/// only when a repo names a `claude/*` model: a loop that never calls Claude is not
+/// broken for want of it (a Mac's launchd agent has no `claude` on its PATH).
+pub fn claude_probe(repos: &[Repo]) -> ProbeResult {
+    if !repos.is_empty() && !uses_claude(repos) {
+        return ProbeResult::ok("claude auth", "not used: no stage or model names claude/*");
+    }
     match output(cmd("claude").args(["auth", "status"])) {
         Ok(o) => {
             let v: Value = serde_json::from_str(&stdout_str(&o)).unwrap_or(Value::Null);
@@ -62,6 +67,16 @@ pub fn claude_probe() -> ProbeResult {
         }
         Err(e) => ProbeResult::fail("claude auth", format!("claude not runnable: {e}")),
     }
+}
+
+/// Whether any repo names a `claude/*` model: a stage's worker or a seat, or the brief,
+/// pre-check, research or conflict model.
+fn uses_claude(repos: &[Repo]) -> bool {
+    repos.iter().any(|r| {
+        let stages = r.stages.iter().flat_map(|s| std::iter::once(s.worker.as_str()).chain(s.seats.iter().map(|x| x.model.as_str())));
+        let others = [&r.brief_model, &r.precheck_model, &r.research_model, &r.conflict_worker].into_iter().map(String::as_str);
+        stages.chain(others).any(|m| m.starts_with("claude/"))
+    })
 }
 
 /// The opencode providers a repo's stages name: the part of `worker`/`reviewer` before the
@@ -117,7 +132,7 @@ pub fn opencode_provider_probes(repos: &[Repo]) -> Vec<ProbeResult> {
 /// `GET attach/session`, 5 s: the attached opencode server the loop runs rounds on.
 pub fn attach_probe(repos: &[Repo]) -> ProbeResult {
     match repos.iter().map(|r| r.attach.as_str()).find(|a| !a.is_empty()) {
-        None => ProbeResult::fail("attach server", "no attach server configured"),
+        None => ProbeResult::ok("attach server", "none configured: sessions run in their own opencode (optional)"),
         Some(attach) => match curl_get(&format!("{attach}/session"), None, 5) {
             Some(_) => ProbeResult::ok("attach server", format!("reachable at {attach}")),
             None => ProbeResult::fail("attach server", format!("cannot reach {attach}/session")),
@@ -183,6 +198,20 @@ mod tests {
             timeout: None,
             approvals: crate::config::Approvals::All,
         }
+    }
+
+    #[test]
+    fn claude_is_probed_only_where_something_names_it() {
+        let d = crate::config::scratch("uses-claude");
+        let mut r = crate::config::test_repo(&d, &["mac/gpt-oss:llmbox/reviewer:2"]);
+        r.brief_model = "llmbox/coder".into();
+        r.conflict_worker = "llmbox/coder".into();
+        assert!(!uses_claude(std::slice::from_ref(&r)), "local stages only");
+        assert!(claude_probe(std::slice::from_ref(&r)).ok, "not used is green");
+        r.brief_model = "claude/opus".into();
+        assert!(uses_claude(std::slice::from_ref(&r)), "the brief names it");
+        let r2 = crate::config::test_repo(&d, &["claude/sonnet"]);
+        assert!(uses_claude(&[r2]), "a stage names it");
     }
 
     #[test]

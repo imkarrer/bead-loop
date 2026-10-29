@@ -206,7 +206,11 @@ checkout, `./install.sh` does the same on macOS, with the agents running the che
 through its flox env, as the units do on Linux. To stop the loop:
 `launchctl bootout gui/$(id -u)/dev.bead-loop.supervisor`.
 
-The page's systemd levers (Stop, Off, the timer) say they are unavailable on macOS.
+On the page, the loop's state is `launchctl`'s. Stop sends the agent TERM and launchd
+starts it again ten seconds on; Off unloads it until Start loads it again. There is no
+keeper timer: the agent's `KeepAlive` is the keeper. A provider on the LAN needs one
+**Local Network** allow the first time the agent's opencode reaches it (System Settings →
+Privacy & Security → Local Network). Until then its rounds are held, not failed.
 
 Per repo: label the beads the model may work (`bd label add <id> delegate:local`; each
 needs a DESCRIPTION naming the files and an ACCEPTANCE CRITERIA the worker can run — `bd

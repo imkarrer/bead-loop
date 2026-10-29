@@ -2556,18 +2556,27 @@ case_install_from_the_package() {
   assert_nofile "$HOME/.local/bin/bead-supervisor" "nothing built or copied to ~/.local/bin"
   assert_match "$out" "the flox package" "said where the binary is from"
 }
-case_ui_log_from_a_file() {
-  # Under launchd there is no journal: BEAD_LOOP_LOG names the file the agent writes, and
-  # the page's log is its last lines, each at the time the line starts with.
+case_ui_on_macos() {
+  # Under launchd there is no journal and no systemd: BEAD_LOOP_LOG names the file the
+  # agent writes, and the page's log is its last lines, each at the time the line starts
+  # with; the loop's state is launchctl's, and Stop and Off act through launchctl.
   setup
   command -v node >/dev/null || { echo "  (no node: ui server not exercised)"; return; }
   printf '%s\n' "00:00:01 repo: dev: bead t-1 to stub/worker" "a line with no time" >"$T/sup-file.log"
+  mkdir -p "$TEST_CTRL/launchd"; : >"$TEST_CTRL/launchd/dev.bead-loop.supervisor"
   port=$((20000 + RANDOM % 20000))
-  BEAD_LOOP_LOG=$T/sup-file.log BEAD_LOOP_UI_PORT=$port BEAD_SUPERVISOR=$SUP node "$HERE/../bin/bead-loop-ui" >"$T/ui.log" 2>&1 & upid=$!
+  BEAD_LOOP_OS=Darwin BEAD_LOOP_LOG=$T/sup-file.log BEAD_LOOP_UI_PORT=$port BEAD_SUPERVISOR=$SUP node "$HERE/../bin/bead-loop-ui" >"$T/ui.log" 2>&1 & upid=$!
   for _ in $(seq 50); do "$REAL_CURL" -sf -m 1 "http://127.0.0.1:$port/api/state" >"$T/state.json" 2>/dev/null && break; sleep 0.1; done
-  kill $upid
   assert_eq "$(jq -r '[.log[].msg] | join("|")' "$T/state.json")" "00:00:01 repo: dev: bead t-1 to stub/worker|a line with no time" "the page's log is the file's lines"
   assert_eq "$(jq -r '.log[0].t | strflocaltime("%H:%M:%S")' "$T/state.json")" "00:00:01" "at the time the line starts with"
+  assert_eq "$(jq -r '.service.available, .service.active, .timer.available' "$T/state.json" | tr '\n' ' ')" "true active false " "the loop is up by launchctl, and there is no keeper timer"
+  post() { "$REAL_CURL" -s -m 5 -X POST -H 'content-type: application/json' -d "$2" "http://127.0.0.1:$port/api/$1"; }
+  assert_match "$(post stop '{}')" "launchctl kill TERM gui/$(id -u)/dev.bead-loop.supervisor" "Stop is TERM to the agent"
+  assert_match "$(post loop '{"on":false}')" "launchctl bootout gui/$(id -u)/dev.bead-loop.supervisor" "Off unloads it"
+  assert_match "$(post timer '{"on":true}')" "no keeper timer under launchd" "and there is no timer to turn on"
+  "$REAL_CURL" -sf -m 5 "http://127.0.0.1:$port/api/state" >"$T/state.json"
+  kill $upid
+  assert_eq "$(jq -r '.service.active' "$T/state.json")" "inactive" "unloaded, the loop is down"
 }
 case_doctor() {
   # Every dependency probed, red or green: bd's version and git are real; gh auth, claude
@@ -2582,11 +2591,13 @@ case_doctor() {
   assert_match "$out" '\[green\] opencode provider stub: reachable at http://oc.test:4096' "the provider named in the stages"
   assert_match "$out" '\[green\] attach server: reachable at http://oc.test:4096' "GET /session"
   assert_match "$out" '\[green\] systemd units: ' "the three units, stubbed active"
+  assert_match "$out" '\[green\] claude auth: not used' "nothing names claude/*, so claude is not asked"
   j=$(sup --json doctor "$REPO")
   assert_eq "$(printf '%s' "$j" | jq -r 'type')" array "--json: an array"
   assert_eq "$(printf '%s' "$j" | jq -r '[.[] | (has("name") and has("ok") and has("detail"))] | all')" true "--json: each probe is {name, ok, detail}"
   assert_eq "$(printf '%s' "$j" | jq -r '[.[].ok] | all')" true "--json: all green too"
 
+  echo 'brief_model = "claude/opus"' >>"$REPO/.bead-loop.toml"
   : >"$TEST_CTRL/claude-signed-out"
   rc=0; out=$(sup doctor "$REPO") || rc=$?
   assert_eq "$rc" 1 "doctor: exits 1 with a red line when claude auth status says signed out"
