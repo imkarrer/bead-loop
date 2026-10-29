@@ -58,6 +58,14 @@ steps:
       - imkarrer/flox#main:
           command: scripts/ci.sh suite
 
+  - label: ":package: flox package"
+    key: package
+    timeout_in_minutes: 25
+    cancel_on_build_failing: true
+    plugins:
+      - imkarrer/flox#main:
+          command: scripts/ci.sh package
+
   - wait
 
   - label: ":github: automerge"

@@ -184,6 +184,42 @@ The loop surviving a reboot with nobody logged in also needs **linger** for this
 `install.sh` tries `loginctl enable-linger` itself and tells you if it couldn't (it needs
 root): `sudo loginctl enable-linger $USER`, once.
 
+### On macOS
+
+[docs/setup-macos.md](docs/setup-macos.md) is the guide for someone setting it up for
+the first time: one line in Terminal runs `scripts/setup-macos.sh`, which installs Flox
+if needed, checks this repo out to `~/bead-loop`, runs `install.sh` and signs in to
+GitHub. `scripts/configure-models.sh` is the opt-in that points the loop at a shared
+model server (llm-box), and optionally at Ollama on the Mac.
+
+### On macOS, from the flox package
+
+The package is the supervisor, the page, `bead-loop-install` (this `install.sh`), and the
+agents, skills and launchd templates beside them. The tools a round runs (`bd`, `git`,
+`gh`, `jq`, `curl`, `node`, GNU `timeout`, bash 5) come with it. opencode does not, so the
+environment that installs the package installs it too:
+
+```bash
+flox install imkarrer/bead-loop opencode@1.18.29   # into the environment you live in
+bead-loop-install                                   # links, config, and the launchd agents
+```
+
+`bead-loop-install` builds nothing. It links `agents/` and `skills/` into opencode
+through that environment, whose path an upgrade keeps, seeds the config, and starts two
+launchd agents in `~/Library/LaunchAgents`: `dev.bead-loop.supervisor` (the loop) and
+`dev.bead-loop.ui` (the page). launchd keeps both up (`KeepAlive`) and starts them at
+login. They log to `~/Library/Logs/bead-loop/`, and the page shows the loop's file there
+where Linux shows the journal. A re-run leaves a loaded, unchanged agent alone. From a
+checkout, `./install.sh` does the same on macOS, with the agents running the checkout
+through its flox env, as the units do on Linux. To stop the loop:
+`launchctl bootout gui/$(id -u)/dev.bead-loop.supervisor`.
+
+On the page, the loop's state is `launchctl`'s. Stop sends the agent TERM and launchd
+starts it again ten seconds on; Off unloads it until Start loads it again. There is no
+keeper timer: the agent's `KeepAlive` is the keeper. A provider on the LAN needs one
+**Local Network** allow the first time the agent's opencode reaches it (System Settings →
+Privacy & Security → Local Network). Until then its rounds are held, not failed.
+
 Per repo: label the beads the model may work (`bd label add <id> delegate:local`; each
 needs a DESCRIPTION naming the files and an ACCEPTANCE CRITERIA the worker can run — `bd
 dep add B A` is the ordering; the `delegate` skill, linked into `~/.claude/skills` for

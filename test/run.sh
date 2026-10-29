@@ -104,6 +104,7 @@ assert_eq() { [ "$1" = "$2" ] && ok || bad "$3: expected [$2] got [$1]"; }
 # A here-string, not a pipe: `grep -q` leaves at the first match, and under pipefail a
 # printf still writing a large page (the UI case) then failed the assertion with SIGPIPE.
 assert_match() { grep -q -- "$2" <<<"$1" && ok || bad "$3: [$1] lacks [$2]"; }
+assert_nomatch() { grep -qE -- "$2" <<<"$1" && bad "$3: [$1] has [$2]" || ok; }   # an extended regex
 assert_file() { [ -e "$1" ] && ok || bad "$2: missing $1"; }
 assert_nofile() { [ ! -e "$1" ] && ok || bad "$2: unexpected $1"; }
 assert_branch() { git -C "$T/origin.git" show-ref -q "refs/heads/$1" && ok || bad "$2: origin has no branch $1"; }
@@ -2505,6 +2506,123 @@ case_stage_label_goes_to_its_lane() {
   assert_eq "$(cut -d' ' -f3 "$TEST_CTRL/calls" | head -1)" "claude/opus" "no stub/fast round: straight to Claude"
   assert_eq "$(grep -c "dev: bead t-1" "$T/sup.log")" 1 "one worker round, the claude lane's"
 }
+case_install_on_macos() {
+  # install.sh on macOS, driven on any box: BEAD_LOOP_OS=Darwin and the launchctl stub.
+  # From a checkout: the two launchd agents run it through its flox env, as the units do;
+  # the opencode links; no systemd units. A re-run with nothing changed leaves the loaded
+  # agents alone, so a deploy never interrupts a round.
+  setup
+  command -v flox >/dev/null || { echo "  (no flox: install.sh's macOS path not exercised)"; return; }
+  export HOME=$T/home; mkdir -p "$HOME"
+  root=$(cd "$HERE/.." && pwd)
+  out=$(BEAD_LOOP_OS=Darwin BEAD_SUPERVISOR_BIN=$SUP bash "$root/install.sh" 2>&1)
+  la=$HOME/Library/LaunchAgents
+  sup_plist=$(cat "$la/dev.bead-loop.supervisor.plist"); ui_plist=$(cat "$la/dev.bead-loop.ui.plist")
+  assert_match "$sup_plist" "<string>-d</string>" "the loop's agent activates the checkout's env"
+  assert_match "$sup_plist" "<string>$root</string>" "this checkout"
+  assert_match "$sup_plist" "<string>$HOME/.local/bin/bead-supervisor</string>" "the installed binary"
+  assert_match "$sup_plist" "<string>$HOME/Library/Logs/bead-loop/bead-supervisor.log</string>" "logging to a file"
+  assert_match "$ui_plist" "<key>BEAD_LOOP_LOG</key>" "the page reads that file"
+  assert_nomatch "$sup_plist$ui_plist" "@[A-Z]*@" "every placeholder filled in"
+  assert_eq "$(grep -c '^bootstrap gui/' "$TEST_CTRL/launchctl.log")" 2 "both agents started"
+  assert_nofile "$HOME/.config/systemd" "no systemd units on macOS"
+  assert_eq "$(readlink "$HOME/.config/opencode/agents/bead-worker.md")" "$root/agents/bead-worker.md" "the agents linked into opencode"
+  assert_match "$out" "bead-loop-ui at http://127.0.0.1:4097" "said where the page is"
+
+  : >"$TEST_CTRL/launchctl.log"
+  out=$(BEAD_LOOP_OS=Darwin BEAD_SUPERVISOR_BIN=$SUP bash "$root/install.sh" 2>&1)
+  assert_match "$out" "dev.bead-loop.supervisor: unchanged, running" "a re-run leaves the loaded loop alone"
+  assert_nomatch "$(cat "$TEST_CTRL/launchctl.log")" "bootout|bootstrap" "nothing stopped or started"
+}
+case_install_from_the_package() {
+  # The flox package's bin/bead-loop-install: nothing built or copied; the opencode links
+  # and the launchd agents go through the environment that installed the package, whose
+  # path an upgrade keeps, not through the package's store path.
+  setup
+  export HOME=$T/home; mkdir -p "$HOME"
+  root=$(cd "$HERE/.." && pwd)
+  pkg=$T/store/bead-loop env=$T/env
+  mkdir -p "$pkg/bin" "$env/bin"
+  cp -R "$root/agents" "$root/skills" "$root/ui" "$root/launchd" "$pkg/"
+  cp "$root/install.sh" "$pkg/bin/bead-loop-install"; cp "$SUP" "$pkg/bin/bead-supervisor"; cp "$root/bin/bead-loop-ui" "$pkg/bin/"
+  # The environment links to the package, as flox's does: bin/ and the directories beside it.
+  for d in agents skills ui; do ln -s "$pkg/$d" "$env/$d"; done
+  for b in bead-supervisor bead-loop-ui bead-loop-install; do ln -s "$pkg/bin/$b" "$env/bin/$b"; done
+  out=$(PATH=$env/bin:$PATH BEAD_LOOP_OS=Darwin bash "$pkg/bin/bead-loop-install" 2>&1)
+  assert_eq "$(readlink "$HOME/.config/opencode/agents/bead-worker.md")" "$env/agents/bead-worker.md" "the agents linked through the environment"
+  assert_eq "$(readlink "$HOME/.config/opencode/skills/beads")" "$env/skills/beads" "and the skills"
+  assert_match "$(cat "$HOME/Library/LaunchAgents/dev.bead-loop.supervisor.plist")" "<string>$env/bin/bead-supervisor</string>" "the loop's agent runs the environment's binary"
+  assert_match "$(cat "$HOME/Library/LaunchAgents/dev.bead-loop.ui.plist")" "<string>$env/bin/bead-loop-ui</string>" "and the page"
+  assert_nofile "$HOME/.local/bin/bead-supervisor" "nothing built or copied to ~/.local/bin"
+  assert_match "$out" "the flox package" "said where the binary is from"
+}
+case_ui_on_macos() {
+  # Under launchd there is no journal and no systemd: BEAD_LOOP_LOG names the file the
+  # agent writes, and the page's log is its last lines, each at the time the line starts
+  # with; the loop's state is launchctl's, and Stop and Off act through launchctl.
+  setup
+  command -v node >/dev/null || { echo "  (no node: ui server not exercised)"; return; }
+  printf '%s\n' "00:00:01 repo: dev: bead t-1 to stub/worker" "a line with no time" >"$T/sup-file.log"
+  mkdir -p "$TEST_CTRL/launchd"; : >"$TEST_CTRL/launchd/dev.bead-loop.supervisor"
+  port=$((20000 + RANDOM % 20000))
+  BEAD_LOOP_OS=Darwin BEAD_LOOP_LOG=$T/sup-file.log BEAD_LOOP_UI_PORT=$port BEAD_SUPERVISOR=$SUP node "$HERE/../bin/bead-loop-ui" >"$T/ui.log" 2>&1 & upid=$!
+  for _ in $(seq 50); do "$REAL_CURL" -sf -m 1 "http://127.0.0.1:$port/api/state" >"$T/state.json" 2>/dev/null && break; sleep 0.1; done
+  assert_eq "$(jq -r '[.log[].msg] | join("|")' "$T/state.json")" "00:00:01 repo: dev: bead t-1 to stub/worker|a line with no time" "the page's log is the file's lines"
+  assert_eq "$(jq -r '.log[0].t | strflocaltime("%H:%M:%S")' "$T/state.json")" "00:00:01" "at the time the line starts with"
+  assert_eq "$(jq -r '.service.available, .service.active, .timer.available' "$T/state.json" | tr '\n' ' ')" "true active false " "the loop is up by launchctl, and there is no keeper timer"
+  post() { "$REAL_CURL" -s -m 5 -X POST -H 'content-type: application/json' -d "$2" "http://127.0.0.1:$port/api/$1"; }
+  assert_match "$(post stop '{}')" "launchctl kill TERM gui/$(id -u)/dev.bead-loop.supervisor" "Stop is TERM to the agent"
+  assert_match "$(post loop '{"on":false}')" "launchctl bootout gui/$(id -u)/dev.bead-loop.supervisor" "Off unloads it"
+  assert_match "$(post timer '{"on":true}')" "no keeper timer under launchd" "and there is no timer to turn on"
+  "$REAL_CURL" -sf -m 5 "http://127.0.0.1:$port/api/state" >"$T/state.json"
+  kill $upid
+  assert_eq "$(jq -r '.service.active' "$T/state.json")" "inactive" "unloaded, the loop is down"
+}
+case_setup_adds_a_repo() {
+  # scripts/setup-macos.sh's add_repo: the repo goes into the one-line `repos` list
+  # install.sh seeds, beside any already there; once only; and a list it cannot edit
+  # safely is left alone with what to do by hand.
+  setup
+  # shellcheck source=../scripts/setup-macos.sh
+  source "$HERE/../scripts/setup-macos.sh"
+  c=$T/c.toml
+  printf 'repos = []                       # e.g.\nworker_timeout = 3600\n' >"$c"
+  add_repo "$c" /a >/dev/null
+  assert_eq "$(head -1 "$c")" 'repos = ["/a"]                       # e.g.' "into the empty list, the comment kept"
+  add_repo "$c" /b >/dev/null
+  assert_eq "$(head -1 "$c")" 'repos = ["/a", "/b"]                       # e.g.' "beside the one there"
+  out=$(add_repo "$c" /a)
+  assert_match "$out" "already in" "once only"
+  assert_eq "$(grep -c '^repos' "$c")" 1 "one repos line"
+  printf 'repos = [\n  "/a",\n]\n' >"$c"
+  out=$(add_repo "$c" /z)
+  assert_match "$out" 'add it by hand: repos = \["/z"\]' "a list over several lines is left to you"
+}
+case_configure_models() {
+  # scripts/configure-models.sh with every answer given: llm-box's three models checked,
+  # opencode's llmbox provider merged in beside the others, and the loop's config
+  # rewritten with llm-box's stages, its repos kept and both old files backed up.
+  setup
+  export HOME=$T/home BEAD_LOOP_CONFIG=$T/home/.config/bead-loop; mkdir -p "$BEAD_LOOP_CONFIG" "$HOME/.config/opencode"
+  printf 'repos = ["/r1", "/r2"]\nmodel = "old/one"\n' >"$BEAD_LOOP_CONFIG/config.toml"
+  echo '{"provider":{"other":{"options":{"baseURL":"http://x"}}}}' >"$HOME/.config/opencode/opencode.json"
+  echo '{"data":[{"id":"coder"},{"id":"reviewer"},{"id":"utility"},{"id":"embed"}]}' >"$TEST_CTRL/models.json"
+  out=$(ASSUME_DEFAULTS=1 LLMBOX_URL=http://llm.test:8100/v1/ USE_OLLAMA=no bash "$HERE/../scripts/configure-models.sh" 2>&1)
+  oc=$HOME/.config/opencode/opencode.json
+  assert_eq "$(jq -r '.provider.llmbox.options.baseURL, (.provider.llmbox.models | keys | join(" ")), .provider.other.options.baseURL, (.provider.mac // "none")' "$oc" | tr '\n' ' ')" "http://llm.test:8100/v1 coder reviewer utility http://x none " "llmbox merged in, the other provider kept, no mac"
+  cfg=$(cat "$BEAD_LOOP_CONFIG/config.toml")
+  assert_match "$cfg" '^repos = \["/r1", "/r2"\]$' "the repos kept"
+  assert_match "$cfg" '^worker = "llmbox/coder"$' "llm-box's 80B is the worker"
+  assert_match "$cfg" '^precheck_model = "llmbox/utility"' "and its small model the pre-check"
+  assert_nomatch "$cfg" 'old/one' "the old keys gone"
+  baks=("$BEAD_LOOP_CONFIG"/config.toml.bak-* "$HOME"/.config/opencode/opencode.json.bak-*)
+  assert_eq "${#baks[@]}" 2 "both old files backed up"
+  assert_file "${baks[0]}" "the config's backup"
+  echo '{"data":[{"id":"coder"}]}' >"$TEST_CTRL/models.json"
+  rc=0; out=$(ASSUME_DEFAULTS=1 LLMBOX_URL=http://llm.test:8100/v1 USE_OLLAMA=no bash "$HERE/../scripts/configure-models.sh" 2>&1) || rc=$?
+  assert_eq "$rc" 1 "a box without the three models stops it"
+  assert_match "$out" 'does not serve "reviewer"; it serves: coder' "and says which"
+}
 case_doctor() {
   # Every dependency probed, red or green: bd's version and git are real; gh auth, claude
   # auth, the opencode provider named in the stages (its /models) and the attach server
@@ -2518,11 +2636,13 @@ case_doctor() {
   assert_match "$out" '\[green\] opencode provider stub: reachable at http://oc.test:4096' "the provider named in the stages"
   assert_match "$out" '\[green\] attach server: reachable at http://oc.test:4096' "GET /session"
   assert_match "$out" '\[green\] systemd units: ' "the three units, stubbed active"
+  assert_match "$out" '\[green\] claude auth: not used' "nothing names claude/*, so claude is not asked"
   j=$(sup --json doctor "$REPO")
   assert_eq "$(printf '%s' "$j" | jq -r 'type')" array "--json: an array"
   assert_eq "$(printf '%s' "$j" | jq -r '[.[] | (has("name") and has("ok") and has("detail"))] | all')" true "--json: each probe is {name, ok, detail}"
   assert_eq "$(printf '%s' "$j" | jq -r '[.[].ok] | all')" true "--json: all green too"
 
+  echo 'brief_model = "claude/opus"' >>"$REPO/.bead-loop.toml"
   : >"$TEST_CTRL/claude-signed-out"
   rc=0; out=$(sup doctor "$REPO") || rc=$?
   assert_eq "$rc" 1 "doctor: exits 1 with a red line when claude auth status says signed out"

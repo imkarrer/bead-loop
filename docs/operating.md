@@ -79,7 +79,8 @@ you.
 
 The server binds to loopback and refuses cross-site requests; it needs `node`, and
 `systemctl`/`journalctl` for the units and log (without them, those parts say so and the
-rest works).
+rest works). With `BEAD_LOOP_LOG` set, the log is that file's last lines instead of the
+journal's: on macOS the launchd agent sets it to the file the loop writes.
 
 ## The brief
 
@@ -103,6 +104,7 @@ bead-supervisor status                                    # the same, once
 bead-supervisor --json status                             # one JSON object per repo: what the UI reads
 bead-supervisor stats                                     # the scoreboard, one line per window (--json for the page's)
 journalctl --user -u bead-supervisor.service -f -o cat    # stage transitions, one line each, live
+tail -f ~/Library/Logs/bead-loop/bead-supervisor.log       # the same on macOS, under launchd
 bead-supervisor log ~/src/repo [bead-id]                  # the newest session's log, one line per tool call
 ```
 
@@ -209,5 +211,6 @@ restart), `lane.<name>` (the bead that lane is on). Under the state dir itself: 
 
 Environment: `BEAD_LOOP_CONFIG` (the global config's directory), `BEAD_LOOP_STATE` (the
 state dir), `BEAD_LOOP_HOME` (the checkout, for `agents/` and `ui/`),
-`BEAD_LOOP_HOLD_BACKOFF` (seconds before a held bead is tried again, 300), `BEADS_ACTOR`
+`BEAD_LOOP_HOLD_BACKOFF` (seconds before a held bead is tried again, 300), `BEAD_LOOP_LOG`
+(the page's log file in place of the journal; the macOS agent sets it), `BEADS_ACTOR`
 (who the loop's `bd` changes are by; the label otherwise).

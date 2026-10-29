@@ -407,30 +407,33 @@ pub fn state_dir() -> PathBuf {
     d
 }
 
-/// Where this checkout is (agents/, ui/): `$BEAD_LOOP_HOME`, else the binary's parent's
-/// parent (target/debug/x → the checkout; ~/.local/bin/x → ~/.local, where install.sh
-/// puts an agents/ link too).
+/// Where this checkout is (agents/, ui/): `$BEAD_LOOP_HOME`, else found from the binary
+/// (`home_of_exe`).
 pub fn loop_home() -> PathBuf {
     if let Some(h) = std::env::var_os("BEAD_LOOP_HOME") {
         return PathBuf::from(h);
     }
-    let exe = std::env::current_exe().ok().and_then(|p| std::fs::canonicalize(p).ok());
-    if let Some(exe) = exe {
-        // target/debug/bead-supervisor or target/release/bead-supervisor → the checkout
-        let mut p = exe.clone();
-        for _ in 0..4 {
-            if !p.pop() {
-                break;
-            }
-            if p.join("agents").is_dir() && p.join("ui").is_dir() {
-                return p;
-            }
+    match std::env::current_exe().ok().and_then(|p| std::fs::canonicalize(p).ok()) {
+        Some(exe) => home_of_exe(&exe),
+        None => PathBuf::from("."),
+    }
+}
+
+/// The nearest directory above the binary holding both agents/ and ui/:
+/// target/debug/x → the checkout; the flox package's bin/.x-wrapped → the package. With
+/// none, the binary's parent's parent (~/.local/bin/x → ~/.local, where install.sh puts
+/// an agents/ link too).
+fn home_of_exe(exe: &Path) -> PathBuf {
+    let mut p = exe.to_path_buf();
+    for _ in 0..4 {
+        if !p.pop() {
+            break;
         }
-        if let Some(parent) = exe.parent().and_then(|p| p.parent()) {
-            return parent.to_path_buf();
+        if p.join("agents").is_dir() && p.join("ui").is_dir() {
+            return p;
         }
     }
-    PathBuf::from(".")
+    exe.parent().and_then(|p| p.parent()).map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from("."))
 }
 
 /// Everything the bash's `load_repo` set, for one repo.
@@ -1143,6 +1146,25 @@ impl Layers {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_home_is_found_from_a_checkout_and_from_the_flox_package() {
+        let d = scratch("home-of-exe");
+        let mk = |root: &Path| {
+            std::fs::create_dir_all(root.join("agents")).unwrap();
+            std::fs::create_dir_all(root.join("ui")).unwrap();
+        };
+        let checkout = d.join("checkout");
+        mk(&checkout);
+        assert_eq!(home_of_exe(&checkout.join("target/release/bead-supervisor")), checkout);
+        // The package: flox wraps bin/bead-supervisor, and the binary is bin/.bead-supervisor-wrapped.
+        let pkg = d.join("pkg");
+        mk(&pkg);
+        assert_eq!(home_of_exe(&pkg.join("bin/.bead-supervisor-wrapped")), pkg);
+        // install.sh's ~/.local/bin, with no agents/ and ui/ above it: the parent's parent.
+        let local = d.join("home/.local");
+        assert_eq!(home_of_exe(&local.join("bin/bead-supervisor")), local);
+    }
 
     #[test]
     fn update_behind_follows_the_merge_mode_unless_set() {

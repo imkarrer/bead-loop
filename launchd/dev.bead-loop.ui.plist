@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  bead-loop on macOS: the page at http://127.0.0.1:4097, as bead-loop-ui.service is on
+  Linux. install.sh fills in @RUN@, @PATH@, @SUPERVISOR@ and @LOGS@. BEAD_LOOP_LOG is the
+  supervisor's log file, which the page shows where Linux has the journal.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>dev.bead-loop.ui</string>
+  <key>ProgramArguments</key>
+  <array>
+@RUN@
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>@PATH@</string>
+    <key>BEAD_SUPERVISOR</key>
+    <string>@SUPERVISOR@</string>
+    <key>BEAD_LOOP_LOG</key>
+    <string>@LOGS@/bead-supervisor.log</string>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>@LOGS@/bead-loop-ui.log</string>
+  <key>StandardErrorPath</key>
+  <string>@LOGS@/bead-loop-ui.log</string>
+</dict>
+</plist>

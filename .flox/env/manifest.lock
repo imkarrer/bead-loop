@@ -3,6 +3,9 @@
   "manifest": {
     "schema-version": "1.16.0",
     "install": {
+      "bash": {
+        "pkg-path": "bash"
+      },
       "bd": {
         "pkg-path": "beads"
       },
@@ -13,10 +16,7 @@
         "pkg-path": "clippy"
       },
       "coreutils": {
-        "pkg-path": "coreutils",
-        "systems": [
-          "aarch64-darwin"
-        ]
+        "pkg-path": "coreutils"
       },
       "curl": {
         "pkg-path": "curl",
@@ -96,6 +96,25 @@
       },
       "ui": {
         "command": "exec \"$FLOX_ENV_PROJECT/bin/bead-loop-ui\""
+      }
+    },
+    "build": {
+      "bead-loop": {
+        "command": "  if [ \"$(uname -s)\" = Darwin ]; then export MACOSX_DEPLOYMENT_TARGET=14.0 CARGO_TARGET_AARCH64_APPLE_DARWIN_LINKER=/usr/bin/cc; fi\n  cargo build --release --locked\n  mkdir -p \"$out/bin\"\n  cp \"${CARGO_TARGET_DIR:-target}/release/bead-supervisor\" bin/bead-loop-ui \"$out/bin/\"\n  cp install.sh \"$out/bin/bead-loop-install\"\n  cp -R agents ui skills launchd \"$out/\"\n",
+        "runtime-packages": [
+          "bd",
+          "git",
+          "gh",
+          "jq",
+          "curl",
+          "nodejs",
+          "coreutils",
+          "bash"
+        ],
+        "version": {
+          "command": "sed -n 's/^version = \"\\(.*\\)\"$/\\1/p' Cargo.toml | head -n1"
+        },
+        "description": "Work beads with local and metered models in any repo: the supervisor, its page and its agents"
       }
     }
   },
@@ -188,6 +207,123 @@
       },
       "system": "x86_64-linux",
       "group": "opencode",
+      "priority": 5
+    },
+    {
+      "attr_path": "bash",
+      "broken": false,
+      "derivation": "/nix/store/k4nbcxvhfn0r7m2ajr4qf2dj9gf9af87-bash-interactive-5.3p15.drv",
+      "description": "GNU Bourne-Again Shell, the de facto standard shell on Linux (for interactive use)",
+      "install_id": "bash",
+      "license": "GPL-3.0-or-later",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=ef34387ddd751e1ab8857adf4676492d32eb24ec",
+      "name": "bash-interactive-5.3p15",
+      "pname": "bash",
+      "rev": "ef34387ddd751e1ab8857adf4676492d32eb24ec",
+      "rev_count": 1073009,
+      "rev_date": "2026-09-13T08:01:44Z",
+      "scrape_date": "2026-09-15T04:58:07.737291Z",
+      "stabilities": [
+        "unstable"
+      ],
+      "unfree": false,
+      "version": "5.3p15",
+      "outputs_to_install": [
+        "man",
+        "out",
+        "out",
+        "out"
+      ],
+      "outputs": {
+        "dev": "/nix/store/dm8gkx8friz9f86p6999fyz4i24a3r79-bash-interactive-5.3p15-dev",
+        "doc": "/nix/store/4nxfs7jq4yyavjvy8dvdn34kwilnnrgn-bash-interactive-5.3p15-doc",
+        "info": "/nix/store/92nvnpclghjnbv8wsadgi853qz4k5dzl-bash-interactive-5.3p15-info",
+        "man": "/nix/store/qw1lvd6i8yy5h56k1i2ajnkrz33145qa-bash-interactive-5.3p15-man",
+        "out": "/nix/store/5xfk6xkjqfn4cfn47ckm383g81lsfhca-bash-interactive-5.3p15"
+      },
+      "system": "aarch64-darwin",
+      "group": "toplevel",
+      "priority": 5
+    },
+    {
+      "attr_path": "bash",
+      "broken": false,
+      "derivation": "/nix/store/3va3y0iw50ywn7m7wdyir10h5c8n7rrj-bash-interactive-5.3p15.drv",
+      "description": "GNU Bourne-Again Shell, the de facto standard shell on Linux (for interactive use)",
+      "install_id": "bash",
+      "license": "GPL-3.0-or-later",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=ef34387ddd751e1ab8857adf4676492d32eb24ec",
+      "name": "bash-interactive-5.3p15",
+      "pname": "bash",
+      "rev": "ef34387ddd751e1ab8857adf4676492d32eb24ec",
+      "rev_count": 1073009,
+      "rev_date": "2026-09-13T08:01:44Z",
+      "scrape_date": "2026-09-15T05:30:08.485221Z",
+      "stabilities": [
+        "unstable"
+      ],
+      "unfree": false,
+      "version": "5.3p15",
+      "outputs_to_install": [
+        "man",
+        "out",
+        "out",
+        "out",
+        "out"
+      ],
+      "outputs": {
+        "debug": "/nix/store/0pm2mzvhhprhjlgk6n4w8gm73nc4v8za-bash-interactive-5.3p15-debug",
+        "dev": "/nix/store/jidi55d4j3zilx6kaa2ml4yrxb18j2vc-bash-interactive-5.3p15-dev",
+        "doc": "/nix/store/dpw8vkncvqnh0h3rihg924ycq6mk217b-bash-interactive-5.3p15-doc",
+        "info": "/nix/store/2w76drikf47dcdpwnwa31i1n190fr367-bash-interactive-5.3p15-info",
+        "man": "/nix/store/fxgmbf925hzlljn7pgpxpb4hxn5x8x61-bash-interactive-5.3p15-man",
+        "out": "/nix/store/z9nkwcylvgcrn4dvvd91jp8blv3mx38v-bash-interactive-5.3p15"
+      },
+      "system": "aarch64-linux",
+      "group": "toplevel",
+      "priority": 5
+    },
+    {
+      "attr_path": "bash",
+      "broken": false,
+      "derivation": "/nix/store/571s1rb4899cj9ra15wg4l4jgvd191fv-bash-interactive-5.3p15.drv",
+      "description": "GNU Bourne-Again Shell, the de facto standard shell on Linux (for interactive use)",
+      "install_id": "bash",
+      "license": "GPL-3.0-or-later",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=ef34387ddd751e1ab8857adf4676492d32eb24ec",
+      "name": "bash-interactive-5.3p15",
+      "pname": "bash",
+      "rev": "ef34387ddd751e1ab8857adf4676492d32eb24ec",
+      "rev_count": 1073009,
+      "rev_date": "2026-09-13T08:01:44Z",
+      "scrape_date": "2026-09-15T06:07:15.924315Z",
+      "stabilities": [
+        "unstable"
+      ],
+      "unfree": false,
+      "version": "5.3p15",
+      "outputs_to_install": [
+        "man",
+        "out",
+        "out",
+        "out",
+        "out",
+        "out",
+        "out",
+        "out",
+        "out",
+        "out"
+      ],
+      "outputs": {
+        "debug": "/nix/store/40xjyz9n2cnn2x77yjwm7idk0b26bb6d-bash-interactive-5.3p15-debug",
+        "dev": "/nix/store/l472345nc50yyj2sds4qwk45hdrcrmrf-bash-interactive-5.3p15-dev",
+        "doc": "/nix/store/4r8b0qhgv370qw4avxc1r607fcfzq8sr-bash-interactive-5.3p15-doc",
+        "info": "/nix/store/8hldgnza4czvm1wz11lpk7i48lclpm8i-bash-interactive-5.3p15-info",
+        "man": "/nix/store/2qdkkyyrf2hxwmykimcnnb1ksd6cff4a-bash-interactive-5.3p15-man",
+        "out": "/nix/store/2ndah67h0z5m31v2wkdmg2md4380ggr5-bash-interactive-5.3p15"
+      },
+      "system": "x86_64-linux",
+      "group": "toplevel",
       "priority": 5
     },
     {
@@ -484,6 +620,84 @@
         "out": "/nix/store/bv38kxd78jkqh1qwj30a8fl9z97m5pb8-coreutils-9.11"
       },
       "system": "aarch64-darwin",
+      "group": "toplevel",
+      "priority": 5
+    },
+    {
+      "attr_path": "coreutils",
+      "broken": false,
+      "derivation": "/nix/store/n3iypm4ki73vrsh89qw060w6rfjii2nk-coreutils-9.11.drv",
+      "description": "GNU Core Utilities",
+      "install_id": "coreutils",
+      "license": "GPL-3.0-or-later",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=ef34387ddd751e1ab8857adf4676492d32eb24ec",
+      "name": "coreutils-9.11",
+      "pname": "coreutils",
+      "rev": "ef34387ddd751e1ab8857adf4676492d32eb24ec",
+      "rev_count": 1073009,
+      "rev_date": "2026-09-13T08:01:44Z",
+      "scrape_date": "2026-09-15T05:30:09.018806Z",
+      "stabilities": [
+        "unstable"
+      ],
+      "unfree": false,
+      "version": "9.11",
+      "outputs_to_install": [
+        "out",
+        "out",
+        "out",
+        "out",
+        "out",
+        "out"
+      ],
+      "outputs": {
+        "debug": "/nix/store/rwzh44p1vhl01mpcz9r3kf62mr0p8x8l-coreutils-9.11-debug",
+        "info": "/nix/store/5wf4py5d0632n54hbglbjv5k92b4s5ic-coreutils-9.11-info",
+        "out": "/nix/store/p7xdvcvl4aw7m229qzlq601aq0w0nb9n-coreutils-9.11"
+      },
+      "system": "aarch64-linux",
+      "group": "toplevel",
+      "priority": 5
+    },
+    {
+      "attr_path": "coreutils",
+      "broken": false,
+      "derivation": "/nix/store/bqpz9sxvv9krqhy715gnn3hw963d7i5q-coreutils-9.11.drv",
+      "description": "GNU Core Utilities",
+      "install_id": "coreutils",
+      "license": "GPL-3.0-or-later",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=ef34387ddd751e1ab8857adf4676492d32eb24ec",
+      "name": "coreutils-9.11",
+      "pname": "coreutils",
+      "rev": "ef34387ddd751e1ab8857adf4676492d32eb24ec",
+      "rev_count": 1073009,
+      "rev_date": "2026-09-13T08:01:44Z",
+      "scrape_date": "2026-09-15T06:07:16.495853Z",
+      "stabilities": [
+        "unstable"
+      ],
+      "unfree": false,
+      "version": "9.11",
+      "outputs_to_install": [
+        "out",
+        "out",
+        "out",
+        "out",
+        "out",
+        "out",
+        "out",
+        "out",
+        "out",
+        "out",
+        "out",
+        "out"
+      ],
+      "outputs": {
+        "debug": "/nix/store/phrz4klpqdwyi8pb60157wn82a08m482-coreutils-9.11-debug",
+        "info": "/nix/store/3xahzqwca71laxfxj7rxfsc0n5kzc5rf-coreutils-9.11-info",
+        "out": "/nix/store/xjl7p8dvyk2j53kqf7f43kdj4ypbxz7g-coreutils-9.11"
+      },
+      "system": "x86_64-linux",
       "group": "toplevel",
       "priority": 5
     },
