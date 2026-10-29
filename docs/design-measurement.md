@@ -1,7 +1,8 @@
 # Design: measuring a change — to the loop, or to a config
 
-Status: proposed; grilled 2026-10-28 (decisions below, ADRs 0001–0003). Nothing here is
-built; no beads yet.
+Status: proposed; grilled 2026-10-28 (decisions below, ADRs 0001–0003). Pieces 1 and 2
+are being built by the loop itself as epic `bl-ayv` (`bd show bl-ayv` for where it
+stands); piece 3 is definitions only; pieces 4 and 5 are not built.
 
 ## What is wrong now
 
@@ -295,7 +296,7 @@ missing; piece 3 is the definitions above; piece 2 next; then piece 4's design p
 
 1. Groundwork: `AGENTS.md`, `docs/agents/`, the dev stack. (Done.)
 2. Grill this doc with `grill-with-docs`; `CONTEXT.md` and any ADRs come out of it. (Under way.)
-3. Piece 1 alone; then piece 2, with piece 3's definitions.
+3. Piece 1 alone; then piece 2, with piece 3's definitions. (Under way: epic `bl-ayv`.)
 4. Piece 4's own design pass, then the build.
 5. Piece 5.
 6. The hypotheses, one at a time, each benched before it ships.
