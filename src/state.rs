@@ -33,6 +33,8 @@ use std::path::PathBuf;
 pub struct StageHit {
     pub model: String,
     pub review: String,
+    /// the stage's own `failures` (how many send-backs it takes), round-changing config
+    pub failures: u64,
     pub timeout: u64,
     /// the last stage: BLOCKED here parks the bead
     pub last: bool,
@@ -106,6 +108,12 @@ impl Repo {
     }
     pub fn notes_path(&self, id: &str) -> PathBuf {
         self.bead_dir(id).join("notes")
+    }
+    /// `beads/ID/stamps.jsonl`: one line per model session, what produced it
+    /// (docs/design-measurement.md piece 1).
+    #[allow(dead_code)]
+    pub fn stamps_path(&self, id: &str) -> PathBuf {
+        self.bead_dir(id).join("stamps.jsonl")
     }
     pub fn review_path(&self, id: &str) -> PathBuf {
         self.rs.join("review").join(id)
@@ -409,6 +417,7 @@ pub fn stage_for(stages: &[Stage], on_exhaust: &str, worker_timeout: u64, n: u64
             return Some(StageHit {
                 model: s.worker.clone(),
                 review: s.reviewer.clone(),
+                failures: s.failures,
                 timeout: s.timeout.unwrap_or(worker_timeout),
                 last: i + 1 == stages.len(),
                 index: i + 1,
