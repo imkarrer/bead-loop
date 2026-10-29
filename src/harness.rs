@@ -12,6 +12,7 @@
 //! a round that would die in seconds is never started and never charged.
 use crate::config::{loop_home, Repo};
 use crate::signals;
+use crate::stamp;
 use crate::util::{cmd, log, output, read_to_string, stdout_str, tail_lines, write_file};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -167,6 +168,12 @@ pub fn run_agent(
     let Some(_slot) = provider_slot(&repo.slug, &r.provider.name, r.provider.parallel) else {
         return AgentRun { text: String::new(), full: String::new(), rc: 143, empty: true, error: String::new(), stalled: None };
     };
+
+    // Append stamp for this session (except for rejoin_session which doesn't write stamps)
+    if let Some((id, stamp)) = stamp::for_session(repo, agent, model, dir, logf, bead_json) {
+        stamp::append(repo, &id, &stamp.to_json());
+    }
+
     if r.harness == "aider" {
         // Aider explores nothing: it edits the files it is handed, so the files are the
         // ones the bead's DESCRIPTION names that exist in the worktree. The server is the

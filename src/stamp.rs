@@ -1,12 +1,13 @@
 //! The stamp: what produced one model session, written to `beads/ID/stamps.jsonl` (one
 //! line per session, including the round that lands) so a later question — did this
 //! change help, is config A better than config B — can slice production by what ran it.
-//! The session stamp itself is not wired to a round yet (docs/design-measurement.md
-//! piece 1, ADR 0001); `write_claim`'s `claim` line is (piece 2, decision 14).
+//! `for_session` builds the line `run_agent` appends before every session
+//! (docs/design-measurement.md piece 1, ADR 0001); `write_claim`'s `claim` line is the
+//! first line of a bead's file (piece 2, decision 14).
 use crate::config::{Approvals, Repo, Resolved};
 use crate::shell::git_ok;
 use crate::state::StageHit;
-use crate::util::{append_file, cut_bytes, date_iminutes, read_to_string};
+use crate::util::{append_file, cut_bytes, date_iminutes, loop_dirty, read_to_string, LOOP_SHA};
 use serde_json::{json, Value};
 use std::path::Path;
 
@@ -22,7 +23,6 @@ pub fn fnv_hex(bytes: &[u8]) -> String {
 }
 
 /// A file's content hash, or `"missing"` when it cannot be read.
-#[allow(dead_code)]
 pub fn hash_file(p: &Path) -> String {
     match std::fs::read(p) {
         Ok(bytes) => fnv_hex(&bytes),
@@ -33,7 +33,6 @@ pub fn hash_file(p: &Path) -> String {
 /// A directory tree's content hash, following symlinks (`install.sh` links `skills/NAME`
 /// into place): every file under `dir`, sorted by its relative path, each folded in as
 /// `path\0bytes\0`. `"missing"` when `dir` is not a directory.
-#[allow(dead_code)]
 pub fn hash_tree(dir: &Path) -> String {
     if !dir.is_dir() {
         return "missing".into();
@@ -53,7 +52,6 @@ pub fn hash_tree(dir: &Path) -> String {
     fnv_hex(&buf)
 }
 
-#[allow(dead_code)]
 fn collect_files(root: &Path, dir: &Path, out: &mut Vec<std::path::PathBuf>) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
@@ -73,7 +71,6 @@ fn collect_files(root: &Path, dir: &Path, out: &mut Vec<std::path::PathBuf>) {
     }
 }
 
-#[allow(dead_code)]
 fn approvals_str(a: &Approvals) -> String {
     match a {
         Approvals::All => "all".into(),
@@ -84,7 +81,6 @@ fn approvals_str(a: &Approvals) -> String {
 
 /// The resolved stage and the round-changing target keys, hashed; never `attach`,
 /// `probe`, `command`, `via` or anything else from `opencode.json` (credentials, URLs).
-#[allow(dead_code)]
 pub fn config_hash(repo: &Repo, stage: Option<&StageHit>, r: &Resolved) -> String {
     let mut lines = Vec::new();
     if let Some(s) = stage {
@@ -110,7 +106,6 @@ pub fn config_hash(repo: &Repo, stage: Option<&StageHit>, r: &Resolved) -> Strin
 }
 
 /// One model session, as written to `stamps.jsonl`.
-#[allow(dead_code)]
 pub struct Stamp {
     pub round: u64,
     pub dirty: bool,
@@ -128,7 +123,6 @@ pub struct Stamp {
 }
 
 impl Stamp {
-    #[allow(dead_code)]
     pub fn to_json(&self) -> Value {
         json!({
             "round": self.round,
@@ -239,6 +233,73 @@ fn linted_of(notes: &str) -> String {
         }
     }
     out
+}
+
+/// Create a stamp for a session, returning the bead id and stamp struct.
+/// Returns None when bead_json is None.
+pub fn for_session(repo: &Repo, agent: &str, model: &str, dir: &Path, logf: &Path, bead_json: Option<&Value>) -> Option<(String, Stamp)> {
+    let bead_value = bead_json?;
+    let id = bead_value.get(0)?.get("id")?.as_str()?.to_string();
+
+    // Parse log file name to extract kind and log stem
+    let log_file_name = logf.file_name()?.to_str()?.to_string();
+    // Strip the .jsonl suffix first if present, then split on the last dot
+    let mut name = log_file_name.clone();
+    if let Some(stripped) = name.strip_suffix(".jsonl") {
+        name = stripped.to_string();
+    }
+    let (log_stem, kind) = if let Some((stem, kind)) = name.rsplit_once('.') {
+        (stem.to_string(), kind.to_string())
+    } else {
+        // If no extension, treat as kind
+        (name.clone(), String::new())
+    };
+
+    // Get the stage for the current failures count
+    let failures = repo.failures_of(&id);
+    let hit = repo.stage_for(failures);
+    let stage = if let Some(h) = &hit {
+        repo.stages[h.index - 1].name.clone() // The stage name is 1-indexed in the array
+    } else {
+        String::new()
+    };
+
+    let provider = repo.resolve(model).provider.name.clone();
+    let harness = repo.resolve(model).harness.clone();
+
+    // Get base_sha from git
+    let base_sha = std::process::Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(dir)
+        .output()
+        .map(|output| if output.status.success() { String::from_utf8_lossy(&output.stdout).trim_end().to_string() } else { String::new() })
+        .unwrap_or_default();
+
+    // Hashes
+    let prompt_hash = hash_file(&crate::config::loop_home().join("agents").join(format!("{}.md", agent)));
+    let skills_hash = hash_tree(&crate::config::loop_home().join("skills"));
+    let config_hash = crate::stamp::config_hash(repo, hit.as_ref(), &repo.resolve(model));
+
+    // Round number (failures + 1)
+    let round = failures + 1;
+
+    let stamp = Stamp {
+        round,
+        dirty: loop_dirty(),
+        kind,
+        log: log_stem,
+        loop_sha: LOOP_SHA.to_string(),
+        prompt_hash,
+        skills_hash,
+        base_sha,
+        stage,
+        provider,
+        model: model.to_string(),
+        harness,
+        config_hash,
+    };
+
+    Some((id, stamp))
 }
 
 #[cfg(test)]
@@ -363,5 +424,20 @@ mod tests {
         append_file(&repo.rounds_path("t-1"), "{\"round\":1}\n");
         write_claim(&repo, "t-1", &json!([{"title": "T"}]));
         assert!(read(&repo, "t-1").is_empty(), "no claim for a bead with prior rounds");
+    }
+
+    #[test]
+    fn for_session_takes_kind_and_log_from_a_dotted_ids_log_name() {
+        let d = scratch("for-session");
+        let repo = test_repo(&d, &["fast:rev:2"]);
+        let bead = json!([{"id": "bl-ayv.3"}]);
+        let logf = d.join("bl-ayv.3.20261029T101010.worker.jsonl");
+        let (id, stamp) = for_session(&repo, "bead-worker", "fast", &d, &logf, Some(&bead)).expect("a stamp for a bead");
+        assert_eq!(id, "bl-ayv.3");
+        assert_eq!(stamp.kind, "worker", "the kind is the last piece of the name, not the .jsonl");
+        assert_eq!(stamp.log, "bl-ayv.3.20261029T101010", "the stem keeps the id's own dot");
+        assert_eq!(stamp.round, 1);
+        assert_eq!(stamp.model, "fast");
+        assert!(for_session(&repo, "bead-worker", "fast", &d, &logf, None).is_none(), "no bead, no stamp");
     }
 }
