@@ -29,6 +29,7 @@
 //! rounds add nothing: the figure is a floor in that respect. Without a rate the tokens
 //! are counted and nothing is priced.
 use crate::config::{Rate, Repo};
+use crate::shell;
 use crate::util::{mtime, now, read_to_string};
 use serde_json::{json, Map, Value};
 use std::collections::BTreeMap;
@@ -497,6 +498,9 @@ pub struct Input<'a> {
 /// The windows, longest last: `all` is everything since the first event.
 const WINDOWS: [(&str, i64); 4] = [("24h", 86400), ("7d", 7 * 86400), ("30d", 30 * 86400), ("all", i64::MAX)];
 
+/// The defect window: 14 days after a merge
+const DEFECT_WINDOW: i64 = 14 * 86400;
+
 fn median(v: &mut [f64]) -> Option<f64> {
     if v.is_empty() {
         return None;
@@ -757,6 +761,84 @@ fn totals_for(rounds: &[LogRound], id: &str, now: i64) -> (i64, i64, f64, u64) {
     (worker_s, review_s, usd, tokens)
 }
 
+/// Get the PR number from a URL (last path segment)
+fn get_pr_number(url: &str) -> Option<i64> {
+    url.rsplit('/').next().and_then(|s| s.parse::<i64>().ok())
+}
+
+/// Find reverts for a given PR by running git commands
+fn find_reverts(repo: &Repo, base_remote: &str, _base: &str, pr_number: i64) -> Vec<i64> {
+    // First, get the squash commit SHA for the PR
+    let commit_output = shell::bd_out(
+        repo,
+        &[
+            "shell",
+            &format!("cd {} && git log {} --fixed-strings --grep '(#{})' --format=%H -n1", repo.repo.display(), base_remote, pr_number),
+        ],
+    );
+
+    let commit_sha = commit_output.trim();
+    if commit_sha.is_empty() {
+        return vec![];
+    }
+
+    // Now find reverts of this commit
+    let revert_output = shell::bd_out(
+        repo,
+        &[
+            "shell",
+            &format!(
+                "cd {} && git log {} --fixed-strings --grep 'This reverts commit {}' --format=%ct",
+                repo.repo.display(),
+                base_remote,
+                commit_sha
+            ),
+        ],
+    );
+
+    revert_output.lines().filter_map(|line| line.trim().parse::<i64>().ok()).collect()
+}
+
+/// Get caused_by beads for a given bead using bd dep list
+fn get_caused_by(repo: &Repo, bead_id: &str) -> Vec<(String, i64)> {
+    let output = shell::bd_out(repo, &["dep", "list", bead_id, "--direction=up", "-t", "caused-by", "--json"]);
+
+    let mut result = Vec::new();
+
+    if let Ok(Value::Array(array)) = serde_json::from_str(&output) {
+        for item in array {
+            if let (Some(id), Some(created_at)) = (item.get("id").and_then(|v| v.as_str()), item.get("created_at").and_then(|v| v.as_str()))
+            {
+                if let Some(created_time) = parse_iso(created_at) {
+                    result.push((id.to_string(), created_time));
+                }
+            }
+        }
+    }
+
+    result
+}
+
+/// The defects after a merge: None while within the 14-day window, else Some((any revert time in [landed, window], the ids in caused_by whose created time is in that window)).
+pub fn defects(landed: i64, now: i64, reverts: &[i64], caused_by: &[(String, i64)]) -> Option<(bool, Vec<String>)> {
+    // If we're still within the defect window, return None
+    if now < landed + DEFECT_WINDOW {
+        return None;
+    }
+
+    // Check if any reverts happened within the window [landed, landed + window]
+    let any_revert_in_window = reverts.iter().any(|&r| r >= landed && r <= landed + DEFECT_WINDOW);
+
+    // Find all caused-by beads created within the window
+    let named_by: Vec<String> = caused_by
+        .iter()
+        .filter(|&(_, created)| *created >= landed && *created <= landed + DEFECT_WINDOW)
+        .map(|(id, _)| id.clone())
+        .collect();
+
+    Some((any_revert_in_window, named_by))
+}
+
 /// `rows_from`: one JSON object per bead `bead_of` returns, any outcome, no window —
 /// docs/design-measurement.md piece 2, decisions 13 and 15; CONTEXT.md `Row`.
 pub fn rows_from(inputs: &[Input], now: i64) -> Vec<Value> {
@@ -783,6 +865,37 @@ pub fn rows_from(inputs: &[Input], now: i64) -> Vec<Value> {
             let stamps: Vec<Value> = stamp_lines.into_iter().filter(|l| l.get("claim").is_none()).collect();
             let (worker_s, review_s, metered_usd, local_tokens) = totals_for(&inp.rounds, &b.id, now);
             let human_touches = b.events.iter().filter(|e| matches!(e, Event::Answer(_) | Event::Escalate(_))).count() as u64;
+
+            // Handle the reverted and named_by fields for landed beads
+            let (reverted, named_by) = if landed {
+                // For landed beads, try to determine if there are defects
+                if let Some(url) = &b.url {
+                    let pr_number = get_pr_number(url);
+                    let mut reverts = vec![];
+                    let mut caused_by = vec![];
+
+                    if let Some(pr_num) = pr_number {
+                        // Get reverts using git commands
+                        reverts = find_reverts(inp.repo, &inp.repo.base_remote, &inp.repo.base, pr_num);
+
+                        // Get caused_by beads
+                        caused_by = get_caused_by(inp.repo, &b.id);
+                    }
+
+                    // Call defects function to determine if we're past the window and what the defects are
+                    let defects_result = defects(b.closed.unwrap_or(0), now, &reverts, &caused_by);
+
+                    match defects_result {
+                        Some((any_revert, named_by_ids)) => (json!(any_revert), json!(named_by_ids)),
+                        None => (Value::Null, Value::Null),
+                    }
+                } else {
+                    (Value::Null, Value::Null)
+                }
+            } else {
+                (Value::Null, Value::Null)
+            };
+
             out.push(json!({
                 "id": b.id, "slug": b.slug, "title": b.title,
                 "started": iso_of(b.started), "closed": iso_of(b.closed),
@@ -796,7 +909,7 @@ pub fn rows_from(inputs: &[Input], now: i64) -> Vec<Value> {
                 "model_s": {"worker": worker_s, "review": review_s},
                 "wall_s": match (b.started, b.closed) { (Some(s), Some(c)) => json!((c - s).max(0)), _ => Value::Null },
                 "human_touches": human_touches,
-                "reverted": Value::Null, "named_by": Value::Null,
+                "reverted": reverted, "named_by": named_by,
             }));
         }
     }
@@ -1012,6 +1125,54 @@ mod tests {
             ]
         );
         assert!(events_of("nothing from the loop here\n").is_empty());
+    }
+
+    #[test]
+    fn defects_function() {
+        // Test that defects returns None inside the window
+        let now = 1789876271; // Some time
+        let landed = now - 10 * 86400; // 10 days ago, inside window (10 < 14)
+        let reverts = vec![now - 5 * 86400]; // A revert 5 days ago
+        let caused_by = vec![("bead-1".to_string(), now - 3 * 86400)]; // A caused_by bead 3 days ago
+
+        let result = defects(landed, now, &reverts, &caused_by);
+        assert_eq!(result, None);
+
+        // Test that defects returns Some with no reverts but caused_by inside window
+        let now = 1789876271;
+        let landed = now - 20 * 86400; // 20 days ago, outside window (20 > 14)
+        let reverts = vec![]; // No reverts
+        let caused_by = vec![("bead-1".to_string(), now - 12 * 86400)]; // A caused_by bead 12 days ago (within window)
+
+        let result = defects(landed, now, &reverts, &caused_by);
+        assert_eq!(result, Some((false, vec!["bead-1".to_string()])));
+
+        // Test that defects returns Some with both revert and caused_by inside window
+        let now = 1789876271;
+        let landed = now - 20 * 86400; // 20 days ago, outside window (20 > 14)
+        let reverts = vec![now - 10 * 86400]; // A revert 10 days ago (within window)
+        let caused_by = vec![("bead-1".to_string(), now - 12 * 86400)]; // A caused_by bead 12 days ago (within window)
+
+        let result = defects(landed, now, &reverts, &caused_by);
+        assert_eq!(result, Some((true, vec!["bead-1".to_string()])));
+
+        // Test with revert outside window but caused_by inside
+        let now = 1789876271;
+        let landed = now - 20 * 86400; // 20 days ago, outside window
+        let reverts = vec![now - 25 * 86400]; // A revert 25 days ago (outside window)
+        let caused_by = vec![("bead-1".to_string(), now - 12 * 86400)]; // A caused_by bead 12 days ago (within window)
+
+        let result = defects(landed, now, &reverts, &caused_by);
+        assert_eq!(result, Some((false, vec!["bead-1".to_string()])));
+
+        // Test with both outside window
+        let now = 1789876271;
+        let landed = now - 20 * 86400; // 20 days ago, outside window
+        let reverts = vec![now - 25 * 86400]; // A revert 25 days ago (outside window)
+        let caused_by = vec![("bead-1".to_string(), now - 30 * 86400)]; // A caused_by bead 30 days ago (outside window)
+
+        let result = defects(landed, now, &reverts, &caused_by);
+        assert_eq!(result, Some((false, vec![])));
     }
 
     /// A bead as bd lists it.
