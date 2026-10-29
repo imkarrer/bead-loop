@@ -6,7 +6,7 @@
 use crate::config::{Approvals, Repo, Resolved};
 use crate::shell::git_ok;
 use crate::state::StageHit;
-use crate::util::{append_file, cut_bytes, date_iminutes, read_to_string};
+use crate::util::{append_file, cut_bytes, date_iminutes, loop_dirty, read_to_string, LOOP_SHA};
 use serde_json::{json, Value};
 use std::path::Path;
 
@@ -239,6 +239,68 @@ fn linted_of(notes: &str) -> String {
         }
     }
     out
+}
+
+/// Create a stamp for a session, returning the bead id and stamp struct.
+/// Returns None when bead_json is None.
+pub fn for_session(repo: &Repo, agent: &str, model: &str, dir: &Path, logf: &Path, bead_json: Option<&Value>) -> Option<(String, Stamp)> {
+    let bead_value = bead_json?;
+    let id = bead_value.get(0)?.get("id")?.as_str()?.to_string();
+
+    // Parse log file name to extract kind and log stem
+    let log_file_name = logf.file_name()?.to_str()?.to_string();
+    let (kind, log_stem) = if let Some((stem, kind)) = log_file_name.rsplit_once('.') {
+        (kind.to_string(), stem.to_string())
+    } else {
+        // If no extension, treat as kind
+        (log_file_name.clone(), String::new())
+    };
+
+    // Get the stage for the current failures count
+    let failures = repo.failures_of(&id);
+    let hit = repo.stage_for(failures);
+    let stage = if let Some(h) = &hit {
+        repo.stages[h.index - 1].name.clone() // The stage name is 1-indexed in the array
+    } else {
+        String::new()
+    };
+
+    let provider = repo.resolve(model).provider.name.clone();
+    let harness = repo.resolve(model).harness.clone();
+
+    // Get base_sha from git
+    let base_sha = std::process::Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(dir)
+        .output()
+        .map(|output| if output.status.success() { String::from_utf8_lossy(&output.stdout).trim_end().to_string() } else { String::new() })
+        .unwrap_or_default();
+
+    // Hashes
+    let prompt_hash = hash_file(&crate::config::loop_home().join("agents").join(format!("{}.md", agent)));
+    let skills_hash = hash_tree(&crate::config::loop_home().join("skills"));
+    let config_hash = crate::stamp::config_hash(repo, hit.as_ref(), &repo.resolve(model));
+
+    // Round number (failures + 1)
+    let round = failures + 1;
+
+    let stamp = Stamp {
+        round,
+        dirty: loop_dirty(),
+        kind,
+        log: log_stem,
+        loop_sha: LOOP_SHA.to_string(),
+        prompt_hash,
+        skills_hash,
+        base_sha,
+        stage,
+        provider,
+        model: model.to_string(),
+        harness,
+        config_hash,
+    };
+
+    Some((id, stamp))
 }
 
 #[cfg(test)]
