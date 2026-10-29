@@ -229,6 +229,16 @@ pub fn sleep_secs(s: f64) {
     }
 }
 
+/// The git commit SHA at build time, or "unknown" if git is not available.
+#[allow(dead_code)]
+pub const LOOP_SHA: &str = env!("BEAD_LOOP_SHA");
+
+/// Whether the working directory is dirty (has uncommitted changes) at build time.
+#[allow(dead_code)]
+pub fn loop_dirty() -> bool {
+    env!("BEAD_LOOP_DIRTY") == "1"
+}
+
 /// Link skills from a source directory to a worktree, creating symlinks for directories
 /// that don't already exist in the target location. Returns the names of linked skills.
 pub fn link_skills(from: &Path, wt: &Path) -> Vec<String> {
@@ -382,5 +392,15 @@ mod tests {
         assert_eq!(content, ".agents/\nother\n");
 
         let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn loop_sha_is_a_commit_or_unknown() {
+        let sha = LOOP_SHA;
+        assert!(
+            sha == "unknown"
+                || (sha.len() == 40 && sha.chars().all(|c| c.is_ascii_digit() || c.is_ascii_lowercase() && c.is_ascii_hexdigit())),
+            "LOOP_SHA is neither 40 lowercase hex digits nor \"unknown\": {sha:?}"
+        );
     }
 }
