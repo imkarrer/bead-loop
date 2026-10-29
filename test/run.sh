@@ -104,6 +104,7 @@ assert_eq() { [ "$1" = "$2" ] && ok || bad "$3: expected [$2] got [$1]"; }
 # A here-string, not a pipe: `grep -q` leaves at the first match, and under pipefail a
 # printf still writing a large page (the UI case) then failed the assertion with SIGPIPE.
 assert_match() { grep -q -- "$2" <<<"$1" && ok || bad "$3: [$1] lacks [$2]"; }
+assert_nomatch() { grep -qE -- "$2" <<<"$1" && bad "$3: [$1] has [$2]" || ok; }   # an extended regex
 assert_file() { [ -e "$1" ] && ok || bad "$2: missing $1"; }
 assert_nofile() { [ ! -e "$1" ] && ok || bad "$2: unexpected $1"; }
 assert_branch() { git -C "$T/origin.git" show-ref -q "refs/heads/$1" && ok || bad "$2: origin has no branch $1"; }
@@ -2504,6 +2505,69 @@ case_stage_label_goes_to_its_lane() {
   assert_match "$(cat "$T/sup.log")" "t-1: its stage label moved it to claude/opus, not the dev lane's; back to the queue" "the dev lane handed it back"
   assert_eq "$(cut -d' ' -f3 "$TEST_CTRL/calls" | head -1)" "claude/opus" "no stub/fast round: straight to Claude"
   assert_eq "$(grep -c "dev: bead t-1" "$T/sup.log")" 1 "one worker round, the claude lane's"
+}
+case_install_on_macos() {
+  # install.sh on macOS, driven on any box: BEAD_LOOP_OS=Darwin and the launchctl stub.
+  # From a checkout: the two launchd agents run it through its flox env, as the units do;
+  # the opencode links; no systemd units. A re-run with nothing changed leaves the loaded
+  # agents alone, so a deploy never interrupts a round.
+  setup
+  command -v flox >/dev/null || { echo "  (no flox: install.sh's macOS path not exercised)"; return; }
+  export HOME=$T/home; mkdir -p "$HOME"
+  root=$(cd "$HERE/.." && pwd)
+  out=$(BEAD_LOOP_OS=Darwin BEAD_SUPERVISOR_BIN=$SUP bash "$root/install.sh" 2>&1)
+  la=$HOME/Library/LaunchAgents
+  sup_plist=$(cat "$la/dev.bead-loop.supervisor.plist"); ui_plist=$(cat "$la/dev.bead-loop.ui.plist")
+  assert_match "$sup_plist" "<string>-d</string>" "the loop's agent activates the checkout's env"
+  assert_match "$sup_plist" "<string>$root</string>" "this checkout"
+  assert_match "$sup_plist" "<string>$HOME/.local/bin/bead-supervisor</string>" "the installed binary"
+  assert_match "$sup_plist" "<string>$HOME/Library/Logs/bead-loop/bead-supervisor.log</string>" "logging to a file"
+  assert_match "$ui_plist" "<key>BEAD_LOOP_LOG</key>" "the page reads that file"
+  assert_nomatch "$sup_plist$ui_plist" "@[A-Z]*@" "every placeholder filled in"
+  assert_eq "$(grep -c '^bootstrap gui/' "$TEST_CTRL/launchctl.log")" 2 "both agents started"
+  assert_nofile "$HOME/.config/systemd" "no systemd units on macOS"
+  assert_eq "$(readlink "$HOME/.config/opencode/agents/bead-worker.md")" "$root/agents/bead-worker.md" "the agents linked into opencode"
+  assert_match "$out" "bead-loop-ui at http://127.0.0.1:4097" "said where the page is"
+
+  : >"$TEST_CTRL/launchctl.log"
+  out=$(BEAD_LOOP_OS=Darwin BEAD_SUPERVISOR_BIN=$SUP bash "$root/install.sh" 2>&1)
+  assert_match "$out" "dev.bead-loop.supervisor: unchanged, running" "a re-run leaves the loaded loop alone"
+  assert_nomatch "$(cat "$TEST_CTRL/launchctl.log")" "bootout|bootstrap" "nothing stopped or started"
+}
+case_install_from_the_package() {
+  # The flox package's bin/bead-loop-install: nothing built or copied; the opencode links
+  # and the launchd agents go through the environment that installed the package, whose
+  # path an upgrade keeps, not through the package's store path.
+  setup
+  export HOME=$T/home; mkdir -p "$HOME"
+  root=$(cd "$HERE/.." && pwd)
+  pkg=$T/store/bead-loop env=$T/env
+  mkdir -p "$pkg/bin" "$env/bin"
+  cp -R "$root/agents" "$root/skills" "$root/ui" "$root/launchd" "$pkg/"
+  cp "$root/install.sh" "$pkg/bin/bead-loop-install"; cp "$SUP" "$pkg/bin/bead-supervisor"; cp "$root/bin/bead-loop-ui" "$pkg/bin/"
+  # The environment links to the package, as flox's does: bin/ and the directories beside it.
+  for d in agents skills ui; do ln -s "$pkg/$d" "$env/$d"; done
+  for b in bead-supervisor bead-loop-ui bead-loop-install; do ln -s "$pkg/bin/$b" "$env/bin/$b"; done
+  out=$(PATH=$env/bin:$PATH BEAD_LOOP_OS=Darwin bash "$pkg/bin/bead-loop-install" 2>&1)
+  assert_eq "$(readlink "$HOME/.config/opencode/agents/bead-worker.md")" "$env/agents/bead-worker.md" "the agents linked through the environment"
+  assert_eq "$(readlink "$HOME/.config/opencode/skills/beads")" "$env/skills/beads" "and the skills"
+  assert_match "$(cat "$HOME/Library/LaunchAgents/dev.bead-loop.supervisor.plist")" "<string>$env/bin/bead-supervisor</string>" "the loop's agent runs the environment's binary"
+  assert_match "$(cat "$HOME/Library/LaunchAgents/dev.bead-loop.ui.plist")" "<string>$env/bin/bead-loop-ui</string>" "and the page"
+  assert_nofile "$HOME/.local/bin/bead-supervisor" "nothing built or copied to ~/.local/bin"
+  assert_match "$out" "the flox package" "said where the binary is from"
+}
+case_ui_log_from_a_file() {
+  # Under launchd there is no journal: BEAD_LOOP_LOG names the file the agent writes, and
+  # the page's log is its last lines, each at the time the line starts with.
+  setup
+  command -v node >/dev/null || { echo "  (no node: ui server not exercised)"; return; }
+  printf '%s\n' "00:00:01 repo: dev: bead t-1 to stub/worker" "a line with no time" >"$T/sup-file.log"
+  port=$((20000 + RANDOM % 20000))
+  BEAD_LOOP_LOG=$T/sup-file.log BEAD_LOOP_UI_PORT=$port BEAD_SUPERVISOR=$SUP node "$HERE/../bin/bead-loop-ui" >"$T/ui.log" 2>&1 & upid=$!
+  for _ in $(seq 50); do "$REAL_CURL" -sf -m 1 "http://127.0.0.1:$port/api/state" >"$T/state.json" 2>/dev/null && break; sleep 0.1; done
+  kill $upid
+  assert_eq "$(jq -r '[.log[].msg] | join("|")' "$T/state.json")" "00:00:01 repo: dev: bead t-1 to stub/worker|a line with no time" "the page's log is the file's lines"
+  assert_eq "$(jq -r '.log[0].t | strflocaltime("%H:%M:%S")' "$T/state.json")" "00:00:01" "at the time the line starts with"
 }
 case_doctor() {
   # Every dependency probed, red or green: bd's version and git are real; gh auth, claude

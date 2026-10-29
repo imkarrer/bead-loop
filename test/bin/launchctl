@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# Stub launchctl for bead-loop tests: install.sh's macOS path. Every call is logged to
+# $TEST_CTRL/launchctl.log; bootstrap marks the agent loaded ($TEST_CTRL/launchd/LABEL),
+# bootout clears it, and print answers from it, as launchctl does for a loaded label.
+set -euo pipefail
+echo "$*" >>"$TEST_CTRL/launchctl.log"
+mkdir -p "$TEST_CTRL/launchd"
+case $1 in
+  bootstrap) label=$(basename "$3" .plist); : >"$TEST_CTRL/launchd/$label" ;;
+  bootout)   label=${2##*/}; [ -f "$TEST_CTRL/launchd/$label" ] || exit 3; rm -f "$TEST_CTRL/launchd/$label" ;;
+  print)     label=${2##*/}; [ -f "$TEST_CTRL/launchd/$label" ] || exit 113 ;;
+esac

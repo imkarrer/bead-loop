@@ -4,6 +4,7 @@
 #   scripts/ci.sh rust      fmt --check, clippy -D warnings, build, unit tests
 #   scripts/ci.sh scripts   syntax, shellcheck, the skills/agents lint
 #   scripts/ci.sh suite     test/run.sh after cargo build (a no-op after the rust step)
+#   scripts/ci.sh package   flox build bead-loop, and test/package.sh on what it built
 #   scripts/ci.sh release   main only: the release binary as the GitHub release main-<sha7>
 #
 # The cache: the agent runs `git clean -ffxdq` in the checkout before every job, which
@@ -34,10 +35,10 @@ case ${1:-} in
     ;;
   scripts)
     echo "--- :bash: syntax"
-    bash -n install.sh scripts/*.sh test/run.sh test/lint-skills.sh test/bin/*
+    bash -n install.sh scripts/*.sh test/run.sh test/lint-skills.sh test/package.sh test/bin/*
     node --check bin/bead-loop-ui test/ui-onclicks.js
     echo "--- :bash: shellcheck"
-    shellcheck -S warning install.sh scripts/*.sh test/run.sh test/lint-skills.sh test/bin/*
+    shellcheck -S warning install.sh scripts/*.sh test/run.sh test/lint-skills.sh test/package.sh test/bin/*
     echo "--- :memo: skills and agents"
     test/lint-skills.sh
     ;;
@@ -50,6 +51,11 @@ case ${1:-} in
     # SUP for the suite; BEAD_SUPERVISOR for the UI server the suite starts (the binary
     # is in the cache dir here, not under the checkout's target/).
     SUP=$target/debug/bead-supervisor BEAD_SUPERVISOR=$target/debug/bead-supervisor test/run.sh
+    ;;
+  package)
+    # What `flox install imkarrer/bead-loop` would install: the manifest's
+    # [build.bead-loop], then its files, its runtime PATH and that the binary runs.
+    echo "--- :package: flox build bead-loop"; test/package.sh
     ;;
   release)
     # main only, after every check passed: the tested commit's release binary, published

@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  bead-loop on macOS: the resident loop, as bead-supervisor.service is on Linux.
+  install.sh fills in @RUN@ (the command, one <string> per argument), @PATH@ and @LOGS@.
+  KeepAlive is the keeper timer's job: launchd starts it at login and again whenever it
+  exits. launchctl bootout sends TERM, which aborts the sessions the lanes are on, and
+  the next start recovers the rounds it cut short, with no failure charged.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>dev.bead-loop.supervisor</string>
+  <key>ProgramArguments</key>
+  <array>
+@RUN@
+    <string>run</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>@PATH@</string>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+  <key>StandardOutPath</key>
+  <string>@LOGS@/bead-supervisor.log</string>
+  <key>StandardErrorPath</key>
+  <string>@LOGS@/bead-supervisor.log</string>
+</dict>
+</plist>

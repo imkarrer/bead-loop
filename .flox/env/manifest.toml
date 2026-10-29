@@ -33,10 +33,15 @@ gcc.pkg-path = "gcc"            # the linker cargo calls as cc
 # Rust's std links -liconv on macOS, and nixpkgs' gcc there does not bring it.
 libiconv.pkg-path = "libiconv"
 libiconv.systems = ["aarch64-darwin"]
-# test/run.sh speaks GNU and util-linux: timeout, date -d, sed -i, flock, setsid. Linux
-# has them; macOS has BSD versions or none.
+# GNU coreutils on every system: the supervisor runs every model session under
+# `timeout --foreground`, which macOS lacks, so the package carries it (runtime-packages
+# below). test/run.sh also speaks GNU and util-linux: timeout, date -d, sed -i, flock,
+# setsid; Linux has the rest, macOS has BSD versions or none.
 coreutils.pkg-path = "coreutils"
-coreutils.systems = ["aarch64-darwin"]
+# bash 5 on every system. macOS's /bin/bash is 3.2, which brace-expands a quoted
+# "{..,..}" nested in "$(...)": the suite's JSON bodies arrived split at their commas.
+# The package carries it too, so the gate and every `bash -c` the loop runs get bash 5.
+bash.pkg-path = "bash"
 gnused.pkg-path = "gnused"
 gnused.systems = ["aarch64-darwin"]
 util-linux.pkg-path = "util-linux"
@@ -70,6 +75,32 @@ command = '''exec "$FLOX_ENV_PROJECT/bin/bead-loop-ui"'''
 # The loop itself: resident, the same thing bead-supervisor.service runs.
 [services.loop]
 command = '''exec bead-supervisor run'''
+
+# The package `flox install imkarrer/bead-loop` installs: the supervisor, the page,
+# bead-loop-install (install.sh: the opencode links, and the launchd agents or systemd
+# units), and beside bin/ the agents/, ui/ and skills/ the supervisor finds there
+# (config.rs loop_home) and the launchd/ templates. The tools a round shells out to are
+# its runtime packages, so they are on its PATH wherever it is installed. opencode is
+# not one: a build keeps only toplevel
+# packages, and moving the pinned opencode there pulls the whole group back a catalog
+# page (Rust 1.98 to 1.97, measured), so the environment that installs this installs
+# opencode itself.
+# Built from a git checkout, so build.rs stamps the commit. Hooks do not run in a
+# build, so the deployment target is set here. On macOS it links with the system cc:
+# the env's gcc writes rpaths into its own store paths, which the build's closure
+# check refuses.
+[build.bead-loop]
+description = "Work beads with local and metered models in any repo: the supervisor, its page and its agents"
+version.command = '''sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n1'''
+command = '''
+  if [ "$(uname -s)" = Darwin ]; then export MACOSX_DEPLOYMENT_TARGET=14.0 CARGO_TARGET_AARCH64_APPLE_DARWIN_LINKER=/usr/bin/cc; fi
+  cargo build --release --locked
+  mkdir -p "$out/bin"
+  cp "${CARGO_TARGET_DIR:-target}/release/bead-supervisor" bin/bead-loop-ui "$out/bin/"
+  cp install.sh "$out/bin/bead-loop-install"
+  cp -R agents ui skills launchd "$out/"
+'''
+runtime-packages = ["bd", "git", "gh", "jq", "curl", "nodejs", "coreutils", "bash"]
 
 [options]
 systems = ["x86_64-linux", "aarch64-linux", "aarch64-darwin"]
