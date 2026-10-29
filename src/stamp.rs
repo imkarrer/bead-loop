@@ -249,11 +249,16 @@ pub fn for_session(repo: &Repo, agent: &str, model: &str, dir: &Path, logf: &Pat
 
     // Parse log file name to extract kind and log stem
     let log_file_name = logf.file_name()?.to_str()?.to_string();
-    let (kind, log_stem) = if let Some((stem, kind)) = log_file_name.rsplit_once('.') {
-        (kind.to_string(), stem.to_string())
+    // Strip the .jsonl suffix first if present, then split on the last dot
+    let mut name = log_file_name.clone();
+    if let Some(stripped) = name.strip_suffix(".jsonl") {
+        name = stripped.to_string();
+    }
+    let (log_stem, kind) = if let Some((stem, kind)) = name.rsplit_once('.') {
+        (stem.to_string(), kind.to_string())
     } else {
         // If no extension, treat as kind
-        (log_file_name.clone(), String::new())
+        (name.clone(), String::new())
     };
 
     // Get the stage for the current failures count
@@ -425,5 +430,20 @@ mod tests {
         append_file(&repo.rounds_path("t-1"), "{\"round\":1}\n");
         write_claim(&repo, "t-1", &json!([{"title": "T"}]));
         assert!(read(&repo, "t-1").is_empty(), "no claim for a bead with prior rounds");
+    }
+
+    #[test]
+    fn for_session_takes_kind_and_log_from_a_dotted_ids_log_name() {
+        let d = scratch("for-session");
+        let repo = test_repo(&d, &["fast:rev:2"]);
+        let bead = json!([{"id": "bl-ayv.3"}]);
+        let logf = d.join("bl-ayv.3.20261029T101010.worker.jsonl");
+        let (id, stamp) = for_session(&repo, "bead-worker", "fast", &d, &logf, Some(&bead)).expect("a stamp for a bead");
+        assert_eq!(id, "bl-ayv.3");
+        assert_eq!(stamp.kind, "worker", "the kind is the last piece of the name, not the .jsonl");
+        assert_eq!(stamp.log, "bl-ayv.3.20261029T101010", "the stem keeps the id's own dot");
+        assert_eq!(stamp.round, 1);
+        assert_eq!(stamp.model, "fast");
+        assert!(for_session(&repo, "bead-worker", "fast", &d, &logf, None).is_none(), "no bead, no stamp");
     }
 }
