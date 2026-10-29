@@ -396,8 +396,11 @@ mod tests {
 
     #[test]
     fn loop_sha_is_a_commit_or_unknown() {
-        // Test that LOOP_SHA is either 40 lowercase hex digits or "unknown"
-        let sha = env!("BEAD_LOOP_SHA");
-        assert!(sha == "unknown" || (sha.len() == 40 && sha.chars().all(|c| c.is_ascii_hexdigit())));
+        let sha = LOOP_SHA;
+        assert!(
+            sha == "unknown"
+                || (sha.len() == 40 && sha.chars().all(|c| c.is_ascii_digit() || c.is_ascii_lowercase() && c.is_ascii_hexdigit())),
+            "LOOP_SHA is neither 40 lowercase hex digits nor \"unknown\": {sha:?}"
+        );
     }
 }

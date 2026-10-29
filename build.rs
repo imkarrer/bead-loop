@@ -1,9 +1,21 @@
 use std::env;
 use std::process::Command;
 
+fn git_path(manifest_dir: &str, arg: &str) -> Option<String> {
+    let output = Command::new("git").args(["rev-parse", "--git-path", arg]).current_dir(manifest_dir).output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if path.is_empty() {
+        None
+    } else {
+        Some(path)
+    }
+}
+
 fn main() {
     let manifest_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
-    let manifest_dir_path = std::path::Path::new(&manifest_dir);
 
     // Get the git SHA
     let sha = match Command::new("git").args(["rev-parse", "HEAD"]).current_dir(&manifest_dir).output() {
@@ -40,37 +52,25 @@ fn main() {
     println!("cargo:rerun-if-changed=agents");
     println!("cargo:rerun-if-changed=skills");
 
-    // Add git-related paths
-    let git_path = manifest_dir_path.join(".git");
-    if git_path.exists() {
-        // Check for HEAD file
-        let head_path = git_path.join("HEAD");
-        if head_path.exists() {
-            println!("cargo:rerun-if-changed={}", head_path.display());
+    // Add git-related paths, resolved through `git rev-parse --git-path` so a
+    // worktree (where .git is a file, not a directory) resolves correctly.
+    let manifest_dir_path = std::path::Path::new(&manifest_dir);
+    for arg in ["HEAD", "index", "packed-refs"] {
+        if let Some(path) = git_path(&manifest_dir, arg) {
+            if manifest_dir_path.join(&path).exists() {
+                println!("cargo:rerun-if-changed={}", path);
+            }
         }
+    }
 
-        // Check for index file
-        let index_path = git_path.join("index");
-        if index_path.exists() {
-            println!("cargo:rerun-if-changed={}", index_path.display());
-        }
-
-        // Check for packed-refs file
-        let packed_refs_path = git_path.join("packed-refs");
-        if packed_refs_path.exists() {
-            println!("cargo:rerun-if-changed={}", packed_refs_path.display());
-        }
-
-        // Check for current branch ref
-        let branch_ref = match Command::new("git").args(["symbolic-ref", "-q", "HEAD"]).current_dir(&manifest_dir).output() {
-            Ok(output) if output.status.success() => String::from_utf8_lossy(&output.stdout).trim().to_string(),
-            _ => String::new(),
-        };
-
-        if !branch_ref.is_empty() {
-            let ref_path = git_path.join(&branch_ref);
-            if ref_path.exists() {
-                println!("cargo:rerun-if-changed={}", ref_path.display());
+    let branch_ref = match Command::new("git").args(["symbolic-ref", "-q", "HEAD"]).current_dir(&manifest_dir).output() {
+        Ok(output) if output.status.success() => String::from_utf8_lossy(&output.stdout).trim().to_string(),
+        _ => String::new(),
+    };
+    if !branch_ref.is_empty() {
+        if let Some(path) = git_path(&manifest_dir, &branch_ref) {
+            if manifest_dir_path.join(&path).exists() {
+                println!("cargo:rerun-if-changed={}", path);
             }
         }
     }
