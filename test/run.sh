@@ -298,6 +298,28 @@ case_reject_until_parked() {
   assert_nobranch bead/t-1 "nothing pushed"
   : >"$TEST_CTRL/calls"; sup work "$REPO"; assert_eq "$(calls)" "" "parked bead is not picked up"
 }
+case_claim_line() {
+  # The claim line is written at the first claim and never again: two dev rounds on the
+  # same bead (a rejection, then approval) leave exactly one.
+  setup; printf 'reject\napprove\n' >"$TEST_CTRL/review"
+  sup work "$REPO"; sup work "$REPO"
+  R=$BEAD_LOOP_STATE/repo
+  assert_eq "$(grep -c '"claim"' "$R/beads/t-1/stamps.jsonl")" 1 "one claim line across two rounds"
+  claim=$(jq -c 'select(has("claim")) | .claim' "$R/beads/t-1/stamps.jsonl")
+  assert_match "$claim" '"title":"Do the thing"' "the bead's title"
+  assert_match "$claim" '"files_named":1' "files_named: work.txt"
+  assert_match "$claim" '"files_on_base":0' "work.txt does not exist on base"
+  assert_match "$claim" '"acceptance_kind":"prose"' "no backtick command in the acceptance text"
+  assert_match "$claim" '"start_stage":"1"' "claimed on the first stage"
+
+  # A bead with a rounds.jsonl from before this change has no claim: the first claim it
+  # sees under this binary is not its first claim ever.
+  jq '. + [{id:"t-2", title:"Old style", description:"Edit work.txt", acceptance_criteria:"work.txt exists", status:"open", priority:2, issue_type:"task", labels:["delegate:local"]}]' "$BD_STATE/issues.json" >"$BD_STATE/i.tmp" && mv "$BD_STATE/i.tmp" "$BD_STATE/issues.json"
+  mkdir -p "$R/beads/t-2"
+  printf '{"round":1,"model":"stub/worker","stage":1,"when":"2026-09-18T17:00+00:00","note":"n","logs":[]}\n' >"$R/beads/t-2/rounds.jsonl"
+  sup work "$REPO" t-2
+  assert_nofile "$R/beads/t-2/stamps.jsonl" "no claim for a bead with rounds from before this change"
+}
 case_no_reviewer() {
   setup true auto ''; sup work "$REPO"
   assert_eq "$(calls)" "bead-worker" "no review round without REVIEW_MODEL"

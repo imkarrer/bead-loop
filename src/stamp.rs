@@ -1,10 +1,12 @@
 //! The stamp: what produced one model session, written to `beads/ID/stamps.jsonl` (one
 //! line per session, including the round that lands) so a later question — did this
 //! change help, is config A better than config B — can slice production by what ran it.
-//! Nothing here is wired to a round yet (docs/design-measurement.md piece 1, ADR 0001).
+//! The session stamp itself is not wired to a round yet (docs/design-measurement.md
+//! piece 1, ADR 0001); `write_claim`'s `claim` line is (piece 2, decision 14).
 use crate::config::{Approvals, Repo, Resolved};
+use crate::shell::git_ok;
 use crate::state::StageHit;
-use crate::util::{append_file, read_to_string};
+use crate::util::{append_file, cut_bytes, date_iminutes, read_to_string};
 use serde_json::{json, Value};
 use std::path::Path;
 
@@ -147,15 +149,96 @@ impl Stamp {
 }
 
 /// Append one stamp line to `beads/ID/stamps.jsonl`.
-#[allow(dead_code)]
 pub fn append(repo: &Repo, id: &str, line: &Value) {
     append_file(&repo.stamps_path(id), &format!("{line}\n"));
 }
 
 /// The stamps of a bead, oldest first — the lines that parse.
-#[allow(dead_code)]
 pub fn read(repo: &Repo, id: &str) -> Vec<Value> {
     read_to_string(&repo.stamps_path(id)).unwrap_or_default().lines().filter_map(|l| serde_json::from_str(l).ok()).collect()
+}
+
+/// The claim line: a bead's features at the moment it is first claimed, so a later
+/// question ("the beads got easier" vs "the loop got better") reads what was true then,
+/// never rebuilt (decision 14, docs/design-measurement.md). A no-op once a claim line
+/// exists, or for a bead with rounds from before this change (`park::rounds`).
+pub fn write_claim(repo: &Repo, id: &str, bead_json: &Value) {
+    if read(repo, id).iter().any(|l| l.get("claim").is_some()) {
+        return;
+    }
+    if !crate::park::rounds(repo, id).is_empty() {
+        return;
+    }
+    let b = bead_json.get(0).cloned().unwrap_or(Value::Null);
+    let s = |k: &str| b.get(k).and_then(|v| v.as_str()).unwrap_or("");
+    let description = s("description");
+    let acceptance = s("acceptance_criteria");
+    let labels: Vec<&str> =
+        b.get("labels").and_then(|l| l.as_array()).map(|a| a.iter().filter_map(|v| v.as_str()).collect()).unwrap_or_default();
+
+    let base_ref = format!("{}/{}", repo.base_remote, repo.base);
+    let tokens = crate::harness::path_tokens(description);
+    let on_base: Vec<bool> = tokens.iter().map(|t| git_ok(&repo.repo, &["cat-file", "-e", &format!("{base_ref}:{t}")])).collect();
+    let files_on_base = on_base.iter().filter(|b| **b).count();
+    let greenfield = tokens.iter().zip(&on_base).any(|(t, on_base)| t.contains('/') && t.contains('.') && !on_base);
+
+    let stage = repo.stage_for(repo.failures_of(id));
+    let start_stage = stage.as_ref().map(|s| repo.stages[s.index - 1].name.clone()).unwrap_or_default();
+    let harness = stage.as_ref().map(|s| crate::round::harness_for(&labels, &s.model, None).0).unwrap_or_default();
+
+    let planned_in = labels.iter().find_map(|l| l.strip_prefix("planned-in:")).unwrap_or("").to_string();
+
+    append(
+        repo,
+        id,
+        &json!({"claim": {
+            "when": date_iminutes(),
+            "title": cut_bytes(s("title"), 20000),
+            "description": cut_bytes(description, 20000),
+            "acceptance": cut_bytes(acceptance, 20000),
+            "labels": labels,
+            "files_named": tokens.len(),
+            "files_on_base": files_on_base,
+            "description_chars": description.chars().count(),
+            "start_stage": start_stage,
+            "harness": harness,
+            "acceptance_kind": acceptance_kind(acceptance),
+            "greenfield": greenfield,
+            "linted": linted_of(s("notes")),
+            "planned_in": planned_in,
+        }}),
+    );
+}
+
+/// `none` for an empty acceptance; `command` when a backtick span in it starts with one
+/// of the shapes a loop check runs (`cargo`, `bash`, `sh`, `test`, `grep`, `rg`, `git`,
+/// `node`, `npm`, `make`, `flox`, `shellcheck`, `./` or `test/`); else `prose`.
+fn acceptance_kind(s: &str) -> &'static str {
+    if s.is_empty() {
+        return "none";
+    }
+    const PREFIXES: &[&str] =
+        &["cargo", "bash", "sh", "test", "grep", "rg", "git", "node", "npm", "make", "flox", "shellcheck", "./", "test/"];
+    let is_command = s.split('`').enumerate().any(|(i, span)| i % 2 == 1 && PREFIXES.iter().any(|p| span.trim_start().starts_with(p)));
+    if is_command {
+        "command"
+    } else {
+        "prose"
+    }
+}
+
+/// `pass` for a notes line `bead-loop lint DATE: pass`, `fail` for any other
+/// `bead-loop lint DATE:` line, else `""` (decisions 17, 18). The last such line wins.
+fn linted_of(notes: &str) -> String {
+    let mut out = String::new();
+    for l in notes.lines() {
+        if let Some(rest) = l.trim_start().strip_prefix("bead-loop lint ") {
+            if let Some((_, what)) = rest.split_once(": ") {
+                out = if what == "pass" { "pass".to_string() } else { "fail".to_string() };
+            }
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -229,5 +312,56 @@ mod tests {
         assert_eq!(lines.len(), 2);
         assert_eq!(lines[0]["kind"], "worker");
         assert_eq!(lines[1]["kind"], "review");
+    }
+
+    fn git(dir: &Path, args: &[&str]) {
+        assert!(std::process::Command::new("git").args(args).current_dir(dir).status().unwrap().success(), "git {args:?} in {dir:?}");
+    }
+
+    #[test]
+    fn write_claim_captures_the_bead_at_first_claim() {
+        let d = scratch("write-claim");
+        let repo = test_repo(&d, &["fast:rev:2"]);
+        git(&repo.repo, &["init", "-q"]);
+        git(&repo.repo, &["config", "user.email", "t@t"]);
+        git(&repo.repo, &["config", "user.name", "t"]);
+        std::fs::create_dir_all(repo.repo.join("src")).unwrap();
+        std::fs::write(repo.repo.join("src/on_base.rs"), "").unwrap();
+        git(&repo.repo, &["add", "-A"]);
+        git(&repo.repo, &["commit", "-q", "-m", "base"]);
+        git(&repo.repo, &["update-ref", "refs/remotes/origin/main", "HEAD"]);
+
+        let bead = json!([{
+            "title": "T",
+            "description": "Edit src/on_base.rs and add src/new_feature.ts to it.",
+            "acceptance_criteria": "Run `cargo test path_tokens`",
+            "labels": ["foo", "planned-in:abc"],
+            "notes": "bead-loop lint 2026-01-01T00:00+00:00: pass",
+        }]);
+        write_claim(&repo, "t-1", &bead);
+        let lines = read(&repo, "t-1");
+        assert_eq!(lines.len(), 1, "one claim line");
+        let claim = &lines[0]["claim"];
+        assert_eq!(claim["title"], "T");
+        assert_eq!(claim["files_named"], 2, "src/on_base.rs and src/new_feature.ts");
+        assert_eq!(claim["files_on_base"], 1, "only src/on_base.rs is on base");
+        assert_eq!(claim["start_stage"], "1");
+        assert_eq!(claim["harness"], "fast");
+        assert_eq!(claim["acceptance_kind"], "command");
+        assert_eq!(claim["greenfield"], true, "src/new_feature.ts is not on base");
+        assert_eq!(claim["linted"], "pass");
+        assert_eq!(claim["planned_in"], "abc");
+
+        write_claim(&repo, "t-1", &bead);
+        assert_eq!(read(&repo, "t-1").len(), 1, "a second claim is a no-op");
+    }
+
+    #[test]
+    fn write_claim_skips_a_bead_with_rounds_from_before_the_change() {
+        let d = scratch("write-claim-old");
+        let repo = test_repo(&d, &["fast:rev:2"]);
+        append_file(&repo.rounds_path("t-1"), "{\"round\":1}\n");
+        write_claim(&repo, "t-1", &json!([{"title": "T"}]));
+        assert!(read(&repo, "t-1").is_empty(), "no claim for a bead with prior rounds");
     }
 }
