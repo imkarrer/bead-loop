@@ -184,6 +184,14 @@ The loop surviving a reboot with nobody logged in also needs **linger** for this
 `install.sh` tries `loginctl enable-linger` itself and tells you if it couldn't (it needs
 root): `sudo loginctl enable-linger $USER`, once.
 
+### On macOS
+
+[docs/setup-macos.md](docs/setup-macos.md) is the guide for someone setting it up for
+the first time: one line in Terminal runs `scripts/setup-macos.sh`, which installs Flox
+if needed, checks this repo out to `~/bead-loop`, runs `install.sh` and signs in to
+GitHub. `scripts/configure-models.sh` is the opt-in that points the loop at a shared
+model server (llm-box), and optionally at Ollama on the Mac.
+
 ### On macOS, from the flox package
 
 The package is the supervisor, the page, `bead-loop-install` (this `install.sh`), and the

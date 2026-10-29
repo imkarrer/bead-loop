@@ -2578,6 +2578,51 @@ case_ui_on_macos() {
   kill $upid
   assert_eq "$(jq -r '.service.active' "$T/state.json")" "inactive" "unloaded, the loop is down"
 }
+case_setup_adds_a_repo() {
+  # scripts/setup-macos.sh's add_repo: the repo goes into the one-line `repos` list
+  # install.sh seeds, beside any already there; once only; and a list it cannot edit
+  # safely is left alone with what to do by hand.
+  setup
+  # shellcheck source=../scripts/setup-macos.sh
+  source "$HERE/../scripts/setup-macos.sh"
+  c=$T/c.toml
+  printf 'repos = []                       # e.g.\nworker_timeout = 3600\n' >"$c"
+  add_repo "$c" /a >/dev/null
+  assert_eq "$(head -1 "$c")" 'repos = ["/a"]                       # e.g.' "into the empty list, the comment kept"
+  add_repo "$c" /b >/dev/null
+  assert_eq "$(head -1 "$c")" 'repos = ["/a", "/b"]                       # e.g.' "beside the one there"
+  out=$(add_repo "$c" /a)
+  assert_match "$out" "already in" "once only"
+  assert_eq "$(grep -c '^repos' "$c")" 1 "one repos line"
+  printf 'repos = [\n  "/a",\n]\n' >"$c"
+  out=$(add_repo "$c" /z)
+  assert_match "$out" 'add it by hand: repos = \["/z"\]' "a list over several lines is left to you"
+}
+case_configure_models() {
+  # scripts/configure-models.sh with every answer given: llm-box's three models checked,
+  # opencode's llmbox provider merged in beside the others, and the loop's config
+  # rewritten with llm-box's stages, its repos kept and both old files backed up.
+  setup
+  export HOME=$T/home BEAD_LOOP_CONFIG=$T/home/.config/bead-loop; mkdir -p "$BEAD_LOOP_CONFIG" "$HOME/.config/opencode"
+  printf 'repos = ["/r1", "/r2"]\nmodel = "old/one"\n' >"$BEAD_LOOP_CONFIG/config.toml"
+  echo '{"provider":{"other":{"options":{"baseURL":"http://x"}}}}' >"$HOME/.config/opencode/opencode.json"
+  echo '{"data":[{"id":"coder"},{"id":"reviewer"},{"id":"utility"},{"id":"embed"}]}' >"$TEST_CTRL/models.json"
+  out=$(ASSUME_DEFAULTS=1 LLMBOX_URL=http://llm.test:8100/v1/ USE_OLLAMA=no bash "$HERE/../scripts/configure-models.sh" 2>&1)
+  oc=$HOME/.config/opencode/opencode.json
+  assert_eq "$(jq -r '.provider.llmbox.options.baseURL, (.provider.llmbox.models | keys | join(" ")), .provider.other.options.baseURL, (.provider.mac // "none")' "$oc" | tr '\n' ' ')" "http://llm.test:8100/v1 coder reviewer utility http://x none " "llmbox merged in, the other provider kept, no mac"
+  cfg=$(cat "$BEAD_LOOP_CONFIG/config.toml")
+  assert_match "$cfg" '^repos = \["/r1", "/r2"\]$' "the repos kept"
+  assert_match "$cfg" '^worker = "llmbox/coder"$' "llm-box's 80B is the worker"
+  assert_match "$cfg" '^precheck_model = "llmbox/utility"' "and its small model the pre-check"
+  assert_nomatch "$cfg" 'old/one' "the old keys gone"
+  baks=("$BEAD_LOOP_CONFIG"/config.toml.bak-* "$HOME"/.config/opencode/opencode.json.bak-*)
+  assert_eq "${#baks[@]}" 2 "both old files backed up"
+  assert_file "${baks[0]}" "the config's backup"
+  echo '{"data":[{"id":"coder"}]}' >"$TEST_CTRL/models.json"
+  rc=0; out=$(ASSUME_DEFAULTS=1 LLMBOX_URL=http://llm.test:8100/v1 USE_OLLAMA=no bash "$HERE/../scripts/configure-models.sh" 2>&1) || rc=$?
+  assert_eq "$rc" 1 "a box without the three models stops it"
+  assert_match "$out" 'does not serve "reviewer"; it serves: coder' "and says which"
+}
 case_doctor() {
   # Every dependency probed, red or green: bd's version and git are real; gh auth, claude
   # auth, the opencode provider named in the stages (its /models) and the attach server
