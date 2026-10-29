@@ -1390,6 +1390,7 @@ pub fn dev_one(repo: &Repo, opts: &Opts, id: Option<&str>, last_id: &mut Option<
         hold(repo, &id, None, &format!("git fetch {} {} failed", repo.base_remote, repo.base));
         return Pass::Worked;
     }
+    crate::stamp::write_claim(repo, &id, &json);
     if rejoin.is_none() {
         abort_sessions(repo, &wt); // a killed earlier round may have left one running here
     }

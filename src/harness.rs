@@ -545,21 +545,27 @@ fn aider_ignore(files: &[String]) -> String {
     s
 }
 
-/// The files a bead's DESCRIPTION names: every whitespace-separated token with a slash or
-/// a dot, trimmed of punctuation at either end, that exists in the worktree; plus the
-/// brief's own Files section ([`brief_files`]); sorted, unique.
-fn files_named(bead_json: Option<&Value>, brief: &str, dir: &Path) -> Vec<String> {
-    let desc = bead_json.and_then(|j| j.get(0)).and_then(|b| b.get("description")).and_then(|d| d.as_str()).unwrap_or("");
-    let mut files: Vec<String> = desc
-        .split_whitespace()
+/// The tokens a bead's DESCRIPTION names a path by: every whitespace-separated token
+/// with a slash or a dot, trimmed of punctuation at either end; no existence check, so
+/// the claim's features, `lint`'s "paths exist" and aider's file list read the same
+/// tokens (decision 21, docs/design-measurement.md).
+pub fn path_tokens(desc: &str) -> Vec<String> {
+    desc.split_whitespace()
         .map(|t| {
             let t = t.trim_start_matches(|c: char| !(c.is_ascii_alphanumeric() || "_./".contains(c)));
             t.trim_end_matches(|c: char| !(c.is_ascii_alphanumeric() || "_/-".contains(c)))
         })
         .filter(|t| t.contains('/') || t.contains('.'))
-        .filter(|t| !t.is_empty() && dir.join(t).is_file())
+        .filter(|t| !t.is_empty())
         .map(str::to_string)
-        .collect();
+        .collect()
+}
+
+/// The files a bead's DESCRIPTION names ([`path_tokens`]) that exist in the worktree,
+/// plus the brief's own Files section ([`brief_files`]); sorted, unique.
+fn files_named(bead_json: Option<&Value>, brief: &str, dir: &Path) -> Vec<String> {
+    let desc = bead_json.and_then(|j| j.get(0)).and_then(|b| b.get("description")).and_then(|d| d.as_str()).unwrap_or("");
+    let mut files: Vec<String> = path_tokens(desc).into_iter().filter(|t| dir.join(t).is_file()).collect();
     files.extend(brief_files(brief, dir).0);
     files.sort();
     files.dedup();
@@ -1045,6 +1051,15 @@ mod tests {
             "sorted, unique, punctuation trimmed; README has no dot or slash"
         );
         assert!(files_named(None, "", &d).is_empty());
+        let _ = std::fs::remove_dir_all(&d);
+    }
+    #[test]
+    fn path_tokens_keeps_a_missing_file_that_files_named_drops() {
+        let d = crate::config::scratch("path-tokens");
+        std::fs::write(d.join("work.txt"), "").unwrap();
+        let bead = serde_json::json!([{"description": "Edit work.txt and lib/missing.ts too."}]);
+        assert_eq!(path_tokens("Edit work.txt and lib/missing.ts too."), vec!["work.txt", "lib/missing.ts"]);
+        assert_eq!(files_named(Some(&bead), "", &d), vec!["work.txt"], "lib/missing.ts does not exist, so files_named drops it");
         let _ = std::fs::remove_dir_all(&d);
     }
     #[test]
