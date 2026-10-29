@@ -34,6 +34,7 @@
 //!   --once       tick: one pass of each lane, in turn, whether or not more is queued
 //!   --serial     tick: the lanes one after the other instead of side by side
 //!   --json       status as one JSON object per repo, stats as one object (what the web UI reads)
+//!   --rows       stats: one JSON object per bead the loop touched (JSONL), instead of the scoreboard
 //!   --local      implement, gate and review; keep the branch here, no push, no PR
 //!   --model M    opencode provider/model for the worker this run
 mod config;
@@ -108,7 +109,7 @@ fn bad_args(args: &[String]) -> Option<String> {
     if matches!(cmd, "publish" | "answer") {
         return None;
     }
-    args.iter().skip(1).find(|a| a.starts_with('-')).map(|a| format!("unknown flag {a}"))
+    args.iter().skip(1).find(|a| a.starts_with('-') && !(cmd == "stats" && a.as_str() == "--rows")).map(|a| format!("unknown flag {a}"))
 }
 
 fn main() {
@@ -144,6 +145,11 @@ fn main() {
         std::process::exit(2);
     }
     let mut rest: Vec<String> = args.iter().skip(1).cloned().collect();
+    // stats' own flag: pulled out of rest before it would be read as a repo path.
+    let rows = cmd == "stats" && rest.iter().any(|a| a == "--rows");
+    if rows {
+        rest.retain(|a| a != "--rows");
+    }
     let g_conf = config_dir().join("config.toml");
     let global = Layers::load(&g_conf, None);
     let lane_name = match cmd.as_str() {
@@ -292,11 +298,17 @@ fn main() {
         }
         "stats" => {
             let loaded: Vec<Repo> = repos.iter().map(|r| Repo::load(r, opts.model_flag.as_deref())).collect();
-            let j = stats::stats_json(&loaded);
-            if json {
-                println!("{}", serde_json::to_string(&j).unwrap());
+            if rows {
+                for row in stats::rows_json(&loaded) {
+                    println!("{}", serde_json::to_string(&row).unwrap());
+                }
             } else {
-                print!("{}", stats::stats_text(&j));
+                let j = stats::stats_json(&loaded);
+                if json {
+                    println!("{}", serde_json::to_string(&j).unwrap());
+                } else {
+                    print!("{}", stats::stats_text(&j));
+                }
             }
         }
         "watch" => {
@@ -334,6 +346,8 @@ mod tests {
         assert_eq!(bad_args(&v(&["status", "/r"])), None);
         assert_eq!(bad_args(&v(&["publish", "/r", "x-1", "--title", "-t"])), None, "publish reads its own flags");
         assert_eq!(bad_args(&v(&["answer", "/r", "x-1", "-- yes"])), None, "answer's TEXT is free text");
+        assert_eq!(bad_args(&v(&["stats", "--rows", "/r"])), None, "stats reads --rows");
+        assert_eq!(bad_args(&v(&["status", "--rows", "/r"])).as_deref(), Some("unknown flag --rows"), "--rows is stats' own");
     }
 
     #[test]

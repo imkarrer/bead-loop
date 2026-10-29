@@ -337,6 +337,16 @@ case_claim_line() {
   sup work "$REPO" t-2
   assert_eq "$(jq -s 'map(select(has("claim"))) | length' "$R/beads/t-2/stamps.jsonl")" 0 "no claim for a bead with rounds from before this change"
 }
+case_stats_rows() {
+  # stats --rows prints JSONL, one row per bead the loop touched, not the scoreboard.
+  setup; sup work "$REPO"
+  set_checks '[{"context":"ci","state":"SUCCESS"}]'; sup reconcile "$REPO"
+  out=$(sup stats "$REPO" --rows)
+  assert_eq "$(wc -l <<<"$out" | tr -d ' ')" 1 "one line for t-1"
+  assert_eq "$(echo "$out" | jq -s 'length')" 1 "one JSON object per line, nothing else on stdout"
+  assert_eq "$(jq -r .id <<<"$out")" t-1 "the row's id"
+  assert_eq "$(jq -r .claim.title <<<"$out")" "Do the thing" "the claim line stamped at the first claim"
+}
 case_no_reviewer() {
   setup true auto ''; sup work "$REPO"
   assert_eq "$(calls)" "bead-worker" "no review round without REVIEW_MODEL"

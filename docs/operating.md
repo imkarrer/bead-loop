@@ -108,6 +108,13 @@ tail -f ~/Library/Logs/bead-loop/bead-supervisor.log       # the same on macOS, 
 bead-supervisor log ~/src/repo [bead-id]                  # the newest session's log, one line per tool call
 ```
 
+`bead-supervisor stats --rows` prints JSONL instead of the scoreboard: one row per bead
+`bd` ever showed the loop touching, any outcome, with no window — landed, parked, open
+or closed by hand, the claim it was filed with, its send-back reasons in order, its
+model time and cost, and how many times it needed you. The scoreboard sums these away
+into four windows; the rows are what a later question (did this change help, is config
+A better than config B — docs/design-measurement.md) slices for itself.
+
 ```
 05:41:12   bead-supervisor watch (every 5s, ctrl-c to stop)
 

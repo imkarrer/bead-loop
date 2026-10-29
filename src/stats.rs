@@ -325,6 +325,8 @@ struct Bead {
     events: Vec<Event>,
     /// `bead-loop: URL was closed without merging` — no date on that note; the bead's updated_at
     closed_unmerged: Option<i64>,
+    /// the name of the stage `failures` lands on, else None (exhausted)
+    stage_name: Option<String>,
 }
 
 fn bead_of(repo: &Repo, b: &Value) -> Option<Bead> {
@@ -349,7 +351,9 @@ fn bead_of(repo: &Repo, b: &Value) -> Option<Bead> {
         reason.strip_prefix("bead-loop: ").and_then(|r| r.split_whitespace().next()).filter(|u| u.starts_with("http")).map(str::to_string);
     let noted = events.iter().filter_map(|e| if let Event::SendBack { round, .. } = e { Some(*round) } else { None }).max().unwrap_or(0);
     let failures = if repo.failures_path(&id).exists() { repo.failures_of(&id) } else { noted };
-    let worker = repo.stage_for(failures).map(|st| st.model).unwrap_or_else(|| "exhausted".into());
+    let hit = repo.stage_for(failures);
+    let worker = hit.as_ref().map(|st| st.model.clone()).unwrap_or_else(|| "exhausted".into());
+    let stage_name = hit.as_ref().map(|st| repo.stages[st.index - 1].name.clone());
     let metered = repo.resolve(&worker).provider.cost == "metered";
     let closed_unmerged = if notes.contains("was closed without merging") { parse_iso(s("updated_at")).or(closed) } else { None };
     Some(Bead {
@@ -365,6 +369,7 @@ fn bead_of(repo: &Repo, b: &Value) -> Option<Bead> {
         metered,
         events,
         closed_unmerged,
+        stage_name,
     })
 }
 
@@ -705,9 +710,10 @@ pub fn stats_from(inputs: &[Input], now: i64) -> Value {
     })
 }
 
-/// `stats_json`: the scoreboard over these repos, from bd and the state dir.
-pub fn stats_json(repos: &[Repo]) -> Value {
-    let inputs: Vec<Input> = repos
+/// Every repo's beads, rounds and pre-checks, read from bd and the state dir: what
+/// `stats_json` and `rows_json` both sum.
+fn inputs_for(repos: &[Repo]) -> Vec<Input<'_>> {
+    repos
         .iter()
         .map(|repo| {
             // every bead the loop touched: the closed ones carry the landings, the open
@@ -721,8 +727,100 @@ pub fn stats_json(repos: &[Repo]) -> Value {
             }
             Input { repo, beads, rounds: log_rounds(repo), prechecks: precheck_rounds(repo) }
         })
-        .collect();
-    stats_from(&inputs, now())
+        .collect()
+}
+
+/// `stats_json`: the scoreboard over these repos, from bd and the state dir.
+pub fn stats_json(repos: &[Repo]) -> Value {
+    stats_from(&inputs_for(repos), now())
+}
+
+/// `rows_json`: one row per bead these repos' loop touched, from bd and the state dir.
+pub fn rows_json(repos: &[Repo]) -> Vec<Value> {
+    rows_from(&inputs_for(repos), now())
+}
+
+/// A log round's time (clipped to `now`), cost and unbilled token count, summed over the
+/// rounds with this bead's id.
+fn totals_for(rounds: &[LogRound], id: &str, now: i64) -> (i64, i64, f64, u64) {
+    let (mut worker_s, mut review_s, mut usd, mut tokens) = (0i64, 0i64, 0.0f64, 0u64);
+    for r in rounds.iter().filter(|r| r.id == id) {
+        let d = (r.end.min(now) - r.start).max(0);
+        usd += r.cost_usd;
+        tokens += r.unbilled.input + r.unbilled.output + r.unbilled.cache_read;
+        if r.role == "worker" {
+            worker_s += d;
+        } else {
+            review_s += d;
+        }
+    }
+    (worker_s, review_s, usd, tokens)
+}
+
+/// `rows_from`: one JSON object per bead `bead_of` returns, any outcome, no window —
+/// docs/design-measurement.md piece 2, decisions 13 and 15; CONTEXT.md `Row`.
+pub fn rows_from(inputs: &[Input], now: i64) -> Vec<Value> {
+    let mut out = Vec::new();
+    for inp in inputs {
+        for b in inp.beads.iter().filter_map(|v| bead_of(inp.repo, v)) {
+            let reasons: Vec<&str> =
+                b.events.iter().filter_map(|e| if let Event::SendBack { reason, .. } = e { Some(*reason) } else { None }).collect();
+            let n_send_backs = reasons.len() as u64;
+            let landed = b.how == How::Landed;
+            let outcome = match b.how {
+                How::Landed => "landed",
+                How::ByHand => "by_hand",
+                How::Open => {
+                    if inp.repo.parked_record(&b.id).is_some() {
+                        "parked"
+                    } else {
+                        "open"
+                    }
+                }
+            };
+            let stamp_lines = crate::stamp::read(inp.repo, &b.id);
+            let claim = stamp_lines.iter().find(|l| l.get("claim").is_some()).map(|l| l["claim"].clone()).unwrap_or(Value::Null);
+            let stamps: Vec<Value> = stamp_lines.into_iter().filter(|l| l.get("claim").is_none()).collect();
+            let (worker_s, review_s, metered_usd, local_tokens) = totals_for(&inp.rounds, &b.id, now);
+            let human_touches = b.events.iter().filter(|e| matches!(e, Event::Answer(_) | Event::Escalate(_))).count() as u64;
+            out.push(json!({
+                "id": b.id, "slug": b.slug, "title": b.title,
+                "started": iso_of(b.started), "closed": iso_of(b.closed),
+                "claim": claim, "stamps": stamps,
+                "outcome": outcome,
+                "first_try": landed && n_send_backs == 0,
+                "rounds": n_send_backs + if landed { 1 } else { 0 },
+                "reasons": reasons,
+                "stage": if landed { b.stage_name.clone().map(Value::from).unwrap_or(Value::Null) } else { Value::Null },
+                "metered_usd": metered_usd, "local_tokens": local_tokens,
+                "model_s": {"worker": worker_s, "review": review_s},
+                "wall_s": match (b.started, b.closed) { (Some(s), Some(c)) => json!((c - s).max(0)), _ => Value::Null },
+                "human_touches": human_touches,
+                "reverted": Value::Null, "named_by": Value::Null,
+            }));
+        }
+    }
+    out
+}
+
+/// Epoch seconds as `YYYY-MM-DDTHH:MM:SSZ`, or null.
+fn iso_of(t: Option<i64>) -> Value {
+    match t {
+        Some(t) => {
+            let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+            unsafe { libc::gmtime_r(&t, &mut tm) };
+            json!(format!(
+                "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
+                tm.tm_year + 1900,
+                tm.tm_mon + 1,
+                tm.tm_mday,
+                tm.tm_hour,
+                tm.tm_min,
+                tm.tm_sec
+            ))
+        }
+        None => Value::Null,
+    }
 }
 
 fn hm(s: f64) -> String {
@@ -1189,5 +1287,63 @@ mod tests {
             0.5,
             "opencode: each step_finish's own cost, summed across the session"
         );
+    }
+
+    #[test]
+    fn rows_cover_landed_first_try_landed_after_a_send_back_and_parked() {
+        let d = crate::config::scratch("stats-rows");
+        let repo = crate::config::test_repo(&d, &["fast:rev:2"]);
+        let landed = "bead-loop: https://x/pull/1 merged; checks at merge: ci=SUCCESS";
+        let beads = vec![
+            bead("r-1", "closed", "2026-09-19T10:00:00Z", "2026-09-19T12:00:00Z", landed, ""),
+            bead(
+                "r-2",
+                "closed",
+                "2026-09-19T00:00:00Z",
+                "2026-09-19T20:00:00Z",
+                landed,
+                "bead-loop round 1 (fast) 2026-09-19T01:00+00:00: gate failed twice: make\n",
+            ),
+            bead(
+                "r-3",
+                "in_progress",
+                "2026-09-20T00:00:00Z",
+                "",
+                "",
+                "bead-loop round 1 (fast) 2026-09-20T01:00+00:00: review (fast) rejected:\nREJECT: x\n\
+                 operator 2026-09-20T02:00+00:00: use the flag\n",
+            ),
+        ];
+        std::fs::create_dir_all(repo.rs.join("parked")).unwrap();
+        std::fs::write(repo.parked_path("r-3"), json!({"reason": "exhausted", "question": "which?"}).to_string()).unwrap();
+        let now = parse_iso("2026-09-20T23:00:00Z").unwrap();
+        let rows = rows_from(&[Input { repo: &repo, beads, rounds: Vec::new(), prechecks: Vec::new() }], now);
+        assert_eq!(rows.len(), 3, "every bead bead_of returns, whatever its outcome");
+        let by_id = |id: &str| rows.iter().find(|r| r["id"] == id).unwrap().clone();
+
+        let r1 = by_id("r-1");
+        assert_eq!(r1["outcome"], "landed");
+        assert_eq!(r1["first_try"], true);
+        assert_eq!(r1["rounds"], 1);
+        assert_eq!(r1["reasons"], json!([]));
+        assert_eq!(r1["human_touches"], 0);
+        assert_eq!(r1["claim"], Value::Null, "no stamps.jsonl for r-1");
+        assert_eq!(r1["reverted"], Value::Null);
+        assert_eq!(r1["named_by"], Value::Null);
+
+        let r2 = by_id("r-2");
+        assert_eq!(r2["outcome"], "landed");
+        assert_eq!(r2["first_try"], false, "one send-back on the way to landing");
+        assert_eq!(r2["rounds"], 2, "the send-back, plus the round that landed");
+        assert_eq!(r2["reasons"], json!(["gate"]));
+
+        let r3 = by_id("r-3");
+        assert_eq!(r3["outcome"], "parked", "open, with a parked_record");
+        assert_eq!(r3["first_try"], false);
+        assert_eq!(r3["rounds"], 1, "one send-back, not landed: no +1");
+        assert_eq!(r3["reasons"], json!(["review"]));
+        assert_eq!(r3["human_touches"], 1, "the operator note is an Answer");
+        assert_eq!(r3["closed"], Value::Null);
+        let _ = std::fs::remove_dir_all(&d);
     }
 }
