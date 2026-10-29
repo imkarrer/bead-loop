@@ -276,6 +276,21 @@ case_reject_then_approve() {
   assert_eq "$(git -C "$T/origin.git" rev-list --count main..bead/t-1)" 2 "both rounds' commits on the branch"
   assert_nofile "$BEAD_LOOP_STATE/repo/review/t-1" "out of the review queue"
 }
+case_stamps_every_session() {
+  # Every model session appends a stamp line (docs/design-measurement.md piece 1):
+  # reject then approve, two rounds, four sessions — worker, review, worker, review.
+  setup; printf 'reject\napprove\n' >"$TEST_CTRL/review"
+  sup work "$REPO"; sup work "$REPO"
+  stamps=$BEAD_LOOP_STATE/repo/beads/t-1/stamps.jsonl
+  assert_file "$stamps" "stamps.jsonl written"
+  assert_eq "$(wc -l <"$stamps" | tr -d ' ')" 4 "one stamp per session"
+  assert_eq "$(jq -r .kind "$stamps" | tr '\n' ' ')" "worker review worker review " "kind column"
+  assert_eq "$(jq -r .round "$stamps" | tr '\n' ' ')" "1 1 2 2 " "round column"
+  while IFS=$'\t' read -r log kind; do
+    assert_file "$BEAD_LOOP_STATE/repo/logs/$log.$kind.jsonl" "the stamp's log names a real file: $log.$kind.jsonl"
+  done < <(jq -r '[.log, .kind] | @tsv' "$stamps")
+  assert_eq "$(jq -r '.prompt_hash | length' "$stamps" | sort -u)" 16 "prompt_hash is 16 hex digits"
+}
 case_reject_until_parked() {
   # The default stage takes three failures; the fourth send-back parks the bead.
   setup; printf 'reject\nreject\nreject\n' >"$TEST_CTRL/review"
