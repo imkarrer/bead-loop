@@ -1,8 +1,9 @@
 //! The stamp: what produced one model session, written to `beads/ID/stamps.jsonl` (one
 //! line per session, including the round that lands) so a later question — did this
 //! change help, is config A better than config B — can slice production by what ran it.
-//! The session stamp itself is not wired to a round yet (docs/design-measurement.md
-//! piece 1, ADR 0001); `write_claim`'s `claim` line is (piece 2, decision 14).
+//! `for_session` builds the line `run_agent` appends before every session
+//! (docs/design-measurement.md piece 1, ADR 0001); `write_claim`'s `claim` line is the
+//! first line of a bead's file (piece 2, decision 14).
 use crate::config::{Approvals, Repo, Resolved};
 use crate::shell::git_ok;
 use crate::state::StageHit;
@@ -22,7 +23,6 @@ pub fn fnv_hex(bytes: &[u8]) -> String {
 }
 
 /// A file's content hash, or `"missing"` when it cannot be read.
-#[allow(dead_code)]
 pub fn hash_file(p: &Path) -> String {
     match std::fs::read(p) {
         Ok(bytes) => fnv_hex(&bytes),
@@ -33,7 +33,6 @@ pub fn hash_file(p: &Path) -> String {
 /// A directory tree's content hash, following symlinks (`install.sh` links `skills/NAME`
 /// into place): every file under `dir`, sorted by its relative path, each folded in as
 /// `path\0bytes\0`. `"missing"` when `dir` is not a directory.
-#[allow(dead_code)]
 pub fn hash_tree(dir: &Path) -> String {
     if !dir.is_dir() {
         return "missing".into();
@@ -53,7 +52,6 @@ pub fn hash_tree(dir: &Path) -> String {
     fnv_hex(&buf)
 }
 
-#[allow(dead_code)]
 fn collect_files(root: &Path, dir: &Path, out: &mut Vec<std::path::PathBuf>) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
@@ -73,7 +71,6 @@ fn collect_files(root: &Path, dir: &Path, out: &mut Vec<std::path::PathBuf>) {
     }
 }
 
-#[allow(dead_code)]
 fn approvals_str(a: &Approvals) -> String {
     match a {
         Approvals::All => "all".into(),
@@ -84,7 +81,6 @@ fn approvals_str(a: &Approvals) -> String {
 
 /// The resolved stage and the round-changing target keys, hashed; never `attach`,
 /// `probe`, `command`, `via` or anything else from `opencode.json` (credentials, URLs).
-#[allow(dead_code)]
 pub fn config_hash(repo: &Repo, stage: Option<&StageHit>, r: &Resolved) -> String {
     let mut lines = Vec::new();
     if let Some(s) = stage {
@@ -110,7 +106,6 @@ pub fn config_hash(repo: &Repo, stage: Option<&StageHit>, r: &Resolved) -> Strin
 }
 
 /// One model session, as written to `stamps.jsonl`.
-#[allow(dead_code)]
 pub struct Stamp {
     pub round: u64,
     pub dirty: bool,
@@ -128,7 +123,6 @@ pub struct Stamp {
 }
 
 impl Stamp {
-    #[allow(dead_code)]
     pub fn to_json(&self) -> Value {
         json!({
             "round": self.round,
