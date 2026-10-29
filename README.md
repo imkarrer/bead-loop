@@ -199,8 +199,9 @@ and `nix run github:imkarrer/bead-loop#planner` is Claude Code with them and not
 
 ## Your setup
 
-- [docs/examples/homelab.md](docs/examples/homelab.md) — this box: two local providers,
-  a `gpu`/`cpu`/`claude` lane each, Claude Code as the last stage.
+- [docs/examples/homelab.md](docs/examples/homelab.md) — the live setup: a GPU box and a
+  big CPU box as two local providers, a `gpu`/`cpu`/`claude` lane each, Claude Code as the
+  last stage, and the three shapes of repo config it is used with.
 - [docs/examples/laptop-ollama.md](docs/examples/laptop-ollama.md) — one local provider
   through opencode's Ollama support, a metered provider as the reviewer's second seat and
   the last stage.

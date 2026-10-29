@@ -1570,4 +1570,51 @@ mod tests {
             }
         }
     }
+
+    /// The examples are copied by people: every ```toml block under docs/examples must be
+    /// TOML, and the global block of homelab.md must load into the stages, lanes and cap it
+    /// describes, so the example cannot drift from what the loader reads.
+    #[test]
+    fn the_examples_parse_and_the_homelab_one_loads() {
+        let d = std::env::temp_dir().join(format!("bl-examples-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&d);
+        let mut blocks = 0;
+        let mut homelab = None;
+        for entry in std::fs::read_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/docs/examples")).unwrap().flatten() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let text = std::fs::read_to_string(entry.path()).unwrap();
+            let mut cur: Option<String> = None;
+            for line in text.lines() {
+                match (&mut cur, line) {
+                    (None, "```toml") => cur = Some(String::new()),
+                    (Some(body), "```") => {
+                        let f = d.join("block.toml");
+                        std::fs::write(&f, &*body).unwrap();
+                        if let Err(e) = parse_toml(&f) {
+                            panic!("{name}: a toml block does not parse: {e}\n{body}");
+                        }
+                        if name == "homelab.md" && homelab.is_none() {
+                            let first = d.join("homelab.toml");
+                            std::fs::write(&first, &*body).unwrap();
+                            homelab = Some(first);
+                        }
+                        blocks += 1;
+                        cur = None;
+                    }
+                    (Some(body), l) => {
+                        body.push_str(l);
+                        body.push('\n');
+                    }
+                    (None, _) => {}
+                }
+            }
+        }
+        assert!(blocks > 0, "no toml block found under docs/examples");
+        let cfg = Layers::load(&homelab.expect("homelab.md has a toml block"), None);
+        let stages: Vec<String> = cfg.stages().into_iter().map(|s| s.name).collect();
+        assert_eq!(stages, ["local", "frontier"], "two stages: the GPU, then Claude");
+        assert_eq!(cfg.u64("max_open_prs", 0), 1, "one open PR across every repo");
+        assert_eq!(cfg.lanes(&[]).len(), 3, "a lane each for gpu, cpu and claude");
+        let _ = std::fs::remove_dir_all(&d);
+    }
 }
