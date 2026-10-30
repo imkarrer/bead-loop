@@ -347,6 +347,26 @@ case_claim_line() {
   sup work "$REPO" t-2
   assert_eq "$(jq -s 'map(select(has("claim"))) | length' "$R/beads/t-2/stamps.jsonl")" 0 "no claim for a bead with rounds from before this change"
 }
+case_lint() {
+  # t-1 (setup's default) names a missing path with a prose acceptance: both problems.
+  # t-2 names a path that exists on base with a backtick cargo test acceptance: pass.
+  setup
+  jq '. + [{id:"t-2", title:"Edit it", description:"Edit .beads/issues.jsonl", acceptance_criteria:"Run `cargo test`", status:"open", priority:2, issue_type:"task", labels:["delegate:local"]}]' "$BD_STATE/issues.json" >"$BD_STATE/i.tmp" && mv "$BD_STATE/i.tmp" "$BD_STATE/issues.json"
+
+  out=$(sup lint "$REPO" t-1 t-2)
+  assert_match "$out" "t-1: path not on base: work.txt; acceptance has no command" "t-1 noted with both problems"
+  assert_match "$out" "t-2: pass" "t-2 noted pass"
+
+  notes1=$(jq -r '.[] | select(.id=="t-1") | .notes' "$BD_STATE/issues.json")
+  assert_match "$notes1" "bead-loop lint .*: path not on base: work.txt; acceptance has no command" "t-1's note carries both problems"
+  notes2=$(jq -r '.[] | select(.id=="t-2") | .notes' "$BD_STATE/issues.json")
+  assert_match "$notes2" "bead-loop lint .*: pass" "t-2's note is pass"
+
+  sup work "$REPO" t-2
+  R=$BEAD_LOOP_STATE/repo
+  claim=$(jq -c 'select(has("claim")) | .claim' "$R/beads/t-2/stamps.jsonl")
+  assert_match "$claim" '"linted":"pass"' "the claim's linted reads t-2's lint note"
+}
 case_stats_rows() {
   # stats --rows prints JSONL, one row per bead the loop touched, not the scoreboard.
   setup; sup work "$REPO"

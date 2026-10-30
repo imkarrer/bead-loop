@@ -16,6 +16,9 @@
 //!                                         queue now, ahead of its failure count
 //!   bead-supervisor answer REPO ID TEXT   your answer to a bead in the human queue: noted on the bead, back in
 //!                                         the dev queue at the stage it stopped on
+//!   bead-supervisor lint REPO [ID...]     a dated note on each bead (every ready bead, if none given) saying
+//!                                         whether its DESCRIPTION paths are on the base branch and its
+//!                                         ACCEPTANCE CRITERIA is a command — never changes labels or routing
 //!   bead-supervisor publish REPO ID [--title T] [--body-file F]   open the PR an open_pr = "ask" round
 //!                                         left in proposed/ID — its title/body, or these instead
 //!   bead-supervisor open REPO ID          an interactive Claude Code session in the bead's worktree, the bead,
@@ -46,6 +49,7 @@ mod doctor;
 mod harness;
 mod human;
 mod lanes;
+mod lint;
 mod merge;
 mod park;
 mod round;
@@ -75,6 +79,7 @@ const COMMANDS: &[&str] = &[
     "wake",
     "escalate",
     "answer",
+    "lint",
     "publish",
     "open",
     "reconcile",
@@ -179,8 +184,8 @@ fn main() {
     // One supervisor at a time for anything that runs rounds or the merge queue; the
     // read-only and the one-bead commands are free.
     let _lock = match cmd.as_str() {
-        "status" | "stats" | "bench" | "log" | "watch" | "lane" | "pause" | "resume" | "escalate" | "answer" | "open" | "publish"
-        | "priority" | "wake" | "doctor" => None,
+        "status" | "stats" | "bench" | "log" | "watch" | "lane" | "pause" | "resume" | "escalate" | "answer" | "lint" | "open"
+        | "publish" | "priority" | "wake" | "doctor" => None,
         _ => match lanes::try_lock(&state_dir.join("lock")) {
             Some(l) => Some(l),
             None => {
@@ -257,6 +262,10 @@ fn main() {
                 die("answer REPO ID TEXT");
             }
             human::answer(&repo, &rest[1], &rest[2]);
+        }
+        "lint" => {
+            let repo = repo_at(0);
+            lint::lint(&repo, &rest[1..]);
         }
         "open" => {
             let repo = repo_at(0);

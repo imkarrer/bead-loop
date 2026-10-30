@@ -208,7 +208,7 @@ pub fn write_claim(repo: &Repo, id: &str, bead_json: &Value) {
 /// `none` for an empty acceptance; `command` when a backtick span in it starts with one
 /// of the shapes a loop check runs (`cargo`, `bash`, `sh`, `test`, `grep`, `rg`, `git`,
 /// `node`, `npm`, `make`, `flox`, `shellcheck`, `./` or `test/`); else `prose`.
-fn acceptance_kind(s: &str) -> &'static str {
+pub fn acceptance_kind(s: &str) -> &'static str {
     if s.is_empty() {
         return "none";
     }

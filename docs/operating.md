@@ -123,6 +123,13 @@ one, as `bd show` has them now), and whether the merge's diff added a test (`set
 "tests"`) or not (`"gate-only"`) — docs/design-bench.md's cases for the replay bench. An
 id with no such merge commit is skipped and named on the log.
 
+`bead-supervisor lint REPO [ID...]` (every ready bead, if none given) prints, and notes
+on each bead, whether its DESCRIPTION paths exist on the base branch and its ACCEPTANCE
+CRITERIA is a command to run — `ID: pass`, or `ID: ` and the problems found, joined by
+`; `. It is deterministic and run by hand or from the planner, never inside a round, so
+a worker's prompt is the same whether the bead was linted or not; it never changes
+labels or routing (docs/design-measurement.md decisions 8, 17, 18, 21).
+
 ```
 05:41:12   bead-supervisor watch (every 5s, ctrl-c to stop)
 
