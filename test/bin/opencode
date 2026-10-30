@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Stub opencode for bead-loop tests. `run` only. Behaviour from $TEST_CTRL:
 #   worker      one line per round, the last line for the rest: done | blocked | nocommit | uncommitted |
-#               longdone (DONE, then more than twenty lines) | hang | crash | server-error | stall
+#               longdone (DONE, then more than twenty lines) | badtest (commits a placeholder
+#               assertion to a test file) | hang | crash | server-error | stall
 #               (what the implementor leaves behind; stall loops tool_use/compaction events
 #               forever, no edit, until the watchdog or a stop kills it)
 #   abort-delay seconds the server takes for the next abort, once (curl stub): the stop's race
@@ -59,6 +60,10 @@ case $agent in
       crash) echo "connection refused" >&2; exit 7 ;;   # the harness died before the model said a word
       server-error) server_error ;;   # the server answered an error before the model ran
       uncommitted) echo "work" >"$dir/work.txt"; say "DONE: wrote work.txt (forgot to commit)" ;;
+      badtest)
+        printf 'def test_thing():\n    assert True\n' >"$dir/test_thing.py"
+        git -C "$dir" add -A && git -C "$dir" commit -qm "work: add test"
+        say "DONE: added a test" ;;
       done)
         round=$(grep -c '^bead-worker' "$TEST_CTRL/calls")
         echo "work round $round" >>"$dir/work.txt"

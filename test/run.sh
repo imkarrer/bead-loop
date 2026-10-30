@@ -232,6 +232,16 @@ case_precheck_unavailable() {
     assert_eq "$(bead .status)" in_progress "$mode: reached the review queue and on to the PR"
   done
 }
+case_diff_checks() {
+  setup true auto stub/reviewer 'diff_checks = true'
+  echo badtest >"$TEST_CTRL/worker"; sup work "$REPO"
+  assert_eq "$(calls)" "bead-worker" "on: sent back before the reviewer ever runs"
+  assert_match "$(bead .notes)" "diff check" "on: noted"
+  assert_match "$(bead .notes)" "placeholder test: test_thing.py" "on: the problem's detail kept"
+  setup true auto stub/reviewer ''
+  echo badtest >"$TEST_CTRL/worker"; sup work "$REPO"
+  assert_eq "$(calls)" "bead-worker bead-reviewer" "off: reaches the review queue"
+}
 case_uncommitted_is_settled() {
   setup; echo uncommitted >"$TEST_CTRL/worker"; sup work "$REPO"
   assert_branch bead/t-1 "supervisor committed the leftovers and pushed"
