@@ -123,6 +123,17 @@ one, as `bd show` has them now), and whether the merge's diff added a test (`set
 "tests"`) or not (`"gate-only"`) — docs/design-bench.md's cases for the replay bench. An
 id with no such merge commit is skipped and named on the log.
 
+For a `"tests"` case, it also writes `bench/cases/ID/hidden/`: the tests the merge added,
+cut out by name (docs/design-bench.md "The hidden check: transplant by name", decision
+26) for the bench run to place into a worker's tree later. `hidden/rust/NAME.rs` holds
+each `#[test] fn NAME` the merge added under `src/`, whole, with a leading `// from
+PATH` line (`NAME` added in two files: the second gets `.2` before `.rs`).
+`hidden/cases/NAME.sh` holds each `case_NAME` function the merge added to
+`test/run.sh`, whole. `hidden/files.json` names both: `{"rust": [{"name", "path"}],
+"cases": [NAME, ...]}`, `path` the file the test lived in at the merge, for the bench
+run to transplant it back into. The helpers a transplanted test leans on (decision 31)
+are not cut here.
+
 `bead-supervisor lint REPO [ID...]` (every ready bead, if none given) prints, and notes
 on each bead, whether its DESCRIPTION paths exist on the base branch and its ACCEPTANCE
 CRITERIA is a command to run — `ID: pass`, or `ID: ` and the problems found, joined by
