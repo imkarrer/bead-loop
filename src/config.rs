@@ -749,9 +749,14 @@ impl Repo {
     }
 
     /// Get the attach command for a specific model, using the provider's attach configuration.
+    /// Returns the provider's attach value if non-empty, otherwise falls back to self.attach.
     pub fn attach_for(&self, model: &str) -> String {
         let resolved = self.resolve(model);
-        resolved.provider.attach.clone()
+        if !resolved.provider.attach.is_empty() {
+            resolved.provider.attach.clone()
+        } else {
+            self.attach.clone()
+        }
     }
 }
 
