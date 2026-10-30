@@ -279,8 +279,9 @@ pub fn run_agent(
         // call names it from the prompt, and on a busy box that call has come back as "????".
         let mut c = cmd("timeout");
         c.args(["--foreground", &timeout_s, "opencode", "run", "--dir"]).arg(dir).args(["--agent", agent]);
-        if !repo.attach.is_empty() {
-            c.args(["--attach", &repo.attach]);
+        let attach_cmd = repo.attach_for(model);
+        if !attach_cmd.is_empty() {
+            c.args(["--attach", &attach_cmd]);
         }
         if !model.is_empty() {
             c.args(["-m", model]);
@@ -309,9 +310,9 @@ pub fn run_agent(
         // The client can exit as the session finishes, before the reply's text reaches the
         // log (bl-tka.2's reviews on 25 Sep: a step_start, then exit 0; the server had a
         // whole REJECT). With events but no text, ask the server for the last reply.
-        if t.texts.is_empty() && rc == 0 && !repo.attach.is_empty() {
+        if t.texts.is_empty() && rc == 0 && !attach_cmd.is_empty() {
             let reply = session_id_of(&raw)
-                .and_then(|sid| crate::shell::curl_get(&format!("{}/session/{sid}/message", repo.attach), None, 5))
+                .and_then(|sid| crate::shell::curl_get(&format!("{}/session/{sid}/message", attach_cmd), None, 5))
                 .and_then(|body| serde_json::from_str::<Value>(&body).ok())
                 .and_then(|v| last_reply_text(&v));
             if let Some(text) = reply {

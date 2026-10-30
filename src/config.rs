@@ -747,6 +747,12 @@ impl Repo {
         let model = if harness == "opencode" { model.to_string() } else { after_slash(model) };
         Resolved { provider, harness, model }
     }
+
+    /// Get the attach command for a specific model, using the provider's attach configuration.
+    pub fn attach_for(&self, model: &str) -> String {
+        let resolved = self.resolve(model);
+        resolved.provider.attach.clone()
+    }
 }
 
 /// The repo's state directories, and the older layouts carried into `beads/ID/` file by
