@@ -999,9 +999,9 @@ fn research_one(repo: &Repo, opts: &Opts, id: &str, lane: Option<&LaneSpec>, las
         return false;
     }
     if rejoin.is_none() {
-        abort_sessions(repo, &wt);
+        abort_sessions(repo, &wt, &model);
     }
-    signals::set_current(lane_name, &repo.attach, &repo.slug, Some(wt.clone()), Some(repo.lane_path(lane_name)));
+    signals::set_current(lane_name, &repo.attach_for(&model), &repo.slug, Some(wt.clone()), Some(repo.lane_path(lane_name)));
     // The researcher reads; it needs no setup. A worktree it had to make goes again after
     // it, so the worker's round makes its own (with setup) as it always has.
     let made = !wt.is_dir();
@@ -1013,7 +1013,7 @@ fn research_one(repo: &Repo, opts: &Opts, id: &str, lane: Option<&LaneSpec>, las
     }
     let research_log = std::path::PathBuf::from(format!("{}.research.jsonl", logf.display()));
     let r = match &rejoin {
-        Some(sid) => crate::harness::rejoin_session(repo, sid, &wt, &research_log, timeout),
+        Some(sid) => crate::harness::rejoin_session(repo, sid, &wt, &research_log, timeout, &model),
         None => run_agent(
             repo,
             "bead-researcher",
@@ -1392,9 +1392,9 @@ pub fn dev_one(repo: &Repo, opts: &Opts, id: Option<&str>, last_id: &mut Option<
     }
     crate::stamp::write_claim(repo, &id, &json);
     if rejoin.is_none() {
-        abort_sessions(repo, &wt); // a killed earlier round may have left one running here
+        abort_sessions(repo, &wt, &model); // a killed earlier round may have left one running here
     }
-    signals::set_current(lane_name, &repo.attach, &repo.slug, Some(wt.clone()), Some(repo.lane_path(lane_name)));
+    signals::set_current(lane_name, &repo.attach_for(&model), &repo.slug, Some(wt.clone()), Some(repo.lane_path(lane_name)));
     let kept = rejoin.is_some() || (wt.is_dir() && resumed && git_ok(&wt, &["rev-parse", "-q", "--verify", "HEAD"]));
     if !kept {
         if wt.exists() {
@@ -1440,7 +1440,7 @@ pub fn dev_one(repo: &Repo, opts: &Opts, id: Option<&str>, last_id: &mut Option<
     let title_w = format!("{id} · worker · round {}", n + 1);
     let worker_log = std::path::PathBuf::from(format!("{}.worker.jsonl", logf.display()));
     let r = match &rejoin {
-        Some(sid) => crate::harness::rejoin_session(repo, sid, &wt, &worker_log, timeout),
+        Some(sid) => crate::harness::rejoin_session(repo, sid, &wt, &worker_log, timeout, &model),
         None => run_agent(repo, "bead-worker", &model, &wt, &worker_log, &prompt, &title_w, timeout, Some(&json)),
     };
     cut_short(repo, &id);
@@ -1700,7 +1700,7 @@ pub fn review_one(repo: &Repo, opts: &Opts, id: Option<&str>, lane: Option<&Lane
     }
     let lane_name = lane.map(|l| l.name.as_str()).unwrap_or("review");
     repo.lane_set(lane_name, &id);
-    signals::set_current(lane_name, &repo.attach, &repo.slug, Some(wt.clone()), Some(repo.lane_path(lane_name)));
+    signals::set_current(lane_name, &repo.attach_for(&model), &repo.slug, Some(wt.clone()), Some(repo.lane_path(lane_name)));
     let mut review_model = String::new();
     if let Some(this_seat) = seats.get(seat.wrapping_sub(1)).filter(|_| seat >= 1) {
         review_model = this_seat.model.clone();
@@ -1730,7 +1730,7 @@ pub fn review_one(repo: &Repo, opts: &Opts, id: Option<&str>, lane: Option<&Lane
         };
         repo.seat_set_running(&id, seat);
         let r = match &rejoin {
-            Some(sid) => crate::harness::rejoin_session(repo, sid, &wt, &review_log, timeout),
+            Some(sid) => crate::harness::rejoin_session(repo, sid, &wt, &review_log, timeout, &review_model),
             None => {
                 let range = format!("{}/{}...HEAD", repo.base_remote, repo.base);
                 let stat = git_out(&wt, &["diff", &range, "--stat"]);

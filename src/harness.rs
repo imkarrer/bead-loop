@@ -279,8 +279,9 @@ pub fn run_agent(
         // call names it from the prompt, and on a busy box that call has come back as "????".
         let mut c = cmd("timeout");
         c.args(["--foreground", &timeout_s, "opencode", "run", "--dir"]).arg(dir).args(["--agent", agent]);
-        if !repo.attach.is_empty() {
-            c.args(["--attach", &repo.attach]);
+        let attach_cmd = Repo::attach_for(repo, model);
+        if !attach_cmd.is_empty() {
+            c.args(["--attach", &attach_cmd]);
         }
         if !model.is_empty() {
             c.args(["-m", model]);
@@ -290,7 +291,7 @@ pub fn run_agent(
         }
         c.args(["--format", "json", prompt]);
         c.env("OPENCODE_DISABLE_CLAUDE_CODE_SKILLS", "1");
-        let watched = run_watched(&mut c, stdout, stderr, repo, dir, logf);
+        let watched = run_watched(&mut c, stdout, stderr, repo, dir, logf, &attach_cmd);
         rc = watched.0;
         stalled = watched.1;
         // The client is gone (timeout, a kill); with attach the server would keep working
@@ -302,16 +303,16 @@ pub fn run_agent(
             crate::util::sleep_secs(0.3);
         }
         if rc != 0 && !signals::stopping() && stalled.is_none() {
-            abort_sessions(repo, dir);
+            abort_sessions(repo, dir, model);
         }
         let raw = read_to_string(logf).unwrap_or_default();
         let mut t = parse_transcript(&raw);
         // The client can exit as the session finishes, before the reply's text reaches the
         // log (bl-tka.2's reviews on 25 Sep: a step_start, then exit 0; the server had a
         // whole REJECT). With events but no text, ask the server for the last reply.
-        if t.texts.is_empty() && rc == 0 && !repo.attach.is_empty() {
+        if t.texts.is_empty() && rc == 0 && !attach_cmd.is_empty() {
             let reply = session_id_of(&raw)
-                .and_then(|sid| crate::shell::curl_get(&format!("{}/session/{sid}/message", repo.attach), None, 5))
+                .and_then(|sid| crate::shell::curl_get(&format!("{}/session/{sid}/message", attach_cmd), None, 5))
                 .and_then(|body| serde_json::from_str::<Value>(&body).ok())
                 .and_then(|v| last_reply_text(&v));
             if let Some(text) = reply {
@@ -432,6 +433,7 @@ fn run_watched(
     repo: &Repo,
     dir: &Path,
     logf: &Path,
+    attach: &str,
 ) -> (i32, Option<String>) {
     use std::process::Stdio;
     c.stdin(Stdio::null());
@@ -449,7 +451,7 @@ fn run_watched(
     let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let watchdog = if repo.stall_compactions > 0 || repo.stall_steps > 0 {
         let (compactions_limit, steps_limit) = (repo.stall_compactions, repo.stall_steps);
-        let (logf, dir, attach, slug) = (logf.to_path_buf(), dir.to_path_buf(), repo.attach.clone(), repo.slug.clone());
+        let (logf, dir, attach, slug) = (logf.to_path_buf(), dir.to_path_buf(), attach.to_string(), repo.slug.clone());
         let stop2 = stop.clone();
         Some(std::thread::spawn(move || {
             while !stop2.load(std::sync::atomic::Ordering::SeqCst) {
@@ -660,8 +662,8 @@ pub fn brief_files(brief: &str, dir: &Path) -> (Vec<String>, Vec<String>) {
 /// `abort_sessions DIR`: stop every session the attached server is still running under
 /// DIR. One round owns a worktree, so anything busy there is this round's, or an orphan
 /// of an earlier one; either way nothing is waiting for it.
-pub fn abort_sessions(repo: &Repo, dir: &Path) {
-    abort_sessions_on(&repo.attach, &repo.slug, dir);
+pub fn abort_sessions(repo: &Repo, dir: &Path, model: &str) {
+    abort_sessions_on(&Repo::attach_for(repo, model), &repo.slug, dir);
 }
 
 pub fn abort_sessions_on(attach: &str, slug: &str, dir: &Path) {
@@ -722,8 +724,8 @@ fn sessions_on(attach: &str, dir: &Path) -> Vec<String> {
 
 /// A session still running under this worktree, if any: what a restart finds when the
 /// server outlived the loop — to rejoin, not abort.
-pub fn running_session(repo: &Repo, dir: &Path) -> Option<String> {
-    sessions_on(&repo.attach, dir).into_iter().next()
+pub fn running_session(repo: &Repo, dir: &Path, model: &str) -> Option<String> {
+    sessions_on(&Repo::attach_for(repo, model), dir).into_iter().next()
 }
 
 /// The round a session's title says it is, for this bead: `ID · worker · …` (a round or its
@@ -744,8 +746,8 @@ pub fn session_round(title: &str) -> Option<u64> {
 }
 
 /// `GET /session/SID`'s title; `None` when the server does not say.
-pub fn session_title(repo: &Repo, sid: &str) -> Option<String> {
-    let body = crate::shell::curl_get(&format!("{}/session/{sid}", repo.attach), None, 5)?;
+pub fn session_title(repo: &Repo, sid: &str, model: &str) -> Option<String> {
+    let body = crate::shell::curl_get(&format!("{}/session/{sid}", Repo::attach_for(repo, model)), None, 5)?;
     let v: Value = serde_json::from_str(&body).ok()?;
     v.get("title").and_then(|t| t.as_str()).map(str::to_string)
 }
@@ -761,7 +763,8 @@ pub fn session_title(repo: &Repo, sid: &str) -> Option<String> {
 /// before either was read.
 pub fn rejoin_fits(repo: &Repo, id: &str, sid: &str, kind: &str, round: u64, model: &str) -> bool {
     let slug = &repo.slug;
-    let abort = || crate::shell::curl_post(&format!("{}/session/{sid}/abort", repo.attach), 5);
+    let attach = Repo::attach_for(repo, model);
+    let abort = || crate::shell::curl_post(&format!("{attach}/session/{sid}/abort"), 5);
     let harness = repo.resolve(model).harness;
     if harness != "opencode" {
         log(&format!(
@@ -770,7 +773,7 @@ pub fn rejoin_fits(repo: &Repo, id: &str, sid: &str, kind: &str, round: u64, mod
         abort();
         return false;
     }
-    let body = crate::shell::curl_get(&format!("{}/session/{sid}", repo.attach), None, 5).unwrap_or_default();
+    let body = crate::shell::curl_get(&format!("{attach}/session/{sid}"), None, 5).unwrap_or_default();
     let v: Value = serde_json::from_str(&body).unwrap_or(Value::Null);
     if let Some(title) = v.get("title").and_then(|t| t.as_str()) {
         if session_kind(id, title) != Some(kind) {
@@ -801,8 +804,8 @@ pub fn rejoin_fits(repo: &Repo, id: &str, sid: &str, kind: &str, round: u64, mod
 /// after `cutoff` (the lane marker's mtime at the stop, epoch seconds) — the round that
 /// was running when the marker was written, not some older session the worktree happens
 /// to still carry.
-pub fn finished_session(repo: &Repo, id: &str, dir: &Path, kind: &str, round: u64, cutoff: i64) -> Option<String> {
-    let attach = repo.attach.as_str();
+pub fn finished_session(repo: &Repo, id: &str, dir: &Path, kind: &str, round: u64, cutoff: i64, model: &str) -> Option<String> {
+    let attach = Repo::attach_for(repo, model);
     if attach.is_empty() || !crate::util::have("curl") {
         return None;
     }
@@ -858,8 +861,8 @@ fn rejoin_poll() -> f64 {
 /// session is aborted and the run is 124, as `timeout` would have made it. Under a stop
 /// the run is 143 (the caller cuts the round short; the session goes on for the next
 /// process to rejoin).
-pub fn rejoin_session(repo: &Repo, sid: &str, dir: &Path, logf: &Path, timeout: u64) -> AgentRun {
-    let attach = repo.attach.as_str();
+pub fn rejoin_session(repo: &Repo, sid: &str, dir: &Path, logf: &Path, timeout: u64, model: &str) -> AgentRun {
+    let attach = Repo::attach_for(repo, model);
     let started_ms = crate::shell::curl_get(&format!("{attach}/session/{sid}"), None, 5)
         .and_then(|s| serde_json::from_str::<Value>(&s).ok())
         .and_then(|v| v.pointer("/time/created").and_then(|t| t.as_i64()))
@@ -872,7 +875,7 @@ pub fn rejoin_session(repo: &Repo, sid: &str, dir: &Path, logf: &Path, timeout: 
             break;
         }
         // By directory: the server answers `{}` to the bare status, whatever is running.
-        let busy = sessions_on(attach, dir).iter().any(|s| s == sid);
+        let busy = sessions_on(&attach, dir).iter().any(|s| s == sid);
         if !busy {
             break;
         }

@@ -747,6 +747,17 @@ impl Repo {
         let model = if harness == "opencode" { model.to_string() } else { after_slash(model) };
         Resolved { provider, harness, model }
     }
+
+    /// The opencode server a model's rounds run on: the resolved provider's `attach`, or
+    /// `self.attach` for a provider that names none of its own.
+    pub fn attach_for(&self, model: &str) -> String {
+        let resolved = self.resolve(model);
+        if !resolved.provider.attach.is_empty() {
+            resolved.provider.attach.clone()
+        } else {
+            self.attach.clone()
+        }
+    }
 }
 
 /// The repo's state directories, and the older layouts carried into `beads/ID/` file by
