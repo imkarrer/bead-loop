@@ -28,6 +28,7 @@ With neither, the run stops (`stage 1 names no worker`): no agent has a model of
 | `research` | `"first"` | `first`: one brief per bead · `every`: a send-back sets the brief aside and the next research round refines it with the round's note |
 | `research_timeout` | `900` | seconds a research round may run, capped by the stage's `timeout`; past it the worker goes without a brief. A bead labelled `harness:aider` gets no research round at all: whoever filed it already named its files |
 | `research_aider` | `true` | a brief whose Files all exist puts the worker under aider (default true); `false` never switches |
+| `diff_checks` | `false` | before the pre-check and the review, a deterministic look at the diff: a test file the bead names that the diff never touches, or an added assertion that checks nothing, sends the round back |
 | `merge` | `"auto"` | `auto`: the watcher merges on green · `pipeline`: the loop labels, CI merges · `manual`: PR only, the bead held for you once green |
 | `update_behind` | `merge == "auto"` | when GitHub reports an open PR **BEHIND** the base, bring its branch up before anything else — its green is a green against an old base, and on someone else's repo the maintainer is the one looking at "out-of-date". On under `auto`, which is where the loop already did this; turn it on for `external` or `pipeline`, off to leave a behind branch alone |
 | `merge_label` | `"automerge"` | the label `pipeline` puts on each PR |

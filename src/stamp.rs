@@ -102,6 +102,7 @@ pub fn config_hash(repo: &Repo, stage: Option<&StageHit>, r: &Resolved) -> Strin
     lines.push(format!("repo.gate={}", repo.gate));
     lines.push(format!("repo.setup={}", repo.setup));
     lines.push(format!("repo.base={}", repo.base));
+    lines.push(format!("repo.diff_checks={}", repo.diff_checks));
     fnv_hex(lines.join("\n").as_bytes())
 }
 

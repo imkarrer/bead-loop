@@ -480,6 +480,8 @@ pub struct Repo {
     pub research: String,
     /// a brief whose Files all exist puts an opencode worker under aider
     pub research_aider: bool,
+    /// before the pre-check and the review, a deterministic look at the diff: a test file the bead names that the diff never touches, or an added assertion that checks nothing, sends the round back
+    pub diff_checks: bool,
     /// seconds a research round may run (capped by the stage's timeout); default 900
     pub research_timeout: u64,
     /// the `[providers.NAME]` tables of the global file
@@ -575,6 +577,7 @@ impl Repo {
             research_model: cfg.str("research_model", ""),
             research: cfg.str("research", "first"),
             research_aider: cfg.bool("research_aider", true),
+            diff_checks: cfg.bool("diff_checks", false),
             research_timeout: cfg.u64("research_timeout", 900),
             providers: cfg.providers(),
             reference_rate: cfg.reference_rate(),
@@ -856,6 +859,7 @@ pub fn test_repo(root: &Path, stages: &[&str]) -> Repo {
         research_model: String::new(),
         research: "first".into(),
         research_aider: true,
+        diff_checks: false,
         research_timeout: 900,
         providers: Vec::new(),
         reference_rate: None,
@@ -1539,6 +1543,7 @@ mod tests {
             "research",
             "research_timeout",
             "research_aider",
+            "diff_checks",
             "merge",
             "merge_label",
             "feedback",
