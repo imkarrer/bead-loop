@@ -27,6 +27,8 @@
 //!   bead-supervisor watch [REPO...]       status every 5 s (BEAD_LOOP_WATCH=N), the last log lines above it
 //!   bead-supervisor stats [REPO...]       the scoreboard: landed, first-try, without Claude, rounds and time per
 //!                                         landing, send-backs by reason and model, model cost — 24h/7d/30d/all
+//!   bead-supervisor bench freeze REPO ID...   a landed bead frozen into bench/cases/ID/case.json, for the
+//!                                         operator to commit (docs/design-bench.md)
 //!   bead-supervisor log REPO [BEAD_ID]    follow the newest worker/reviewer session: tool calls and text
 //!   bead-supervisor doctor [--json]         one line per dependency probe (green/red), or JSON array
 //!
@@ -37,6 +39,7 @@
 //!   --rows       stats: one JSON object per bead the loop touched (JSONL), instead of the scoreboard
 //!   --local      implement, gate and review; keep the branch here, no push, no PR
 //!   --model M    opencode provider/model for the worker this run
+mod bench;
 mod config;
 mod doctor;
 mod harness;
@@ -78,6 +81,7 @@ const COMMANDS: &[&str] = &[
     "status",
     "watch",
     "stats",
+    "bench",
     "log",
     "doctor",
 ];
@@ -164,7 +168,7 @@ fn main() {
     };
     let mut repos: Vec<PathBuf> = rest.iter().map(PathBuf::from).collect();
     let arg_repos = repos.len();
-    if repos.is_empty() && cmd != "work" && cmd != "log" && cmd != "priority" && cmd != "wake" {
+    if repos.is_empty() && cmd != "work" && cmd != "log" && cmd != "priority" && cmd != "wake" && cmd != "bench" {
         repos = global.repos();
     }
     if repos.is_empty() && !matches!(cmd.as_str(), "priority" | "wake") {
@@ -174,8 +178,8 @@ fn main() {
     // One supervisor at a time for anything that runs rounds or the merge queue; the
     // read-only and the one-bead commands are free.
     let _lock = match cmd.as_str() {
-        "status" | "stats" | "log" | "watch" | "lane" | "pause" | "resume" | "escalate" | "answer" | "open" | "publish" | "priority"
-        | "wake" | "doctor" => None,
+        "status" | "stats" | "bench" | "log" | "watch" | "lane" | "pause" | "resume" | "escalate" | "answer" | "open" | "publish"
+        | "priority" | "wake" | "doctor" => None,
         _ => match lanes::try_lock(&state_dir.join("lock")) {
             Some(l) => Some(l),
             None => {
@@ -310,6 +314,18 @@ fn main() {
                     print!("{}", stats::stats_text(&j));
                 }
             }
+        }
+        "bench" => {
+            let sub = rest.first().cloned().unwrap_or_else(|| die("bench freeze REPO ID..."));
+            if sub != "freeze" {
+                die(&format!("bench: unknown subcommand {sub}"));
+            }
+            let repo = repo_at(1);
+            let ids: Vec<String> = rest.iter().skip(2).cloned().collect();
+            if ids.is_empty() {
+                die("bench freeze REPO ID...");
+            }
+            bench::freeze(&repo, &ids);
         }
         "watch" => {
             let every = std::env::var("BEAD_LOOP_WATCH").ok().and_then(|s| s.parse().ok()).unwrap_or(5);

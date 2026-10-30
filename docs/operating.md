@@ -115,6 +115,14 @@ model time and cost, and how many times it needed you. The scoreboard sums these
 into four windows; the rows are what a later question (did this change help, is config
 A better than config B — docs/design-measurement.md) slices for itself.
 
+`bead-supervisor bench freeze REPO ID...` writes `bench/cases/ID/case.json` in the
+repo's checkout, one per id, for the operator to review and commit: the merge commit on
+the base branch whose subject starts with `ID:`, its first parent as `base_sha`, the
+bead's title, description and acceptance as the claim line first saw them (or, lacking
+one, as `bd show` has them now), and whether the merge's diff added a test (`set:
+"tests"`) or not (`"gate-only"`) — docs/design-bench.md's cases for the replay bench. An
+id with no such merge commit is skipped and named on the log.
+
 ```
 05:41:12   bead-supervisor watch (every 5s, ctrl-c to stop)
 
