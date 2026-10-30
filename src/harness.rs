@@ -17,7 +17,7 @@ use crate::util::{cmd, log, output, read_to_string, stdout_str, tail_lines, writ
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::Path;
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::Mutex;
 
 pub struct AgentRun {
     /// the last twenty lines the agent wrote: enough for a last BLOCKED: line or a note's
@@ -935,32 +935,43 @@ static PROBES: Mutex<Option<HashMap<String, (i64, bool)>>> = Mutex::new(None);
 
 // A provider's `parallel` bounds how many sessions run on it at once — lane rounds and
 // inline calls (brief, pre-check, post-mortem) alike, so two lanes over one provider, or
-// a burst of inline calls, never stack on a one-slot model.
-#[allow(clippy::type_complexity)]
-static SLOTS: Mutex<Option<HashMap<String, Arc<(Mutex<u64>, Condvar)>>>> = Mutex::new(None);
-
-/// Holds one of a provider's slots; `Drop` frees it and wakes the next waiter.
-pub struct SlotGuard(Arc<(Mutex<u64>, Condvar)>);
+// a burst of inline calls, never stack on a one-slot model. A slot is the file
+// `<state_dir>/slots/NAME.K`, K in 0..parallel, held by an exclusive flock on a File kept
+// open for as long as the slot is held; a crashed process frees its slots when the fd
+// closes, and a second process (a future bench) shares the same slots.
+pub struct SlotGuard(std::fs::File);
 
 impl Drop for SlotGuard {
     fn drop(&mut self) {
-        let (count, cv) = &*self.0;
-        *count.lock().unwrap() -= 1;
-        cv.notify_one();
+        use std::os::fd::AsRawFd;
+        unsafe {
+            libc::flock(self.0.as_raw_fd(), libc::LOCK_UN);
+        }
+    }
+}
+
+fn slot_file(name: &str, k: u64) -> Option<std::fs::File> {
+    use std::os::fd::AsRawFd;
+    let dir = crate::config::state_dir().join("slots");
+    let _ = std::fs::create_dir_all(&dir);
+    let path = dir.join(format!("{name}.{k}"));
+    let file = std::fs::OpenOptions::new().create(true).write(true).truncate(false).open(&path).ok()?;
+    let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+    if rc == 0 {
+        Some(file)
+    } else {
+        None
     }
 }
 
 /// A slot on `name`, once fewer than `parallel` sessions hold one; `None` as soon as a
 /// stop lands while waiting.
 fn provider_slot(slug: &str, name: &str, parallel: u64) -> Option<SlotGuard> {
-    let pair = {
-        let mut g = SLOTS.lock().unwrap();
-        g.get_or_insert_with(HashMap::new).entry(name.to_string()).or_insert_with(|| Arc::new((Mutex::new(0), Condvar::new()))).clone()
-    };
-    let (count, cv) = &*pair;
-    let mut n = count.lock().unwrap();
     let mut warned = false;
-    while *n >= parallel {
+    loop {
+        if let Some(guard) = try_provider_slot(name, parallel) {
+            return Some(guard);
+        }
         if signals::stopping() {
             return None;
         }
@@ -968,11 +979,13 @@ fn provider_slot(slug: &str, name: &str, parallel: u64) -> Option<SlotGuard> {
             log(&format!("{slug}: waiting for a slot on {name} ({parallel} busy)"));
             warned = true;
         }
-        let (guard, _timed_out) = cv.wait_timeout(n, std::time::Duration::from_secs(1)).unwrap();
-        n = guard;
+        std::thread::sleep(std::time::Duration::from_secs(1));
     }
-    *n += 1;
-    Some(SlotGuard(pair.clone()))
+}
+
+/// One pass over `name`'s `parallel` slots, never waiting; `None` when all are held.
+pub fn try_provider_slot(name: &str, parallel: u64) -> Option<SlotGuard> {
+    (0..parallel).find_map(|k| slot_file(name, k)).map(SlotGuard)
 }
 
 pub fn claude_ok() -> bool {
@@ -1363,9 +1376,20 @@ mod tests {
         assert!(!runnable(&repo, "down/m"));
         assert!(why_not(&repo, "down/m").contains("down — its probe"));
     }
+    static SLOT_STATE_DIR: std::sync::Once = std::sync::Once::new();
+
+    fn slot_scratch() {
+        SLOT_STATE_DIR.call_once(|| {
+            let d = crate::config::scratch("slots");
+            std::env::set_var("BEAD_LOOP_STATE", d);
+        });
+    }
+
     #[test]
     fn a_provider_semaphore_admits_parallel_at_once() {
         use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+        slot_scratch();
         let inside = Arc::new(AtomicUsize::new(0));
         let max_seen = Arc::new(AtomicUsize::new(0));
         let handles: Vec<_> = (0..3)
@@ -1385,5 +1409,16 @@ mod tests {
             h.join().unwrap();
         }
         assert_eq!(max_seen.load(Ordering::SeqCst), 2, "parallel bounds how many run at once");
+    }
+
+    #[test]
+    fn try_provider_slot_waits_for_neither_and_sees_a_drop() {
+        slot_scratch();
+        let a = try_provider_slot("test-try", 2).expect("first slot free");
+        let b = try_provider_slot("test-try", 2).expect("second slot free");
+        assert!(try_provider_slot("test-try", 2).is_none(), "both slots held");
+        drop(a);
+        assert!(try_provider_slot("test-try", 2).is_some(), "a slot freed on drop");
+        drop(b);
     }
 }

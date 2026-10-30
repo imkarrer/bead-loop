@@ -25,7 +25,8 @@
 //! and, under the state dir itself: `lock.<name>`, `pause.<name>` (not only dev/review),
 //! `limit.<provider>` the reset epoch of a usage limit the provider's own message named
 //! (harness::limit_reset), `restart` (dropped by the deploy before it restarts the
-//! service; signals.rs reads it).
+//! service; signals.rs reads it), `slots/NAME.K` a provider's slots, held by an flock so a
+//! bench process can share them with the loop (harness::provider_slot).
 use crate::config::{Approvals, Repo, Seat, Stage};
 use crate::util::{mtime, read_to_string, touch, write_file};
 use std::path::PathBuf;
