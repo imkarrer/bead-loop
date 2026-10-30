@@ -748,8 +748,8 @@ impl Repo {
         Resolved { provider, harness, model }
     }
 
-    /// Get the attach command for a specific model, using the provider's attach configuration.
-    /// Returns the provider's attach value if non-empty, otherwise falls back to self.attach.
+    /// The opencode server a model's rounds run on: the resolved provider's `attach`, or
+    /// `self.attach` for a provider that names none of its own.
     pub fn attach_for(&self, model: &str) -> String {
         let resolved = self.resolve(model);
         if !resolved.provider.attach.is_empty() {

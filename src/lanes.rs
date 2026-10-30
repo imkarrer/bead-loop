@@ -433,10 +433,14 @@ pub fn recover(ctx: &Ctx) {
                 }
                 let id = e.file_name().to_string_lossy().into_owned();
                 repo.rejoin_clear(&id);
+                // The stage's own model, for the opencode server this bead's rounds run
+                // on (Provider.attach): no round is in flight to say which one, so the
+                // current stage's worker model is the best guess.
+                let model = repo.stage_for(repo.failures_of(&id)).map(|s| s.model).unwrap_or_default();
                 // A PR in flight, or one waiting to be published: the round is over, the
                 // bead in_progress on purpose — not a round the stop interrupted.
                 if repo.inflight_path(&id).exists() || repo.proposed_path(&id).exists() {
-                    crate::harness::abort_sessions(&repo, &dir);
+                    crate::harness::abort_sessions(&repo, &dir, &model);
                     continue;
                 }
                 let in_review = repo.review_path(&id).exists();
@@ -464,9 +468,11 @@ pub fn recover(ctx: &Ctx) {
                     // worker's read the researcher's transcript as the worker's. One titled
                     // as no round of this bead's is not rejoined; the abort below takes it.
                     let running =
-                        crate::harness::running_session(&repo, &dir).and_then(|sid| match crate::harness::session_title(&repo, &sid) {
-                            None => Some((sid, kind)),
-                            Some(t) => crate::harness::session_kind(&id, &t).map(|k| (sid, k)),
+                        crate::harness::running_session(&repo, &dir, &model).and_then(|sid| {
+                            match crate::harness::session_title(&repo, &sid, &model) {
+                                None => Some((sid, kind)),
+                                Some(t) => crate::harness::session_kind(&id, &t).map(|k| (sid, k)),
+                            }
                         });
                     if let Some((sid, kind)) = running {
                         repo.rejoin_set(&id, &sid, kind, seat);
@@ -486,7 +492,7 @@ pub fn recover(ctx: &Ctx) {
                     let finished = lane_mtimes
                         .get(&id)
                         .copied()
-                        .and_then(|cutoff| crate::harness::finished_session(&repo, &id, &dir, kind, round, cutoff));
+                        .and_then(|cutoff| crate::harness::finished_session(&repo, &id, &dir, kind, round, cutoff, &model));
                     if let Some(sid) = finished {
                         repo.rejoin_set(&id, &sid, kind, seat);
                         if !in_review {
@@ -499,7 +505,7 @@ pub fn recover(ctx: &Ctx) {
                         continue;
                     }
                 }
-                crate::harness::abort_sessions(&repo, &dir);
+                crate::harness::abort_sessions(&repo, &dir, &model);
                 if in_review {
                     continue;
                 }
