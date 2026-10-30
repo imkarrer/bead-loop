@@ -247,14 +247,15 @@ pub fn run_agent(
         let v = serde_json::from_str::<Value>(&raw).ok();
         let result = v.as_ref().and_then(|v| v.get("result").and_then(|r| r.as_str()).map(str::to_string)).unwrap_or_default();
         // Claude Code answers an expired sign-in or an API refusal with a JSON error and
-        // not one token spent: that is the harness failing, not the model's round. Say
-        // so (the caller holds the bead) and forget the sign-in probe so the next pick
-        // asks again rather than trust a minute-old "signed in".
+        // not one token spent: that is the harness failing, not the model's round. A usage
+        // limit hit mid-session is the same kind of failure even with turns and tokens
+        // spent (bl-boc.5): say so either way (the caller holds the bead) and forget the
+        // sign-in probe so the next pick asks again rather than trust a minute-old "signed in".
         let api_error = v
             .as_ref()
             .map(|v| {
                 v.get("is_error").and_then(|b| b.as_bool()).unwrap_or(false)
-                    && v.pointer("/usage/input_tokens").and_then(|n| n.as_u64()).unwrap_or(0) == 0
+                    && (v.pointer("/usage/input_tokens").and_then(|n| n.as_u64()).unwrap_or(0) == 0 || is_limit_message(&result))
             })
             .unwrap_or(false);
         if api_error {
@@ -339,7 +340,7 @@ pub fn run_agent(
     // so holds the whole provider until the time it named, so the other beads on it wait
     // in their queue instead of each paying for the same retry (bl-boc.1: 330 of them on
     // one day, 28 retries a bead across 12 beads).
-    if empty && error.contains("hit your") && error.contains("limit") {
+    if empty && is_limit_message(&error) {
         let now = crate::util::now();
         let until = limit_reset(&error, now).unwrap_or(now + 1800).min(now + 8 * 86400);
         write_file(&repo.limit_path(&r.provider.name), &until.to_string());
@@ -1122,6 +1123,12 @@ fn parse_clock(s: &str) -> Option<(i64, i64)> {
     Some((hour24, minute))
 }
 
+/// Claude's own "You've hit your session|weekly limit · resets ..." — the provider's
+/// limit, not the model's failure, however many turns or tokens the session spent first.
+pub fn is_limit_message(result: &str) -> bool {
+    result.contains("hit your") && result.contains("limit")
+}
+
 /// The epoch second Claude's own "You've hit your session|weekly limit · resets ..."
 /// names. `H(:MM)?(am|pm) (UTC)` is today at that time, tomorrow when that is not after
 /// `now`; `Mon D, H(:MM)?(am|pm) (UTC)` is that date in `now`'s year, next year when that
@@ -1350,6 +1357,12 @@ mod tests {
         assert!(parse_transcript("").never_answered(), "nothing at all: the same");
         assert!(parse_transcript("\n\n").never_answered());
         assert!(!parse_transcript("not json\n").never_answered(), "a line this parser does not know is something said");
+    }
+    #[test]
+    fn is_limit_message_knows_claude_s_own_wording() {
+        assert!(is_limit_message("You've hit your session limit · resets 7:40am (UTC)"));
+        assert!(is_limit_message("You've hit your weekly limit · resets Oct 28, 3am (UTC)"));
+        assert!(!is_limit_message("there is a limit on how much I can help with that"));
     }
     #[test]
     fn limit_reset_reads_the_time_claude_names() {
