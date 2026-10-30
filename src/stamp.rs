@@ -356,12 +356,17 @@ mod tests {
     #[test]
     fn config_hash_moves_with_parallel_and_model_not_attach() {
         let d = scratch("config-hash");
-        let repo = test_repo(&d, &["fast:rev:2"]);
+        let mut repo = test_repo(&d, &["fast:rev:2"]);
         let base = config_hash(&repo, Some(&stage()), &resolved("x/one", 1, "a"));
 
         assert_ne!(base, config_hash(&repo, Some(&stage()), &resolved("x/one", 2, "a")), "parallel changes the hash");
         assert_ne!(base, config_hash(&repo, Some(&stage()), &resolved("x/two", 1, "a")), "the model changes the hash");
         assert_eq!(base, config_hash(&repo, Some(&stage()), &resolved("x/one", 1, "b")), "attach never changes the hash");
+
+        // Test that diff_checks changes the hash
+        let mut repo_with_diff_checks = repo.clone();
+        repo_with_diff_checks.diff_checks = true;
+        assert_ne!(base, config_hash(&repo_with_diff_checks, Some(&stage()), &resolved("x/one", 1, "a")), "diff_checks changes the hash");
     }
 
     #[test]
