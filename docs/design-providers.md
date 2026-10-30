@@ -1,10 +1,9 @@
 # Design: providers — any models, any number of lanes, more than one reviewer
 
-Status: built, except `attach` on the provider (bl-iej.17, open: `Provider.attach` is
-parsed, but the harness still reads the repo's `attach`) — PRs #87, #102, #117–#119,
-#121, #123, #128, #130, #132, #133, #136–#139, #141, #150, #153, #154, #171–#174,
-#176, #177 and #180–#182. Written 2026-09-21 from `src/` as it then was ("What is wrong
-now" describes that code), after
+Status: built — PRs #87, #102, #117–#119, #121, #123, #128, #130, #132, #133,
+#136–#139, #141, #150, #153, #154, #171–#174, #176, #177, #180–#182 and #219 (`attach`
+on the provider, the last piece). Written 2026-09-21 from `src/` as it then was ("What is
+wrong now" describes that code), after
 [design-lanes-per-server.md](design-lanes-per-server.md) (built, PR #35) and beside
 [design-targets.md](design-targets.md) (orthogonal: targets say where the code lives,
 providers say how the models run).
@@ -101,7 +100,7 @@ cost = "metered"
 | `cost` | `local` | `local` or `metered`; the scoreboard's "landed without metered models" reads this, nothing else does |
 | `probe` | none (`claude-code`: `claude auth status`) | a URL the loop GETs before a round; a failure holds the *lane* with the reason, not the bead (this is bl-ycs) |
 | `via` | required by `aider` | the opencode provider whose `baseURL` and `apiKey` the harness speaks to |
-| `attach` | none | the opencode server rounds run on, for the live view and for rejoin after a restart (today a repo key; it belongs to the provider, and the repo key stays as an alias for opencode providers). Not wired: the key parses, and every read in `harness.rs` is still `repo.attach` (bl-iej.17) |
+| `attach` | none | the opencode server rounds run on, for the live view and for rejoin after a restart (today a repo key; it belongs to the provider, and the repo key stays as an alias for opencode providers). Built: `Repo::attach_for(model)` is the resolved provider's `attach`, else the repo's (bl-iej.17) |
 | `command` | required by `command` | the harness command |
 | `model_flag` | none | for `command`: how the model name is passed, e.g. `"--model {model}"` |
 
