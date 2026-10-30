@@ -38,6 +38,7 @@
 //!   --local      implement, gate and review; keep the branch here, no push, no PR
 //!   --model M    opencode provider/model for the worker this run
 mod config;
+mod diffcheck;
 mod doctor;
 mod harness;
 mod human;
