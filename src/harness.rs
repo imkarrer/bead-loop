@@ -334,6 +334,15 @@ pub fn run_agent(
     } else {
         String::new()
     };
+    // The provider's own limit, not the bead's: a session that comes back empty saying
+    // so holds the whole provider until the time it named, so the other beads on it wait
+    // in their queue instead of each paying for the same retry (bl-boc.1: 330 of them on
+    // one day, 28 retries a bead across 12 beads).
+    if empty && error.contains("hit your") && error.contains("limit") {
+        let now = crate::util::now();
+        let until = limit_reset(&error, now).unwrap_or(now + 1800).min(now + 8 * 86400);
+        write_file(&repo.limit_path(&r.provider.name), &until.to_string());
+    }
     AgentRun { text: tail_lines(&full, 20), full, rc, empty, error, stalled }
 }
 
@@ -1008,7 +1017,9 @@ pub fn forget_probes() {
 /// `runnable(repo, MODEL)`: whether a model can run now.
 pub fn runnable(repo: &Repo, model: &str) -> bool {
     let r = repo.resolve(model);
-    if r.harness == "claude-code" {
+    if repo.limit_until(&r.provider.name).is_some() {
+        false
+    } else if r.harness == "claude-code" {
         claude_ok()
     } else if !r.provider.probe.is_empty() {
         probe_ok(&r.provider.probe)
@@ -1020,7 +1031,10 @@ pub fn runnable(repo: &Repo, model: &str) -> bool {
 /// Why `runnable` said no, for the wait message.
 pub fn why_not(repo: &Repo, model: &str) -> String {
     let r = repo.resolve(model);
-    if r.harness == "claude-code" {
+    if let Some(until) = repo.limit_until(&r.provider.name) {
+        let secs = until.rem_euclid(86400);
+        format!("{} — usage limit until {:02}:{:02} UTC", r.provider.name, secs / 3600, secs % 3600 / 60)
+    } else if r.harness == "claude-code" {
         "Claude — it is signed out on this box (claude auth login)".to_string()
     } else {
         format!("{} — its probe {} fails", r.provider.name, r.provider.probe)
@@ -1037,6 +1051,81 @@ pub fn probe_of(repo: &Repo, provider: &str) -> Option<(bool, String)> {
         Some((probe_ok(&p.probe), p.probe.clone()))
     } else {
         None
+    }
+}
+
+// ---- usage limits: the provider's own message names when it ends ------------------
+
+const MONTHS: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+/// Days since 1970-01-01 (UTC) for a civil date, and the inverse — Howard Hinnant's
+/// `days_from_civil`/`civil_from_days`, proleptic Gregorian, valid for any year this
+/// needs.
+fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = if y >= 0 { y } else { y - 399 } / 400;
+    let yoe = y - era * 400;
+    let mp = (m + 9) % 12;
+    let doy = (153 * mp + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146097 + doe - 719468
+}
+
+fn civil_from_days(z: i64) -> (i64, i64, i64) {
+    let z = z + 719468;
+    let era = if z >= 0 { z } else { z - 146096 } / 146097;
+    let doe = z - era * 146097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    (if m <= 2 { y + 1 } else { y }, m, d)
+}
+
+/// `H(:MM)?(am|pm)` to 24-hour `(hour, minute)`.
+fn parse_clock(s: &str) -> Option<(i64, i64)> {
+    let (digits, pm) = if let Some(h) = s.strip_suffix("am") { (h, false) } else { (s.strip_suffix("pm")?, true) };
+    let (hour, minute) = match digits.split_once(':') {
+        Some((h, m)) => (h.parse::<i64>().ok()?, m.parse::<i64>().ok()?),
+        None => (digits.parse::<i64>().ok()?, 0),
+    };
+    if !(1..=12).contains(&hour) || !(0..=59).contains(&minute) {
+        return None;
+    }
+    let hour24 = if hour == 12 {
+        if pm {
+            12
+        } else {
+            0
+        }
+    } else {
+        hour + if pm { 12 } else { 0 }
+    };
+    Some((hour24, minute))
+}
+
+/// The epoch second Claude's own "You've hit your session|weekly limit · resets ..."
+/// names. `H(:MM)?(am|pm) (UTC)` is today at that time, tomorrow when that is not after
+/// `now`; `Mon D, H(:MM)?(am|pm) (UTC)` is that date in `now`'s year, next year when that
+/// is not after `now`. Any other zone or shape: `None` (the caller falls back to a short
+/// hold rather than trust a reset time it did not understand).
+pub fn limit_reset(msg: &str, now: i64) -> Option<i64> {
+    let body = msg.split_once("resets ")?.1.trim().strip_suffix("(UTC)")?.trim();
+    if let Some((date, clock)) = body.split_once(", ") {
+        let (mon, day) = date.split_once(' ')?;
+        let month = MONTHS.iter().position(|m| *m == mon)? as i64 + 1;
+        let day: i64 = day.parse().ok()?;
+        let (hour, minute) = parse_clock(clock)?;
+        let (year, _, _) = civil_from_days(now.div_euclid(86400));
+        let at = |y: i64| days_from_civil(y, month, day) * 86400 + hour * 3600 + minute * 60;
+        Some(if at(year) > now { at(year) } else { at(year + 1) })
+    } else {
+        let (hour, minute) = parse_clock(body)?;
+        let today = now.div_euclid(86400);
+        let at = |day: i64| day * 86400 + hour * 3600 + minute * 60;
+        Some(if at(today) > now { at(today) } else { at(today + 1) })
     }
 }
 
@@ -1245,6 +1334,22 @@ mod tests {
         assert!(parse_transcript("").never_answered(), "nothing at all: the same");
         assert!(parse_transcript("\n\n").never_answered());
         assert!(!parse_transcript("not json\n").never_answered(), "a line this parser does not know is something said");
+    }
+    #[test]
+    fn limit_reset_reads_the_time_claude_names() {
+        // 2026-10-29T10:00:00Z, before 5:50pm: today.
+        assert_eq!(limit_reset("You've hit your session limit · resets 5:50pm (UTC)", 1793268000), Some(1793296200));
+        // 2026-10-29T18:00:00Z, after 5:50pm: tomorrow.
+        assert_eq!(limit_reset("You've hit your session limit · resets 5:50pm (UTC)", 1793296800), Some(1793382600));
+        // 2026-10-27T00:00:00Z, before Oct 28: this year.
+        assert_eq!(limit_reset("You've hit your weekly limit · resets Oct 28, 3am (UTC)", 1793059200), Some(1793156400));
+        // 2026-10-29T03:00:00Z, after Oct 28 3am: next year.
+        assert_eq!(limit_reset("You've hit your weekly limit · resets Oct 28, 3am (UTC)", 1793242800), Some(1824692400));
+        assert_eq!(
+            limit_reset("You've hit your session limit · resets 5:50pm (PST)", 1793268000),
+            None,
+            "a zone other than UTC is a shape this does not know"
+        );
     }
     #[test]
     fn only_claude_models_need_a_probe() {
