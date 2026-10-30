@@ -11,6 +11,7 @@ for s in "$HERE"/skills/*/SKILL.md; do
   case $(field "$s" description) in *"Use when"*) ;; *) echo "$s: description lacks 'Use when'"; rc=1;; esac
   [ "$(wc -w <"$s")" -le 700 ] || { echo "$s: over 700 words; keep a skill under ~1k tokens"; rc=1; }
 done
+grep -q 'planned-in:' "$HERE"/skills/delegate/SKILL.md || { echo "skills/delegate/SKILL.md: no planned-in label"; rc=1; }
 for a in "$HERE"/agents/*.md; do
   for k in description mode; do [ -n "$(field "$a" $k)" ] || { echo "$a: no $k"; rc=1; }; done
   fm "$a" | grep -q '^permission:' || { echo "$a: no permission block"; rc=1; }
