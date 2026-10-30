@@ -1534,6 +1534,18 @@ pub fn dev_one(repo: &Repo, opts: &Opts, id: Option<&str>, last_id: &mut Option<
         final_text = r2.full;
     }
 
+    if repo.diff_checks {
+        let range = format!("{}/{}...HEAD", repo.base_remote, repo.base);
+        let diff = git_out(&wt, &["diff", &range]);
+        let description = json.get(0).and_then(|b| b.get("description")).and_then(|v| v.as_str()).unwrap_or("");
+        let problems = crate::diffcheck::problems(description, &diff);
+        if !problems.is_empty() {
+            cut_short(repo, &id);
+            send_back(repo, &id, &wt, false, &format!("diff check sent back:\n{}", problems.join("\n")), &model, st.last, Some(&logf));
+            return Pass::Worked;
+        }
+    }
+
     // Into the review queue, with the worker's last words for the reviewer.
     let done = done_report(&final_text);
     if !repo.precheck_model.is_empty() {

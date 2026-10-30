@@ -24,7 +24,6 @@ fn diff_headers(diff: &str) -> Vec<&str> {
 /// placeholder assertion to one — both found before any model reads the diff
 /// (design-measurement.md hypothesis 9: 33 of the last 97 reviewer REJECTs named tests,
 /// missing or placeholder).
-#[allow(dead_code)]
 pub fn problems(description: &str, diff: &str) -> Vec<String> {
     let mut problems = Vec::new();
 
