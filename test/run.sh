@@ -347,6 +347,30 @@ case_stats_rows() {
   assert_eq "$(jq -r .id <<<"$out")" t-1 "the row's id"
   assert_eq "$(jq -r .claim.title <<<"$out")" "Do the thing" "the claim line stamped at the first claim"
 }
+case_bench_freeze() {
+  # bench freeze reads the merge commit off the base branch itself, so the stub gh's
+  # merge (which only flips pr.json, never origin's history) is not enough: squash the
+  # pushed branch onto main by hand, the subject a real squash merge reads.
+  setup; sup work "$REPO"
+  git -C "$REPO" fetch -q origin
+  git -C "$REPO" merge -q --squash origin/bead/t-1
+  git -C "$REPO" commit -q -m "t-1: Do the thing (#1)"
+  git -C "$REPO" push -q origin main
+  jq '. + [{id:"t-2", title:"Other", description:"x", acceptance_criteria:"y", status:"open", priority:2, issue_type:"task", labels:["delegate:local"]}]' "$BD_STATE/issues.json" >"$BD_STATE/i.tmp" && mv "$BD_STATE/i.tmp" "$BD_STATE/issues.json"
+
+  sup bench freeze "$REPO" t-1 t-2
+  merge_sha=$(git -C "$REPO" rev-parse origin/main)
+  base_sha=$(git -C "$REPO" rev-parse "$merge_sha^1")
+  case=$(cat "$REPO/bench/cases/t-1/case.json")
+  assert_eq "$(jq -r .merge_sha <<<"$case")" "$merge_sha" "the merge commit on origin/main"
+  assert_eq "$(jq -r .base_sha <<<"$case")" "$base_sha" "its first parent"
+  assert_eq "$(jq -r .repo <<<"$case")" repo "the repo's slug"
+  assert_eq "$(jq -r .text <<<"$case")" first_round "the claim line, not bd's current text"
+  assert_eq "$(jq -r .title <<<"$case")" "Do the thing" "the claim's title"
+  assert_eq "$(jq -r .set <<<"$case")" gate-only "work.txt's diff adds no test"
+  assert_nofile "$REPO/bench/cases/t-2/case.json" "t-2 has no merge commit, so no case"
+  assert_match "$(cat "$T/sup.log")" "t-2: no merge commit" "t-2 named as skipped"
+}
 case_no_reviewer() {
   setup true auto ''; sup work "$REPO"
   assert_eq "$(calls)" "bead-worker" "no review round without REVIEW_MODEL"
