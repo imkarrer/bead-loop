@@ -401,6 +401,37 @@ case_bench_freeze() {
   assert_nofile "$REPO/bench/cases/t-2/case.json" "t-2 has no merge commit, so no case"
   assert_match "$(cat "$T/sup.log")" "t-2: no merge commit" "t-2 named as skipped"
 }
+case_bench_freeze_hidden() {
+  # A "tests" case's bench freeze also cuts hidden/ by name: a #[test] fn added under
+  # src/, and a case_ function added to test/run.sh, built by hand (not through sup
+  # work, which only ever writes work.txt).
+  setup
+  mkdir -p "$REPO/src" "$REPO/test"
+  printf 'fn other() {}\n' >"$REPO/src/thing.rs"
+  printf 'case_before() { :; }\n' >"$REPO/test/run.sh"
+  git -C "$REPO" add -A && git -C "$REPO" commit -qm base2 && git -C "$REPO" push -q origin main
+
+  git -C "$REPO" checkout -qb bead/t-1
+  printf 'fn other() {}\n\n#[test]\nfn it_adds() {\n    assert_eq!(1 + 1, 2);\n}\n' >"$REPO/src/thing.rs"
+  printf 'case_before() { :; }\ncase_added_thing() {\n  echo hi\n}\n' >"$REPO/test/run.sh"
+  git -C "$REPO" add -A && git -C "$REPO" commit -qm work
+  git -C "$REPO" checkout -q main
+  git -C "$REPO" merge -q --squash bead/t-1
+  git -C "$REPO" commit -q -m "t-1: Do the thing (#1)"
+  git -C "$REPO" push -q origin main
+
+  sup bench freeze "$REPO" t-1
+  hidden="$REPO/bench/cases/t-1/hidden"
+  rust=$(cat "$hidden/rust/it_adds.rs")
+  assert_match "$rust" "^// from src/thing.rs$" "the provenance line"
+  assert_match "$rust" "fn it_adds" "the function itself"
+  cases=$(cat "$hidden/cases/added_thing.sh")
+  assert_match "$cases" "^case_added_thing() {$" "the case function cut whole"
+  files=$(cat "$hidden/files.json")
+  assert_eq "$(jq -r '.rust[0].name' <<<"$files")" it_adds "files.json names the rust test"
+  assert_eq "$(jq -r '.rust[0].path' <<<"$files")" src/thing.rs "files.json's path is where it lived in the merge"
+  assert_eq "$(jq -r '.cases[0]' <<<"$files")" added_thing "files.json names the case"
+}
 case_rows_reverted() {
   # find_reverts ran its git commands through `bd shell`, which bd has no such
   # subcommand for: a revert was never found. It now runs git itself, against three
