@@ -29,6 +29,12 @@ if [ -e "$TEST_CTRL/claude-api-error" ]; then
   jq -n '{type:"result", is_error:true, result:"Failed to authenticate: OAuth session expired and could not be refreshed", usage:{input_tokens:0, output_tokens:0}, terminal_reason:"api_error"}'
   exit 1
 fi
+# claude-usage-limit: the provider's own message when its session or weekly limit is hit
+# (bl-boc.1) — its text is the file's content, same shape otherwise as claude-api-error.
+if [ -e "$TEST_CTRL/claude-usage-limit" ]; then
+  jq -n --arg t "$(cat "$TEST_CTRL/claude-usage-limit")" '{type:"result", is_error:true, result:$t, usage:{input_tokens:0, output_tokens:0}, terminal_reason:"usage_limit"}'
+  exit 1
+fi
 say() { jq -n --arg t "$1" '{type:"result", result:$t}'; }
 case $agent in
   bead-worker)

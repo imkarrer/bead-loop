@@ -23,7 +23,9 @@
 //! - `wt/ID` the worktree while a bead is on a lane or waiting for review
 //!
 //! and, under the state dir itself: `lock.<name>`, `pause.<name>` (not only dev/review),
-//! `restart` (dropped by the deploy before it restarts the service; signals.rs reads it).
+//! `limit.<provider>` the reset epoch of a usage limit the provider's own message named
+//! (harness::limit_reset), `restart` (dropped by the deploy before it restarts the
+//! service; signals.rs reads it).
 use crate::config::{Approvals, Repo, Seat, Stage};
 use crate::util::{mtime, read_to_string, touch, write_file};
 use std::path::PathBuf;
@@ -331,6 +333,17 @@ impl Repo {
     }
     pub fn paused(&self, name: &str) -> bool {
         self.pause_path(name).exists()
+    }
+
+    /// Where a provider's usage-limit reset epoch lives: the limit is the provider's,
+    /// not the bead's, so this is under the state dir itself, not a repo's.
+    pub fn limit_path(&self, provider: &str) -> PathBuf {
+        self.state_dir.join(format!("limit.{provider}"))
+    }
+    /// The epoch a provider's usage limit resets at, when that is still in the future.
+    pub fn limit_until(&self, provider: &str) -> Option<i64> {
+        let until: i64 = read_to_string(&self.limit_path(provider))?.trim().parse().ok()?;
+        (until > crate::util::now()).then_some(until)
     }
 
     /// Ring the bell: every lane blocked on it looks again within a second.

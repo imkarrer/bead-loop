@@ -2271,6 +2271,28 @@ case_claude_sign_in_expiring_is_held() {
   assert_eq "$(cut -d' ' -f3,4 "$TEST_CTRL/calls" | head -1)" "claude/opus claude" "signed in again: the round runs"
   assert_branch bead/t-1 "and lands"
 }
+case_usage_limit_holds_the_provider() {
+  # Claude's own "You've hit your ... limit · resets ..." names when the provider lets
+  # up again: the first bead held once, no failure charged, and — unlike a sign-in
+  # expiring, which is this bead's — a second bead on the same provider is left in its
+  # queue, untried, until that time (bl-boc.1: 330 holds a day, one per bead, on what
+  # was really one provider's limit).
+  setup true auto '' "$(stages claude/opus::1)"
+  printf "You've hit your weekly limit · resets Oct 28, 3am (UTC)" >"$TEST_CTRL/claude-usage-limit"
+  sup --once tick
+  assert_eq "$(bead .status)" open "back in the dev queue"
+  assert_eq "$(cat "$BEAD_LOOP_STATE/repo/beads/t-1/failures" 2>/dev/null || echo 0)" 0 "no failure charged"
+  assert_match "$(cat "$BEAD_LOOP_STATE/repo/held/t-1")" "hit your weekly limit" "held, with Claude's own words"
+  assert_file "$BEAD_LOOP_STATE/limit.claude" "the provider's reset time recorded, not the bead's"
+  jq '. + [{id:"t-2", title:"Second", description:"y", status:"open", priority:3, labels:["delegate:local"]}]' "$BD_STATE/issues.json" >"$BD_STATE/i.tmp" && mv "$BD_STATE/i.tmp" "$BD_STATE/issues.json"
+  : >"$TEST_CTRL/calls"; BEAD_LOOP_HOLD_BACKOFF=0 sup --once tick
+  assert_eq "$(wc -l <"$TEST_CTRL/calls")" 0 "limited: neither bead starts a round"
+  assert_match "$(cat "$T/sup.log")" "usage limit until" "said so"
+  rm "$TEST_CTRL/claude-usage-limit"
+  echo $(( $(date -u +%s) - 10 )) >"$BEAD_LOOP_STATE/limit.claude"
+  : >"$TEST_CTRL/calls"; BEAD_LOOP_HOLD_BACKOFF=0 sup --once tick; BEAD_LOOP_HOLD_BACKOFF=0 sup --once tick
+  assert_eq "$(grep -c ' claude/opus claude$' "$TEST_CTRL/calls")" 2 "the reset time has passed: both run"
+}
 
 case_lanes_from_toml() {
   # [[lanes]] in the global config: a lane per model server, each taking the worker and
