@@ -371,6 +371,26 @@ case_bench_freeze() {
   assert_nofile "$REPO/bench/cases/t-2/case.json" "t-2 has no merge commit, so no case"
   assert_match "$(cat "$T/sup.log")" "t-2: no merge commit" "t-2 named as skipped"
 }
+case_rows_reverted() {
+  # find_reverts ran its git commands through `bd shell`, which bd has no such
+  # subcommand for: a revert was never found. It now runs git itself, against three
+  # landed beads past the 14-day window: one whose squash commit was reverted, one
+  # that was not, and (inside find_reverts) one still inside the window is never asked.
+  setup
+  old=$(date -u -d '20 days ago' +%Y-%m-%dT%H:%M:%SZ)
+  reverted_at=$(date -u -d '19 days ago' +%Y-%m-%dT%H:%M:%SZ)
+  recent=$(date -u -d '1 day ago' +%Y-%m-%dT%H:%M:%SZ)
+  sha=$(GIT_COMMITTER_DATE="$old" GIT_AUTHOR_DATE="$old" git -C "$REPO" commit --allow-empty -qm "Fix thing (#7)" && git -C "$REPO" rev-parse HEAD)
+  GIT_COMMITTER_DATE="$reverted_at" GIT_AUTHOR_DATE="$reverted_at" git -C "$REPO" commit --allow-empty -qm "Back out the broken fix" -m "This reverts commit $sha."
+  git -C "$REPO" push -q origin main
+  jq --arg t "$old" '(.[] | select(.id=="t-1")) |= (.status="closed" | .closed_at=$t | .close_reason="bead-loop: https://github.com/example/repo/pull/7 merged; checks at merge: ci=SUCCESS")' "$BD_STATE/issues.json" >"$BD_STATE/i.tmp" && mv "$BD_STATE/i.tmp" "$BD_STATE/issues.json"
+  jq --arg t "$old" '. + [{id:"t-2", title:"Other", description:"x", acceptance_criteria:"x", status:"closed", priority:2, issue_type:"task", labels:["delegate:local"], closed_at:$t, close_reason:"bead-loop: https://github.com/example/repo/pull/8 merged; checks at merge: ci=SUCCESS"}]' "$BD_STATE/issues.json" >"$BD_STATE/i.tmp" && mv "$BD_STATE/i.tmp" "$BD_STATE/issues.json"
+  jq --arg t "$recent" '. + [{id:"t-3", title:"Fresh", description:"x", acceptance_criteria:"x", status:"closed", priority:2, issue_type:"task", labels:["delegate:local"], closed_at:$t, close_reason:"bead-loop: https://github.com/example/repo/pull/9 merged; checks at merge: ci=SUCCESS"}]' "$BD_STATE/issues.json" >"$BD_STATE/i.tmp" && mv "$BD_STATE/i.tmp" "$BD_STATE/issues.json"
+  out=$(sup stats "$REPO" --rows)
+  assert_eq "$(jq -r 'select(.id=="t-1") | .reverted' <<<"$out")" "true" "the reverted bead's row"
+  assert_eq "$(jq -r 'select(.id=="t-2") | .reverted' <<<"$out")" "false" "the unreverted bead's row"
+  assert_eq "$(jq -r 'select(.id=="t-3") | .reverted' <<<"$out")" "null" "inside the window: null, find_reverts never asked"
+}
 case_no_reviewer() {
   setup true auto ''; sup work "$REPO"
   assert_eq "$(calls)" "bead-worker" "no review round without REVIEW_MODEL"

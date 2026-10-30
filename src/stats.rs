@@ -766,16 +766,14 @@ fn get_pr_number(url: &str) -> Option<i64> {
     url.rsplit('/').next().and_then(|s| s.parse::<i64>().ok())
 }
 
-/// Find reverts for a given PR by running git commands
-fn find_reverts(repo: &Repo, base_remote: &str, _base: &str, pr_number: i64) -> Vec<i64> {
+/// Find reverts for a given PR by running git directly (not through `bd`, which has no
+/// `shell` subcommand).
+fn find_reverts(repo: &Repo, base_remote: &str, base: &str, pr_number: i64) -> Vec<i64> {
+    let base_ref = format!("{base_remote}/{base}");
+
     // First, get the squash commit SHA for the PR
-    let commit_output = shell::bd_out(
-        repo,
-        &[
-            "shell",
-            &format!("cd {} && git log {} --fixed-strings --grep '(#{})' --format=%H -n1", repo.repo.display(), base_remote, pr_number),
-        ],
-    );
+    let grep = format!("(#{pr_number})");
+    let commit_output = shell::git_out(&repo.repo, &["log", &base_ref, "--fixed-strings", "--grep", &grep, "--format=%H", "-n1"]);
 
     let commit_sha = commit_output.trim();
     if commit_sha.is_empty() {
@@ -783,18 +781,8 @@ fn find_reverts(repo: &Repo, base_remote: &str, _base: &str, pr_number: i64) -> 
     }
 
     // Now find reverts of this commit
-    let revert_output = shell::bd_out(
-        repo,
-        &[
-            "shell",
-            &format!(
-                "cd {} && git log {} --fixed-strings --grep 'This reverts commit {}' --format=%ct",
-                repo.repo.display(),
-                base_remote,
-                commit_sha
-            ),
-        ],
-    );
+    let revert_grep = format!("This reverts commit {commit_sha}");
+    let revert_output = shell::git_out(&repo.repo, &["log", &base_ref, "--fixed-strings", "--grep", &revert_grep, "--format=%ct"]);
 
     revert_output.lines().filter_map(|line| line.trim().parse::<i64>().ok()).collect()
 }
@@ -866,8 +854,10 @@ pub fn rows_from(inputs: &[Input], now: i64) -> Vec<Value> {
             let (worker_s, review_s, metered_usd, local_tokens) = totals_for(&inp.rounds, &b.id, now);
             let human_touches = b.events.iter().filter(|e| matches!(e, Event::Answer(_) | Event::Escalate(_))).count() as u64;
 
-            // Handle the reverted and named_by fields for landed beads
-            let (reverted, named_by) = if landed {
+            // Handle the reverted and named_by fields for landed beads: inside the
+            // window defects() answers None anyway, so the git and bd calls below
+            // (about a second apiece, over an 88-bead repo's rows) are skipped.
+            let (reverted, named_by) = if landed && now >= b.closed.unwrap_or(0) + DEFECT_WINDOW {
                 // For landed beads, try to determine if there are defects
                 if let Some(url) = &b.url {
                     let pr_number = get_pr_number(url);
