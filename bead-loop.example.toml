@@ -24,6 +24,7 @@ on_exhaust = "repeat"                  # repeat: cycle the stages until it lands
                                        # worker goes without a brief. A bead labelled `harness:aider` gets no research
                                        # round at all: whoever filed it already named its files
 # research_aider = true                # a brief whose Files all exist puts the worker under aider (default true)
+# diff_checks = false                  # before the pre-check and the review, a deterministic look at the diff: a test file the bead names that the diff never touches, or an added assertion that checks nothing, sends the round back
 # adopt = true                         # open bead/* PRs from anyone join the loop and merge on green
 # max_inflight = 2                     # PRs in the merge queue before the dev lane pauses; unset = no cap, bd's
                                        # dependencies are the only gate (the queues absorb the rest)
