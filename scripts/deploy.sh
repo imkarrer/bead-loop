@@ -54,6 +54,7 @@ if [ "$head" = "$have" ] && [ "$FORCE" = 0 ] && [ "$DRY" = 0 ]; then
   # Only exit early if the binary is present and not empty
   if [ ! -s "$HOME/.local/bin/bead-supervisor" ]; then
     echo "installed binary is missing or empty, redeploying to heal the system"
+    # Fall through to redeploy
   else
     exit 0; # nothing new: the timer's usual outcome
   fi
