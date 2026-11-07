@@ -12,12 +12,18 @@ class RoundSpec {
     gate: string,
     /// What the last round was sent back with.
     note: string,
+    /// The worker's last report, for the reviewer.
     report: string,
+    /// Where the worker writes that report, and the reviewer reads it.
+    report_file: string,
     log_file: string,
     result_file: string,
 }
 
 const MAX_STEPS: int = 80;
+/// The diff is in the prompt. A 40-step budget was enough for the 30B to search 38 times
+/// and never return a verdict (t-1 e2e, 7 Nov).
+const REVIEW_STEPS: int = 12;
 
 function infra_harness(words: string) -> root.machine.Event throws never {
     root.machine.Infra { kind: "infra", what: root.machine.Trouble.Harness, words: words }
@@ -71,6 +77,26 @@ function work_outcome(
         return root.machine.NoCommit { kind: "no_commit" };
     }
     null
+}
+
+/// The worker's report as the reviewer sees it.
+function report_text(report: root.agents.Report) -> string throws never {
+    `${report.outcome}: ${report.summary}`
+}
+
+function save_report(path: string, report: root.agents.Report) -> void throws never {
+    if (path.length() == 0) {
+        return;
+    }
+    let _ = baml.fs.write(path, report_text(report)) catch_all (e) {
+        _ => null,
+    };
+}
+
+function load_report(path: string) -> string throws never {
+    baml.fs.read(path) catch_all (e) {
+        _ => "",
+    }
 }
 
 function event_log(path: string) -> (ai.events.Event) -> void throws never {
@@ -130,6 +156,7 @@ function work_round(spec: RoundSpec) -> root.machine.Event[] throws never {
             return out;
         },
     };
+    save_report(spec.report_file, report);
     let after = git_head(spec.dir);
     let stop = work_outcome(report, before, after);
     if let event: root.machine.Event = stop {
@@ -142,12 +169,13 @@ function work_round(spec: RoundSpec) -> root.machine.Event[] throws never {
     }
     //# One fix round, with the gate's output
     let fix = `${spec.bead}\n\nYour commit is on this branch, but the gate failed. Fix it and commit:\n${first.output}`;
-    let _ = run_worker(spec, fix) catch_all (e) {
+    let fixed = run_worker(spec, fix) catch_all (e) {
         _ => {
             let out: root.machine.Event[] = [done, failed_session(e)];
             return out;
         },
     };
+    save_report(spec.report_file, fixed);
     let second = run_gate(spec.dir, spec.gate);
     if (second.ok) {
         [done, root.machine.GatePassed { kind: "gate_passed" }]
@@ -180,10 +208,24 @@ function review_outcome(v: root.agents.Verdict) -> root.machine.Event throws nev
 function run_reviewer(spec: RoundSpec, diff: string) -> root.agents.Verdict {
     let agent = ai.Agent.new(
         client = root.agents.client_for(spec.model),
-        max_steps = 40,
+        max_steps = REVIEW_STEPS,
         on_event = event_log(spec.log_file),
     );
     agent.run(root.agents.Review@spec(spec.bead, spec.report, diff)).value
+}
+
+/// No verdict is "nothing from the model": held, not charged. state-machine.md, and the
+/// t-1 e2e that charged a worker because the reviewer ran out of steps.
+function review_failed_session(e: unknown) -> root.machine.Event throws never {
+    match (e) {
+        let x: ai.errors.StepBudgetExceeded => {
+            infra_harness("the reviewer returned no verdict: out of steps")
+        },
+        let x: ai.errors.ParseFailed => {
+            infra_harness("the reviewer returned no verdict: it did not parse")
+        },
+        _ => infra_harness(`${e}`),
+    }
 }
 
 function review_round(spec: RoundSpec) -> root.machine.Event[] throws never {
@@ -200,23 +242,7 @@ function review_round(spec: RoundSpec) -> root.machine.Event[] throws never {
     };
     let verdict = run_reviewer(spec, diff.stdout.to_string()) catch_all (e) {
         _ => {
-            let out: root.machine.Event[] = [
-                match (e) {
-                    let x: ai.errors.StepBudgetExceeded => {
-                        root.machine.ReviewerCrashed {
-                            kind: "reviewer_crashed",
-                            words: "out of steps",
-                        }
-                    },
-                    let x: ai.errors.ParseFailed => {
-                        root.machine.ReviewerCrashed {
-                            kind: "reviewer_crashed",
-                            words: "its verdict did not parse",
-                        }
-                    },
-                    _ => infra_harness(`${e}`),
-                },
-            ];
+            let out: root.machine.Event[] = [review_failed_session(e)];
             return out;
         },
     };
@@ -263,6 +289,15 @@ test "the gate decides, not the report" {
 test "an approval" {
     let v = root.agents.Verdict { decision: root.agents.Decision.Approve, reason: "r", work_order: null };
     assert.is_type<root.machine.Approved>(review_outcome(v));
+}
+
+test "the worker's report is what the reviewer reads" {
+    assert.equal(report_text(report_of("done")), "done: s");
+    let p = "/tmp/bead-loop-report.txt";
+    save_report(p, report_of("done"));
+    assert.equal(load_report(p), "done: s");
+    assert.equal(load_report("/tmp/bead-loop-report-missing.txt"), "");
+    let _ = baml.fs.remove(p);
 }
 
 test "a rejection carries the whole work order" {

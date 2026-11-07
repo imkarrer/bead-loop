@@ -197,6 +197,15 @@ test "No commit" {
     assert.is_true(removes(s))
 }
 
+test "No commit on a kept branch leaves it" {
+    let b = bead(working());
+    b.kept = true;
+    let s = step(b, NoCommit { kind: "no_commit" }, policy());
+    assert.equal(s.bead.failures, 1);
+    assert.is_true(!removes(s));
+    assert.is_true(s.bead.kept)
+}
+
 test "the session timed out" {
     let s = step(bead(working()), RoundTimedOut { kind: "round_timed_out" }, policy());
     assert.equal(s.bead.failures, 1);

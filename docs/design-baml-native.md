@@ -168,6 +168,17 @@ undoes escaped quotes and newlines when that makes a unique match, and shows the
 a near miss; replayed, the model's own edit applies and matches the merged change. Two things
 are still missing: compaction, and keeping whole-file reads from piling up.
 
+**The first end-to-end run parked a bead that had already landed.** A throwaway `mul`
+bead: the worker committed, the gate passed, then the reviewer searched 38 times, never
+returned a verdict, and ran out of its 40 steps. That was charged as `ReviewerCrashed`, so
+the worker was sent back with "reviewer exited: out of steps", found the edit already done,
+made no new commit, and `NoCommit` deleted the branch. Three fixes, none of them a model
+call: a reviewer with no verdict is Infra (held in review, retried), `charge` keeps a
+branch that already passed the gate, and the reviewer has `read_file` only, with 12 steps,
+because the diff is in the prompt. The worker's report is written to disk for the next
+review; the first e2e passed an empty one. Compaction is still the next piece: the
+reviewer's journal was 529 KB after those 40 steps.
+
 **Long stalls are the box, not the harness.** Single calls took 5 to 7 minutes on `bl-gld` and
 `bl-b1a.1`. During one, disk and swap were silent, the CPU was about 90% idle, and the GPU sat
 near 100% with 16.0 of 16.4 GB of VRAM used. Opencode's logs show the same: on busy days 2–3%

@@ -103,8 +103,10 @@ function branch_survives(o: ModelOutcome) -> bool throws never {
 /// A failure: one more on the count, back to the dev queue with a note. Only a
 /// ModelOutcome can reach this, so infrastructure cannot be charged.
 function charge(b: Bead, o: ModelOutcome) -> Step throws never {
-    // An open PR lives on its branch, so a later failed round must not remove it.
-    let keep = branch_survives(o) || b.pr != null;
+    // Work that already passed the gate stays: a later no-commit must not throw it away
+    // (t-1 e2e, 7 Nov: the reviewer returned no verdict, the worker found the edit already
+    // done, and NoCommit deleted the branch). An open PR lives on its branch too.
+    let keep = branch_survives(o) || b.kept || b.pr != null;
     let n = b.at(Ready { kind: "ready" });
     n.failures = b.failures + 1;
     n.kept = keep;

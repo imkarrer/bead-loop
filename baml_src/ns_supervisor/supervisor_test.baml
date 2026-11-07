@@ -23,6 +23,16 @@ function no_commit() -> root.machine.Event[] throws never {
     [root.machine.NoCommit { kind: "no_commit" }]
 }
 
+function no_verdict() -> root.machine.Event[] throws never {
+    [
+        root.machine.Infra {
+            kind: "infra",
+            what: root.machine.Trouble.Harness,
+            words: "the reviewer returned no verdict: out of steps",
+        },
+    ]
+}
+
 function green() -> root.machine.Event[] throws never {
     [root.machine.ChecksGreen { kind: "checks_green" }]
 }
@@ -136,6 +146,36 @@ test "a held bead is tried again and lands" {
     turns(s, w, 9);
     assert.is_type<root.machine.Closed>(place_of(s));
     assert.equal(s.bead("t-1")?.failures, 0)
+}
+
+test "a no-commit after a reject keeps the branch the worker already landed" {
+    let w = one_bead(
+        [committed(), no_commit(), committed()],
+        [rejected(), approved()],
+        [green(), merged()],
+    );
+    let s = Supervisor.new(w, MemoryLog.new(), policy());
+    turns(s, w, 12);
+    assert.is_type<root.machine.Closed>(place_of(s));
+    assert.equal(s.bead("t-1")?.failures, 2);
+    assert.is_true(!w.calls.includes("remove_branch"))
+}
+
+test "a reviewer with no verdict is held and tried again, and nothing is charged" {
+    let w = one_bead([committed()], [no_verdict(), approved()], [green(), merged()]);
+    let s = Supervisor.new(w, MemoryLog.new(), policy());
+    s.hold_ticks = 1;
+    turns(s, w, 8);
+    assert.is_type<root.machine.Closed>(place_of(s));
+    assert.equal(s.bead("t-1")?.failures, 0);
+    assert.equal(
+        w.calls
+            .filter((c) -> {
+                c.starts_with("start_round Review")
+            })
+            .length(),
+        2,
+    )
 }
 
 test "a refused push holds in review and charges nothing" {

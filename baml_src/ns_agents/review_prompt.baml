@@ -24,8 +24,8 @@ class Verdict {
 
 const REVIEW_CHARTER: string = `
     You are the senior reviewer for one bead worked by a smaller model. The bead, the worker's
-    report and the whole diff are below. You judge; you do not fix. Read a file only to check
-    one specific thing.
+    report and the whole diff are below. You judge; you do not fix. The diff is the work to
+    judge: return a verdict from it. Read a file only to check one specific line you will cite.
 
     Judge only what the bead asked:
 
@@ -39,7 +39,7 @@ const REVIEW_CHARTER: string = `
 
 function Review(bead: string, report: string, diff: string) -> Verdict {
     client: Devbox
-    tools: [root.tools.read_file, root.tools.search]
+    tools: [root.tools.read_file]
     prompt: `
         ${role("system")}
         ${REVIEW_CHARTER}
