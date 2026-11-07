@@ -49,15 +49,17 @@ fi
 git -C "$SRC" fetch -q origin main
 head=$(git -C "$SRC" rev-parse origin/main)
 have=$(cat "$DEPLOY/deployed" 2>/dev/null || true)
-# Check if the installed binary is missing or empty, if so we need to redeploy
+# Nothing new by commit alone is not enough: a crash can leave the installed binary
+# missing or 0 bytes (bash runs a 0-byte file as an empty script, exit 0, so the
+# service looks healthy) with $DEPLOY/deployed already at head. HEAL says this is that
+# case, so the release search below re-wants $have's own release instead of stopping at it.
+HEAL=0
 if [ "$head" = "$have" ] && [ "$FORCE" = 0 ] && [ "$DRY" = 0 ]; then
-  # Only exit early if the binary is present and not empty
-  if [ ! -s "$HOME/.local/bin/bead-supervisor" ]; then
-    echo "installed binary is missing or empty, redeploying to heal the system"
-    # Fall through to redeploy
-  else
+  if [ -s "$HOME/.local/bin/bead-supervisor" ]; then
     exit 0; # nothing new: the timer's usual outcome
   fi
+  echo "installed binary is missing or empty at ${have:0:7}: redeploying to heal"
+  HEAL=1
 fi
 
 # The newest commit on main that has its release, newer than what runs. While merges
@@ -66,7 +68,7 @@ fi
 released=$(gh release list -R "$repo" -L 50 --json tagName -q '.[].tagName' 2>/dev/null || true)
 want=''
 for c in $(git -C "$SRC" rev-list --first-parent -n 50 origin/main); do
-  if [ "$c" = "$have" ] && [ "$FORCE" = 0 ]; then break; fi   # nothing newer is released yet
+  if [ "$c" = "$have" ] && [ "$FORCE" = 0 ] && [ "$HEAL" = 0 ]; then break; fi   # nothing newer is released yet
   if grep -qx "main-${c:0:7}" <<<"$released"; then want=$c; break; fi
 done
 if [ -z "$want" ]; then

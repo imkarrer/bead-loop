@@ -2746,6 +2746,63 @@ case_install_from_the_package() {
   assert_nofile "$HOME/.local/bin/bead-supervisor" "nothing built or copied to ~/.local/bin"
   assert_match "$out" "the flox package" "said where the binary is from"
 }
+# setup_deploy: a throwaway checkout plus its own local "origin" for scripts/deploy.sh —
+# no network: gh (release list/download) and systemctl are the usual stubs, and a local
+# flox stub (just this case's PATH, ahead of a real flox) runs `activate -d DIR -- CMD`
+# as CMD. $WANT is the one commit on the fixture's main, released as main-<its 7 chars>.
+setup_deploy() {
+  T=$(cd "$(mktemp -d)" && pwd -P); export T
+  export TEST_CTRL=$T/ctrl; mkdir -p "$TEST_CTRL"
+  export HOME=$T/home BEAD_LOOP_STATE=$T/state BEAD_LOOP_DEPLOY=$T/deploy
+  mkdir -p "$HOME" "$BEAD_LOOP_STATE"
+  git init -q --bare "$T/upstream.git"
+  local tmp; tmp=$(mktemp -d)
+  git clone -q "file://$T/upstream.git" "$tmp" 2>/dev/null
+  printf '#!/usr/bin/env bash\nset -euo pipefail\nmkdir -p "$HOME/.local/bin"\ncp "$BEAD_SUPERVISOR_BIN" "$HOME/.local/bin/bead-supervisor"\nchmod 755 "$HOME/.local/bin/bead-supervisor"\n' >"$tmp/install.sh"
+  chmod +x "$tmp/install.sh"
+  git -C "$tmp" add -A && git -C "$tmp" commit -qm base && git -C "$tmp" branch -qM main && git -C "$tmp" push -q -u origin main
+  WANT=$(git -C "$tmp" rev-parse HEAD); export WANT
+  rm -rf "$tmp"
+  git clone -q "file://$T/upstream.git" "$BEAD_LOOP_DEPLOY/src" 2>/dev/null
+  mkdir -p "$T/here/scripts"
+  git -C "$T/here" init -q
+  git -C "$T/here" remote add origin https://github.com/test-owner/test-repo.git
+  cp "$HERE/../scripts/deploy.sh" "$T/here/scripts/deploy.sh"
+  printf '#!/usr/bin/env bash\nexit 0\n' >"$TEST_CTRL/release-bin"   # a fake bead-supervisor: --help always succeeds
+  mkdir -p "$T/localbin"
+  printf '#!/usr/bin/env bash\nset -euo pipefail\nshift\n[ "$1" = -d ] && shift 2\n[ "$1" = -- ] && shift\nexec "$@"\n' >"$T/localbin/flox"
+  chmod +x "$T/localbin/flox"
+}
+# shellcheck disable=SC2120  # neither case passes an arg; a --force or --dry-run case could
+run_deploy() { PATH=$T/localbin:$PATH bash "$T/here/scripts/deploy.sh" "$@"; }
+case_deploy_heals_empty_binary() {
+  # 30 Oct: a hard stop left ~/.local/bin/bead-supervisor at 0 bytes with deploy/deployed
+  # already at head — bash runs an empty file as an empty script, exit 0, so nothing ever
+  # showed it was broken. Missing or empty with head = have must not take the "nothing
+  # new" exit; it must redeploy the same release and leave a real binary installed.
+  setup_deploy
+  echo "$WANT" >"$BEAD_LOOP_DEPLOY/deployed"
+  printf 'main-%s\n' "${WANT:0:7}" >"$TEST_CTRL/releases"
+  mkdir -p "$HOME/.local/bin"; : >"$HOME/.local/bin/bead-supervisor"   # empty: the crash that left it this way
+  rc=0; out=$(run_deploy 2>&1) || rc=$?
+  assert_eq "$rc" 0 "the heal redeploys cleanly: $out"
+  assert_match "$out" "redeploying to heal" "said why"
+  [ -s "$HOME/.local/bin/bead-supervisor" ] && ok || bad "the installed binary is non-empty after the heal"
+  assert_eq "$(cat "$BEAD_LOOP_DEPLOY/deployed")" "$WANT" "deployed still names the healed commit"
+  assert_match "$(cat "$TEST_CTRL/systemctl.log")" "restart bead-supervisor.service" "the service was restarted"
+}
+case_deploy_empty_download_fails() {
+  # The release's own binary can be the 0-byte one (the pipeline's upload truncated, or
+  # the object never finished) — deploy.sh must fail before install, not pass it on.
+  setup_deploy
+  printf 'main-%s\n' "${WANT:0:7}" >"$TEST_CTRL/releases"
+  rm -f "$TEST_CTRL/release-bin"   # gh release download now hands out a 0-byte file
+  rc=0; out=$(run_deploy 2>&1) || rc=$?
+  assert_eq "$rc" 1 "an empty download fails the deploy: $out"
+  assert_match "$out" "downloaded binary is empty" "said why"
+  assert_nofile "$HOME/.local/bin/bead-supervisor" "nothing installed"
+  assert_nofile "$BEAD_LOOP_DEPLOY/deployed" "no deploy recorded"
+}
 case_ui_on_macos() {
   # Under launchd there is no journal and no systemd: BEAD_LOOP_LOG names the file the
   # agent writes, and the page's log is its last lines, each at the time the line starts
