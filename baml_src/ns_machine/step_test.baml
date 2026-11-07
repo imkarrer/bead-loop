@@ -17,6 +17,7 @@ function policy() -> Policy throws never {
         merge: MergeMode.Pipeline,
         second_opinion: true,
         ask_before_pr: false,
+        research: "",
     }
 }
 
@@ -117,9 +118,14 @@ function is_held(s: Step) -> bool throws never {
 // --- research ---
 
 test "Researcher writes a brief" {
-    let s = step(bead(researching()), BriefWritten { kind: "brief_written", overruled: false }, policy());
+    let s = step(
+        bead(researching()),
+        BriefWritten { kind: "brief_written", overruled: false, text: "Files:\ncalc.js" },
+        policy(),
+    );
     assert.is_type<Ready>(s.bead.place);
-    assert.equal(s.bead.failures, 0)
+    assert.equal(s.bead.failures, 0);
+    assert.equal(s.bead.brief, "Files:\ncalc.js")
 }
 
 test "Researcher BLOCKED asks for a second opinion" {
@@ -137,7 +143,11 @@ test "Researcher BLOCKED asks for a second opinion" {
 }
 
 test "the second opinion writes a brief" {
-    let s = step(bead(researching()), BriefWritten { kind: "brief_written", overruled: true }, policy());
+    let s = step(
+        bead(researching()),
+        BriefWritten { kind: "brief_written", overruled: true, text: "Files:\nok" },
+        policy(),
+    );
     assert.is_type<Ready>(s.bead.place);
     assert.equal(s.bead.failures, 0)
 }
@@ -638,7 +648,7 @@ test "infrastructure never charges a failure, in any place" {
 function exits() -> Event[] throws never {
     [
         Picked { kind: "picked" },
-        BriefWritten { kind: "brief_written", overruled: false },
+        BriefWritten { kind: "brief_written", overruled: false, text: "" },
         GatePassed { kind: "gate_passed" },
         ReviewPicked { kind: "review_picked" },
         PrOpened { kind: "pr_opened", url: "u", head: "h" },
@@ -701,7 +711,7 @@ function all_events() -> Event[] throws never {
         ChecksRed { kind: "checks_red", checks: "c", head: "h" },
         Infra { kind: "infra", what: Trouble.Gh, words: "w" },
         ResearchPicked { kind: "research_picked" },
-        BriefWritten { kind: "brief_written", overruled: true },
+        BriefWritten { kind: "brief_written", overruled: true, text: "t" },
         ResearchBlocked { kind: "research_blocked", line: "l", second_opinion: true },
         Picked { kind: "picked" },
         Committed { kind: "committed", sha: "s" },

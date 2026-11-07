@@ -12,6 +12,7 @@ class Ticket {
 enum RoundKind {
     Work,
     Review,
+    Research,
 }
 
 /// A round that has ended, and what it found.

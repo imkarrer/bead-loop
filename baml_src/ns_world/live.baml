@@ -165,6 +165,8 @@ class LiveWorld {
                 note: note,
                 report: root.rounds.load_report(`${self.state}/beads/${id}/report`),
                 report_file: `${self.state}/beads/${id}/report`,
+                brief: root.rounds.load_report(`${self.state}/beads/${id}/brief`),
+                brief_file: `${self.state}/beads/${id}/brief`,
                 log_file: `${self.state}/logs/${id}.${stamp}.${kind}.jsonl`,
                 result_file: `${dir}/${id}.result.json`,
             };
@@ -359,6 +361,14 @@ class LiveWorld {
             id: string,
             because: string,
         ) -> void throws root.machine.Infra {
+            let text = root.agents.park_brief_text(because, "");
+            let dir = `${self.state}/beads/${id}`;
+            let _ = baml.sys.run("mkdir", args = ["-p", dir]) catch_all (e) {
+                _ => null,
+            };
+            let _ = baml.fs.write(`${dir}/park.md`, text) catch_all (e) {
+                _ => null,
+            };
             self.note(id, `parked: ${because}`);
         }
     }

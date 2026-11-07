@@ -6,6 +6,7 @@ class Script {
     work: root.machine.Event[][],
     review: root.machine.Event[][],
     pr: root.machine.Event[][],
+    research: root.machine.Event[][],
 }
 
 class FakeWorld {
@@ -61,7 +62,11 @@ class FakeWorld {
             let queue = if (r.kind == RoundKind.Work) {
                 s?.work
             } else {
-                s?.review
+                if (r.kind == RoundKind.Review) {
+                    s?.review
+                } else {
+                    s?.research
+                }
             };
             let events = queue?.shift() ?? [];
             self.finished_now.push(RoundDone { id: r.id, kind: r.kind, events: events });

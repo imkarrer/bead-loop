@@ -93,7 +93,20 @@ function perform(
             s.world.delete_remote_branch(id);
             none
         },
-        let x: root.machine.SecondOpinion => none,
+        let x: root.machine.SecondOpinion => {
+            let started: root.machine.Event[] = [];
+            let _ = s.world.start_round(
+                id,
+                root.world.RoundKind.Research,
+                s.policy.research,
+                x.first_reply,
+            ) catch (e) {
+                root.machine.Infra => {
+                    started = [e];
+                },
+            };
+            started
+        },
         let x: root.machine.WriteParkBrief => {
             s.world.write_park_brief(id, x.because);
             none
@@ -206,6 +219,10 @@ function queue_of(
     })
 }
 
+function needs_research(s: Supervisor, b: root.machine.Bead) -> bool throws never {
+    s.policy.research.length() > 0 && b.brief == null
+}
+
 function start_rounds(s: Supervisor) -> void throws never {
     let busy = s.world.running() catch (e) {
         root.machine.Infra => {
@@ -224,13 +241,31 @@ function start_rounds(s: Supervisor) -> void throws never {
     }
     for (
         let b in queue_of(s, (x) -> {
-            x.place is root.machine.Ready
+            x.place is root.machine.Ready && needs_research(s, x)
+        })
+    ) {
+        if (free > 0) {
+            free = free - start_research(s, b);
+        }
+    }
+    for (
+        let b in queue_of(s, (x) -> {
+            x.place is root.machine.Ready && !needs_research(s, x)
         })
     ) {
         if (free > 0) {
             free = free - start_work(s, b);
         }
     }
+}
+
+function start_research(s: Supervisor, b: root.machine.Bead) -> int throws never {
+    apply(s, b.id, root.machine.ResearchPicked { kind: "research_picked" });
+    let now = s.bead(b.id) ?? b;
+    if (!(now.place is root.machine.Researching) || now.hold != null) {
+        return 0;
+    }
+    start(s, b.id, root.world.RoundKind.Research, s.policy.research)
 }
 
 function start_work(s: Supervisor, b: root.machine.Bead) -> int throws never {
@@ -289,7 +324,9 @@ function recover(
         },
     };
     for (let b in s.beads) {
-        let on_a_round = b.place is root.machine.Working || b.place is root.machine.Reviewing;
+        let on_a_round = b.place is root.machine.Working
+            || b.place is root.machine.Reviewing
+            || b.place is root.machine.Researching;
         if (
             on_a_round
                 && !alive.some((r) -> {

@@ -61,6 +61,7 @@ function policy() -> root.machine.Policy throws never {
         merge: root.machine.MergeMode.Auto,
         second_opinion: true,
         ask_before_pr: false,
+        research: "",
     }
 }
 
@@ -82,10 +83,11 @@ function one_bead(
     work: root.machine.Event[][],
     review: root.machine.Event[][],
     pr: root.machine.Event[][],
+    research: root.machine.Event[][] = [],
 ) -> root.world.FakeWorld throws never {
     root.world.FakeWorld.new(
         [ticket("t-1")],
-        [root.world.Script { id: "t-1", work: work, review: review, pr: pr }],
+        [root.world.Script { id: "t-1", work: work, review: review, pr: pr, research: research }],
     )
 }
 
@@ -206,8 +208,15 @@ test "one lane runs one round, fewest failures first" {
                 work: [no_commit(), committed()],
                 review: [approved()],
                 pr: [],
+                research: [],
             },
-            root.world.Script { id: "b", work: [committed()], review: [approved()], pr: [] },
+            root.world.Script {
+                id: "b",
+                work: [committed()],
+                review: [approved()],
+                pr: [],
+                research: [],
+            },
         ],
     );
     let s = Supervisor.new(w, MemoryLog.new(), policy());
@@ -216,6 +225,27 @@ test "one lane runs one round, fewest failures first" {
     w.finish();
     tick(s);
     assert.equal(w.running_now.at(0)?.id, "b")
+}
+
+function briefed() -> root.machine.Event[] throws never {
+    [
+        root.machine.BriefWritten {
+            kind: "brief_written",
+            overruled: false,
+            text: "Files:\ncalc.js",
+        },
+    ]
+}
+
+test "research runs before work when the policy names a researcher" {
+    let p = policy();
+    p.research = "devbox/coder";
+    let w = one_bead([committed()], [approved()], [green(), merged()], research = [briefed()]);
+    let s = Supervisor.new(w, MemoryLog.new(), p);
+    turns(s, w, 8);
+    assert.is_type<root.machine.Closed>(place_of(s));
+    assert.is_true(w.calls.includes("start_round Research devbox/coder"));
+    assert.equal(s.bead("t-1")?.brief, "Files:\ncalc.js")
 }
 
 test "a restart folds the log and keeps a running round" {

@@ -171,12 +171,14 @@ function on_researching(b: Bead, e: Event, p: Policy) -> Step throws never {
     let back = b.at(Ready { kind: "ready" });
     match (e) {
         let x: BriefWritten => {
+            let n = back.copy();
+            n.brief = x.text;
             let text = if (x.overruled) {
                 "brief written: the second opinion overruled the block"
             } else {
                 "brief written"
             };
-            Step { bead: back, effects: [Note { text: text }] }
+            Step { bead: n, effects: [Note { text: text }] }
         },
         let x: ResearchBlocked => {
             if (x.second_opinion || !p.second_opinion) {

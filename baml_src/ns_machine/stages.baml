@@ -27,6 +27,8 @@ class Policy {
     second_opinion: bool,
     /// Push and stop short of a PR, for you to publish.
     ask_before_pr: bool,
+    /// The researcher model; empty means the worker round runs without a brief.
+    research: string,
 }
 
 function total_attempts(stages: Stage[]) -> int throws never {

@@ -16,6 +16,10 @@ class RoundSpec {
     report: string,
     /// Where the worker writes that report, and the reviewer reads it.
     report_file: string,
+    /// The researcher's brief, for the worker.
+    brief: string,
+    /// Where the researcher writes that brief, and the worker reads it.
+    brief_file: string,
     log_file: string,
     result_file: string,
 }
@@ -142,13 +146,20 @@ function failed_session(e: unknown) -> root.machine.Event throws never {
     }
 }
 
+function worker_task(spec: RoundSpec) -> string throws never {
+    let body = spec.bead;
+    if (spec.brief.length() > 0) {
+        body = `${body}\n\n<research>\n${spec.brief}\n</research>`;
+    }
+    if (spec.note.length() > 0) {
+        body = `${body}\n\nThe last round was sent back:\n${spec.note}`;
+    }
+    body
+}
+
 function work_round(spec: RoundSpec) -> root.machine.Event[] throws never {
     let before = git_head(spec.dir);
-    let task = if (spec.note.length() > 0) {
-        `${spec.bead}\n\nThe last round was sent back:\n${spec.note}`
-    } else {
-        spec.bead
-    };
+    let task = worker_task(spec);
     let failed: root.machine.Event? = null;
     let report = run_worker(spec, task) catch_all (e) {
         _ => {
@@ -249,6 +260,31 @@ function review_round(spec: RoundSpec) -> root.machine.Event[] throws never {
     [review_outcome(verdict)]
 }
 
+function run_researcher(spec: RoundSpec) -> root.agents.ResearchResult {
+    let agent = ai.Agent.new(
+        client = root.agents.client_for(spec.model),
+        max_steps = 40,
+        on_event = event_log(spec.log_file),
+    );
+    agent.run(root.agents.Research@spec(spec.bead)).value
+}
+
+function research_round(spec: RoundSpec) -> root.machine.Event[] throws never {
+    let result = run_researcher(spec) catch_all (e) {
+        _ => {
+            let out: root.machine.Event[] = [infra_harness(`${e}`)];
+            return out;
+        },
+    };
+    if (result.outcome == "brief" && spec.brief_file.length() > 0) {
+        let _ = baml.fs.write(spec.brief_file, root.agents.brief_text(result)) catch_all (e) {
+            _ => null,
+        };
+    }
+    let second = spec.note.starts_with("BLOCKED:");
+    [root.agents.research_outcome(result, second)]
+}
+
 /// The process entry: `bead-agent round --spec_file PATH`, started in the worktree, since
 /// the tools take paths relative to it.
 function round(spec_file: string) -> string {
@@ -256,7 +292,11 @@ function round(spec_file: string) -> string {
     let events = if (spec.kind == root.world.RoundKind.Work) {
         work_round(spec)
     } else {
-        review_round(spec)
+        if (spec.kind == root.world.RoundKind.Review) {
+            review_round(spec)
+        } else {
+            research_round(spec)
+        }
     };
     let done = root.world.RoundDone { id: spec.id, kind: spec.kind, events: events };
     let _ = baml.fs.write(spec.result_file, baml.json.stringify(done));
@@ -289,6 +329,31 @@ test "the gate decides, not the report" {
 test "an approval" {
     let v = root.agents.Verdict { decision: root.agents.Decision.Approve, reason: "r", work_order: null };
     assert.is_type<root.machine.Approved>(review_outcome(v));
+}
+
+function spec_of(brief: string, note: string) -> RoundSpec throws never {
+    RoundSpec {
+        id: "t-1",
+        kind: root.world.RoundKind.Work,
+        model: "m",
+        dir: ".",
+        base: "main",
+        bead: "BEAD",
+        gate: "",
+        note: note,
+        report: "",
+        report_file: "",
+        brief: brief,
+        brief_file: "",
+        log_file: "",
+        result_file: "",
+    }
+}
+
+test "the worker prompt carries the brief and the send-back" {
+    assert.contains(worker_task(spec_of("the brief", "")), "<research>");
+    assert.contains(worker_task(spec_of("the brief", "")), "the brief");
+    assert.contains(worker_task(spec_of("", "REJECT: x")), "sent back")
 }
 
 test "the worker's report is what the reviewer reads" {

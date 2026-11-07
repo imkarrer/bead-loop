@@ -176,8 +176,10 @@ made no new commit, and `NoCommit` deleted the branch. Three fixes, none of them
 call: a reviewer with no verdict is Infra (held in review, retried), `charge` keeps a
 branch that already passed the gate, and the reviewer has `read_file` only, with 12 steps,
 because the diff is in the prompt. The worker's report is written to disk for the next
-review; the first e2e passed an empty one. Compaction is still the next piece: the
-reviewer's journal was 529 KB after those 40 steps.
+review; the first e2e passed an empty one. Compaction is a pure function over tool
+outputs (oldest stubbed, last two kept) and `read_file` will not return the same lines
+twice in one process; a custom `ai.Runner` that can drop messages already sent is still
+ahead, because `Agent.run` always starts a fresh Journal.
 
 **Long stalls are the box, not the harness.** Single calls took 5 to 7 minutes on `bl-gld` and
 `bl-b1a.1`. During one, disk and swap were silent, the CPU was about 90% idle, and the GPU sat
@@ -328,7 +330,12 @@ A walking skeleton, each step runnable.
 4. **Read-only agents** against the real local models.
 5. **`Work`, its tools and the sandbox.** First real bead landed on a throwaway repo.
 6. **`LiveWorld` on a small repo.** Then this one, and the Rust loop goes off.
-7. **The page, `OfflineWorld`, the evals, then GEPA.**
+7. **The page, `OfflineWorld`, research, park brief, compaction.** Walking skeletons
+   built on this branch: `bead-loop page` serves `/` and `/api/status` from a fold of
+   the log; `bead-loop bench` runs a case on `OfflineWorld` (no bd, no gh); research
+   runs before work when the policy names a researcher; a park writes `park.md`;
+   `compact_outputs` stubs the oldest tool results. Switch-over is not started.
+8. **The evals, then GEPA.**
 
 Work on a long-lived branch. A merge to `main` deploys to the box, so deleting `src/` on
 `main` stops the current loop. Leave it there until step 6.

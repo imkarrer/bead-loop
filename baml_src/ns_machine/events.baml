@@ -91,6 +91,7 @@ class ResearchPicked {
 class BriefWritten {
     kind: "brief_written",
     overruled: bool,
+    text: string,
 }
 
 class ResearchBlocked {

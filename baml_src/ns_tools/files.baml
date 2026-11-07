@@ -16,8 +16,34 @@ function tail(text: string) -> string throws never {
     `[first ${n - OUTPUT_LIMIT} characters cut]\n${text.slice(n - OUTPUT_LIMIT, n)}`
 }
 
+function seen_path() -> string throws never {
+    `/tmp/bead-loop-seen-${baml.sys.pid()}`
+}
+
+function already_read(path: string, offset: int) -> bool throws never {
+    let text = baml.fs.read(seen_path()) catch_all (e) {
+        _ => "",
+    };
+    text.split("\n").includes(`${path}\t${offset}`)
+}
+
+function mark_read(path: string, offset: int) -> void throws never {
+    let out = baml.fs.open(seen_path(), "a") catch_all (e) {
+        _ => {
+            return;
+        },
+    };
+    let _ = out.write(`${path}\t${offset}\n`) catch_all (e) {
+        _ => 0,
+    };
+    let _ = out.close() catch_all (e) {
+        _ => null,
+    };
+}
+
 /// Read lines of a file. A file longer than the limit comes in parts: pass `offset`, the
-/// 1-based line to start from, for the next one.
+/// 1-based line to start from, for the next one. A second read of the same lines in this
+/// process returns a stub, so whole-file reads do not pile up (bl-b1a.1, 7 Nov).
 function read_file(path: string, offset: int = 1) -> string throws never {
     let text = baml.fs.read(path) catch_all (e) {
         _ => {
@@ -39,6 +65,10 @@ function read_file(path: string, offset: int = 1) -> string throws never {
     } else {
         total
     };
+    if (already_read(path, offset)) {
+        return `${path} already read this session (lines ${start + 1}-${end} of ${total}). Use that text; do not read it again.`;
+    }
+    mark_read(path, offset);
     let body = lines.slice(start, end).join("\n");
     `[${path}: lines ${start + 1}-${end} of ${total}]\n${body}`
 }
@@ -219,5 +249,13 @@ test "read comes in parts" {
     let _ = baml.fs.write(p, lines.join("\n"));
     assert.contains(read_file(p), "lines 1-2000 of 2100");
     assert.contains(read_file(p, offset = 2001), "lines 2001-2100 of 2100");
+    let _ = baml.fs.remove(p);
+}
+
+test "a second read of the same lines is a stub" {
+    let p = "/tmp/bead-loop-read-again.txt";
+    let _ = baml.fs.write(p, "alpha\nbeta\n");
+    assert.contains(read_file(p), "alpha");
+    assert.contains(read_file(p), "already read this session");
     let _ = baml.fs.remove(p);
 }

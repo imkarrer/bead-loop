@@ -88,6 +88,8 @@ class Bead {
     rerun_head: string?,
     /// What the last send-back said, for the next round to act on.
     last_note: string?,
+    /// The researcher's brief; absent means research has not run yet.
+    brief: string?,
 
     function new(id: string) -> Bead throws never {
         Bead {
@@ -103,6 +105,7 @@ class Bead {
             charged_head: null,
             rerun_head: null,
             last_note: null,
+            brief: null,
         }
     }
 
@@ -120,6 +123,7 @@ class Bead {
             charged_head: self.charged_head,
             rerun_head: self.rerun_head,
             last_note: self.last_note,
+            brief: self.brief,
         }
     }
 

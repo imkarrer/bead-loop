@@ -17,7 +17,7 @@ const WORK_CHARTER: string = `
     Order:
 
     1. The bead is below. It names the files, and its acceptance criteria are the commands that
-       prove the work.
+       prove the work. A <research> brief, if present, is what to start from.
     2. Read each named file once, with an offset when it is long. Confirm every claim the bead
        makes. A false claim means you stop and report blocked, naming the file and line.
     3. Change only the named files, in the style around them. One edit_file call per hunk, with
