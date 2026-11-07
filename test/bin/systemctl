@@ -8,11 +8,14 @@ if [ "${1:-}" = --version ]; then echo "systemd 255 (stub)"; exit 0; fi
 shift
 case "${1:-}" in
   is-active)
-    unit=$2
+    unit=$2; [ "$unit" = -q ] && unit=$3
     if [ -e "$TEST_CTRL/systemctl-inactive" ] && grep -qx "$unit" "$TEST_CTRL/systemctl-inactive"; then
       echo inactive; exit 3
     fi
     echo active ;;
   show) printf 'ActiveState=active\nSubState=running\n' ;;
+  is-enabled) exit 0 ;;
+  daemon-reload|restart|stop|start) echo "$*" >>"$TEST_CTRL/systemctl.log" ;;
+  status) : ;;
   *) echo "stub systemctl: unknown $*" >&2; exit 2 ;;
 esac

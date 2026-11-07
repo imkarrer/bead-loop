@@ -28,6 +28,19 @@ if [ "$1" = api ] && [[ $2 == repos/*/pulls/*/comments ]]; then
   if [ -e "$TEST_CTRL/inline-comments.json" ]; then cat "$TEST_CTRL/inline-comments.json"; else echo '[]'; fi
   exit 0
 fi
+# release list --json tagName: the test's one-tag-per-line $TEST_CTRL/releases, or none.
+# release download TAG -p bead-supervisor -D DIR: the test's $TEST_CTRL/release-bin (the
+# bytes to hand out) into DIR/bead-supervisor — missing means an empty (0-byte) binary,
+# as scripts/deploy.sh must treat a broken release.
+if [ "$1" = release ] && [ "$2" = list ]; then
+  cat "$TEST_CTRL/releases" 2>/dev/null || true
+  exit 0
+fi
+if [ "$1" = release ] && [ "$2" = download ]; then
+  dir=; while [ $# -gt 0 ]; do case $1 in -D) dir=$2;; esac; shift; done
+  [ -e "$TEST_CTRL/release-bin" ] && cp "$TEST_CTRL/release-bin" "$dir/bead-supervisor" || : >"$dir/bead-supervisor"
+  exit 0
+fi
 [ "$1" = pr ] || { echo "stub gh: only pr" >&2; exit 2; }
 primary_url() { [ -e "$TEST_CTRL/pr.json" ] && jq -r .url "$TEST_CTRL/pr.json" 2>/dev/null || true; }
 primary_head() { [ -e "$TEST_CTRL/pr.json" ] && jq -r '.head // empty' "$TEST_CTRL/pr.json" 2>/dev/null || true; }
