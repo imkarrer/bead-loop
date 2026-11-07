@@ -52,3 +52,19 @@ function Work(bead: string) -> Report {
         ${ctx.output_format()}
     `
 }
+
+/// The last stage. Claude Code edits in the worktree this process was started in
+/// and reports once. It does not use our tools.
+function WorkOnClaude(bead: string) -> Report {
+    client: Sonnet
+    prompt: `
+        ${role("system")}
+        ${WORK_CHARTER}
+        You are running as Claude Code, in the bead's worktree. Use your own tools.
+        Commit before you report. A report of done with no commit is a failure.
+        ${role("user")}
+        ${bead}
+
+        ${ctx.output_format()}
+    `
+}

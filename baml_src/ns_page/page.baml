@@ -93,7 +93,7 @@ function response_of(reply: PageReply) -> baml.http.Response throws never {
 /// `bead-loop page --config_file PATH --addr 127.0.0.1:4097`. Recovers on every
 /// request so a restart of the supervisor is visible here without shared memory.
 function page(config_file: string, addr: string = "127.0.0.1:4097") -> never {
-    let c = baml.json.decode<root.supervisor.LoopConfig>(baml.fs.read(config_file));
+    let c = root.supervisor.load_config(config_file);
     let world = root.world.LiveWorld {
         repo: c.repo,
         state: c.state,
@@ -102,6 +102,7 @@ function page(config_file: string, addr: string = "127.0.0.1:4097") -> never {
         label: c.label,
         gate: c.gate,
         agent_bin: c.agent_bin,
+        merge: root.machine.merge_name(c.policy.merge),
     };
     let server = baml.http.Server.bind(addr);
     server.serve((req) -> {

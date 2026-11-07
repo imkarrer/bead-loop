@@ -59,3 +59,26 @@ function Review(bead: string, report: string, diff: string) -> Verdict {
         ${ctx.output_format()}
     `
 }
+
+/// The same verdict, as one Claude Code turn. The diff is in the prompt.
+function ReviewOnClaude(bead: string, report: string, diff: string) -> Verdict {
+    client: Sonnet
+    prompt: `
+        ${role("system")}
+        ${REVIEW_CHARTER}
+        ${role("user")}
+        <bead>
+        ${bead}
+        </bead>
+
+        <worker-report>
+        ${report}
+        </worker-report>
+
+        <diff>
+        ${diff}
+        </diff>
+
+        ${ctx.output_format()}
+    `
+}

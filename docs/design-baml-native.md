@@ -330,11 +330,20 @@ A walking skeleton, each step runnable.
 4. **Read-only agents** against the real local models.
 5. **`Work`, its tools and the sandbox.** First real bead landed on a throwaway repo.
 6. **`LiveWorld` on a small repo.** Then this one, and the Rust loop goes off.
+   The watcher now speaks this repo's merge mode: a pipeline PR green for 30
+   minutes is held, a check the base does not require is not charged, a killed
+   required check is re-run once, and a skipped build is not a result.
+   `bead-loop run --config_file .bead-loop.toml` reads that file and the global
+   stages. A `claude/` stage is one Claude Code turn. A round starts under
+   `bwrap` when it is on `PATH`, worktree and git dir writable, the rest not.
 7. **The page, `OfflineWorld`, research, park brief, compaction.** Walking skeletons
    built on this branch: `bead-loop page` serves `/` and `/api/status` from a fold of
    the log; `bead-loop bench` runs a case on `OfflineWorld` (no bd, no gh); research
    runs before work when the policy names a researcher; a park writes `park.md`;
    `compact_outputs` stubs the oldest tool results. Switch-over is not started.
+   Still in front of it: one real bead closed on this binary, compaction inside
+   the session (`Agent.run` still keeps the whole journal), the operating page,
+   and a unit with `KillMode=process`.
 8. **The evals, then GEPA.**
 
 Work on a long-lived branch. A merge to `main` deploys to the box, so deleting `src/` on

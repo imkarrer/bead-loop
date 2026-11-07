@@ -120,6 +120,9 @@ function event_log(path: string) -> (ai.events.Event) -> void throws never {
 }
 
 function run_worker(spec: RoundSpec, task: string) -> root.agents.Report {
+    if (root.agents.uses_claude(spec.model)) {
+        return root.agents.WorkOnClaude(task);
+    }
     let agent = ai.Agent.new(
         client = root.agents.client_for(spec.model),
         max_steps = MAX_STEPS,
@@ -217,6 +220,9 @@ function review_outcome(v: root.agents.Verdict) -> root.machine.Event throws nev
 }
 
 function run_reviewer(spec: RoundSpec, diff: string) -> root.agents.Verdict {
+    if (root.agents.uses_claude(spec.model)) {
+        return root.agents.ReviewOnClaude(spec.bead, spec.report, diff);
+    }
     let agent = ai.Agent.new(
         client = root.agents.client_for(spec.model),
         max_steps = REVIEW_STEPS,

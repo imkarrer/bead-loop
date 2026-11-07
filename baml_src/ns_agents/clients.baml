@@ -34,3 +34,14 @@ function client_for(model: string) -> ai.Client throws never {
         _ => Devbox,
     }
 }
+
+/// The last stage is one Claude Code turn, with its own tools. The local stages
+/// use our tools.
+function uses_claude(model: string) -> bool throws never {
+    model.starts_with("claude/")
+}
+
+test "the frontier stage is Claude, and the GPU stage is not" {
+    assert.is_true(uses_claude("claude/sonnet"));
+    assert.is_true(!uses_claude("devbox/coder"))
+}

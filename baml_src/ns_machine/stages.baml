@@ -19,6 +19,15 @@ enum MergeMode {
     External,
 }
 
+function merge_name(mode: MergeMode) -> string throws never {
+    match (mode) {
+        MergeMode.Auto => "auto",
+        MergeMode.Pipeline => "pipeline",
+        MergeMode.Manual => "manual",
+        MergeMode.External => "external",
+    }
+}
+
 class Policy {
     stages: Stage[],
     on_exhaust: OnExhaust,

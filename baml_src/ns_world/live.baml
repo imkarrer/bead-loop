@@ -16,6 +16,8 @@ class LiveWorld {
     label: string,
     gate: string,
     agent_bin: string,
+    /// auto, pipeline, manual, or external. The watcher reads it.
+    merge: string,
 
     function worktree(self, id: string) -> string throws never {
         `${self.state}/wt/${id}`
@@ -235,7 +237,22 @@ class LiveWorld {
                     self.refuse(root.machine.Trouble.Gh, `gh pr view: ${e}`)
                 },
             };
-            pr_events(view)
+            let required = self.required(pr);
+            let now = unix_now();
+            let prev = self.load_watch(id);
+            let situation = situation_of(view);
+            let clock = root.world.PrClock {
+                merge: self.merge,
+                green_for: age(prev.green_since, situation == "green", now),
+                quiet_for: age(prev.quiet_since, situation == "quiet", now),
+                red_for: age(prev.red_since, situation == "red", now),
+                required_failing: required.failing,
+                required_known: required.known,
+                rerun_head: prev.rerun_head,
+            };
+            let events = watch_pr(view, clock);
+            self.save_watch(id, next_watch(prev, situation, now, view, events));
+            events
         }
 
         function push_and_open_pr(
@@ -376,9 +393,17 @@ class LiveWorld {
     function launch(self, id: string, spec: root.rounds.RoundSpec) -> void {
         let spec_file = `${self.rounds()}/${id}.spec.json`;
         let _ = baml.fs.write(spec_file, baml.json.stringify(spec));
+        let argv = round_argv(bwrap_path(), self.agent_bin, spec_file, spec.dir, self.repo, self.state);
+        let program = argv.at(0) ?? self.agent_bin;
+        let args: string[] = [];
+        let i = 1;
+        while (i < argv.length()) {
+            args.push(argv.at(i) ?? "");
+            i = i + 1;
+        }
         let child = baml.sys.subprocess(
-            self.agent_bin,
-            args = ["round", "--spec_file", spec_file],
+            program,
+            args = args,
             cwd = spec.dir,
             stdin = "ignore",
             stdout = "ignore",
@@ -386,6 +411,48 @@ class LiveWorld {
             detached = true,
         );
         let _ = baml.fs.write(`${self.rounds()}/${id}.pid`, `${child.pid}`);
+    }
+
+    function required(self, pr: string) -> root.world.Required throws never {
+        let out = baml.sys.run(
+            "gh",
+            args = ["pr", "checks", pr, "--required", "--json", "name,state,description,bucket"],
+            cwd = self.repo,
+            capture_output = true,
+        ) catch_all (e) {
+            _ => {
+                return root.world.Required { known: false, failing: [], killed: false };
+            },
+        };
+        if (out.exit_code != 0) {
+            return root.world.Required { known: false, failing: [], killed: false };
+        }
+        root.world.required_of(out.stdout.to_string())
+    }
+
+    function load_watch(self, id: string) -> Watch throws never {
+        let text = baml.fs.read(self.watch_path(id)) catch_all (e) {
+            _ => "",
+        };
+        if (text.length() == 0) {
+            return Watch { green_since: 0, quiet_since: 0, red_since: 0, rerun_head: "" };
+        }
+        baml.json.decode<Watch>(text) catch_all (e) {
+            _ => Watch { green_since: 0, quiet_since: 0, red_since: 0, rerun_head: "" },
+        }
+    }
+
+    function save_watch(self, id: string, watch: Watch) -> void throws never {
+        let _ = baml.sys.run("mkdir", args = ["-p", `${self.state}/beads/${id}`]) catch_all (e) {
+            _ => null,
+        };
+        let _ = baml.fs.write(self.watch_path(id), baml.json.stringify(watch)) catch_all (e) {
+            _ => null,
+        };
+    }
+
+    function watch_path(self, id: string) -> string throws never {
+        `${self.state}/beads/${id}/watch.json`
     }
 
     function read_result(self, path: string) -> RoundDone {
@@ -422,4 +489,172 @@ class LiveWorld {
                 f.slice(0, f.length() - suffix.length())
             })
     }
+}
+
+class Watch {
+    green_since: int,
+    quiet_since: int,
+    red_since: int,
+    rerun_head: string,
+}
+
+function unix_now() -> int throws never {
+    let out = baml.sys.run("date", args = ["+%s"], capture_output = true) catch_all (e) {
+        _ => {
+            return 0;
+        },
+    };
+    baml.json.decode<int>(out.stdout.to_string().trim()) catch_all (e) {
+        _ => 0,
+    }
+}
+
+/// Seconds since `since` while `active`, or 0. A situation that just started
+/// counts as 0 until the next observation.
+function age(since: int, active: bool, now: int) -> int throws never {
+    if (!active || since <= 0 || now < since) {
+        0
+    } else {
+        now - since
+    }
+}
+
+function touch(since: int, active: bool, now: int) -> int throws never {
+    if (!active) {
+        0
+    } else {
+        if (since > 0) {
+            since
+        } else {
+            now
+        }
+    }
+}
+
+function situation_of(view: PrView) -> string throws never {
+    let first = pr_events(without_skipped(view)).at(0);
+    if (first is root.machine.ChecksGreen) {
+        "green"
+    } else {
+        if (first is root.machine.ChecksRed) {
+            "red"
+        } else {
+            if (
+                first is root.machine.PrMerged
+                    || first is root.machine.PrClosed
+                    || first is root.machine.Conflicting
+                    || first is root.machine.Behind
+            ) {
+                "done"
+            } else {
+                "quiet"
+            }
+        }
+    }
+}
+
+function saw_killed(events: root.machine.Event[]) -> bool throws never {
+    events.some((e) -> {
+        e is root.machine.RedKilled
+    })
+}
+
+function next_watch(
+    prev: Watch,
+    situation: string,
+    now: int,
+    view: PrView,
+    events: root.machine.Event[],
+) -> Watch throws never {
+    let rerun = if (saw_killed(events)) {
+        view.headRefOid ?? prev.rerun_head
+    } else {
+        prev.rerun_head
+    };
+    Watch {
+        green_since: touch(prev.green_since, situation == "green", now),
+        quiet_since: touch(prev.quiet_since, situation == "quiet", now),
+        red_since: touch(prev.red_since, situation == "red", now),
+        rerun_head: rerun,
+    }
+}
+
+function bwrap_path() -> string throws never {
+    let out = baml.sys.run("which", args = ["bwrap"], capture_output = true) catch_all (e) {
+        _ => {
+            return "";
+        },
+    };
+    if (out.exit_code != 0) {
+        ""
+    } else {
+        out.stdout.to_string().trim()
+    }
+}
+
+/// The round process. With bwrap the worktree, the git dir and the state dir are
+/// writable and the rest of the filesystem is not, so a model cannot write the
+/// checkout it was not given. The network stays, because the model server is on it.
+function round_argv(
+    bwrap: string,
+    bin: string,
+    spec_file: string,
+    worktree: string,
+    repo: string,
+    state: string,
+) -> string[] throws never {
+    if (bwrap.length() == 0) {
+        return [bin, "round", "--spec_file", spec_file];
+    }
+    [
+        bwrap,
+        "--ro-bind",
+        "/",
+        "/",
+        "--bind",
+        worktree,
+        worktree,
+        "--bind",
+        `${repo}/.git`,
+        `${repo}/.git`,
+        "--bind",
+        state,
+        state,
+        "--bind",
+        "/tmp",
+        "/tmp",
+        "--dev",
+        "/dev",
+        "--proc",
+        "/proc",
+        "--chdir",
+        worktree,
+        "--",
+        bin,
+        "round",
+        "--spec_file",
+        spec_file,
+    ]
+}
+
+test "a round is sandboxed when bwrap is there" {
+    let args = round_argv("bwrap", "bead-loop", "/state/rounds/t-1.spec.json", "/state/wt/t-1", "/repo", "/state");
+    assert.equal(args.at(0), "bwrap");
+    assert.contains(args.join(" "), "--ro-bind");
+    assert.contains(args.join(" "), "--bind /state/wt/t-1 /state/wt/t-1");
+    assert.contains(args.join(" "), "--bind /repo/.git /repo/.git");
+    assert.equal(args.at(args.length() - 1), "/state/rounds/t-1.spec.json")
+}
+
+test "without bwrap the round is the binary itself" {
+    let args = round_argv("", "bead-loop", "spec.json", "/wt", "/repo", "/state");
+    assert.equal(args, ["bead-loop", "round", "--spec_file", "spec.json"])
+}
+
+test "a green PR's clock starts when it is first seen green" {
+    let prev = Watch { green_since: 0, quiet_since: 0, red_since: 0, rerun_head: "" };
+    let view = view_of(`{"url":"u","state":"OPEN","mergeStateStatus":"CLEAN","statusCheckRollup":[{"conclusion":"SUCCESS"}]}`);
+    let next = next_watch(prev, "green", 1000, view, []);
+    assert.equal(next.green_since, 1000);
+    assert.equal(age(next.green_since, true, 2800), 1800)
 }

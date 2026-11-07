@@ -16,7 +16,7 @@ class LoopConfig {
 /// Runs until stopped, or for `ticks` passes when that is above zero. Start is a recovery
 /// every time: nothing distinguishes a first start from a restart.
 function run(config_file: string, ticks: int = 0) -> int {
-    let c = baml.json.decode<LoopConfig>(baml.fs.read(config_file));
+    let c = load_config(config_file);
     let world = root.world.LiveWorld {
         repo: c.repo,
         state: c.state,
@@ -25,6 +25,7 @@ function run(config_file: string, ticks: int = 0) -> int {
         label: c.label,
         gate: c.gate,
         agent_bin: c.agent_bin,
+        merge: root.machine.merge_name(c.policy.merge),
     };
     let s = recover(world, FileLog { state: c.state }, c.policy);
     s.lanes = c.lanes;
