@@ -367,6 +367,28 @@ case_lint() {
   claim=$(jq -c 'select(has("claim")) | .claim' "$R/beads/t-2/stamps.jsonl")
   assert_match "$claim" '"linted":"pass"' "the claim's linted reads t-2's lint note"
 }
+case_lint_run() {
+  # t-2's acceptance command is red on base (work.txt is not there): that is what a
+  # bead's check is for, so --run passes it. t-3's is green on base (.beads/issues.jsonl
+  # is there already): --run adds the problem. repo.setup marks a file under $T so its
+  # run, or not, is visible once the throwaway worktree --run always removes is gone.
+  setup
+  printf 'setup = "touch %s/setup-ran"\n' "$T" >>"$REPO/.bead-loop.toml"
+  jq '. + [
+    {id:"t-2", title:"Red on base", description:"Edit README", acceptance_criteria:"Run `test -f work.txt`", status:"open", priority:2, issue_type:"task", labels:["delegate:local"]},
+    {id:"t-3", title:"Green on base", description:"Edit README", acceptance_criteria:"Run `test -f .beads/issues.jsonl`", status:"open", priority:2, issue_type:"task", labels:["delegate:local"]}
+  ]' "$BD_STATE/issues.json" >"$BD_STATE/i.tmp" && mv "$BD_STATE/i.tmp" "$BD_STATE/issues.json"
+
+  out=$(sup lint "$REPO" t-2 t-3)
+  assert_match "$out" "^t-2: pass$" "no --run: t-2 pass, nothing executed"
+  assert_match "$out" "^t-3: pass$" "no --run: t-3 pass too, no green-on-base check run"
+  assert_nofile "$T/setup-ran" "no --run: repo.setup never ran"
+
+  out=$(sup lint "$REPO" --run t-2 t-3)
+  assert_match "$out" "^t-2: pass$" "--run: red on base is the bead's own check to find"
+  assert_match "$out" "t-3: acceptance is green on base" "--run: green on base is the problem"
+  assert_file "$T/setup-ran" "--run: repo.setup ran in the throwaway worktree"
+}
 case_stats_rows() {
   # stats --rows prints JSONL, one row per bead the loop touched, not the scoreboard.
   setup; sup work "$REPO"

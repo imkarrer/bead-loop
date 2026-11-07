@@ -141,6 +141,14 @@ CRITERIA is a command to run — `ID: pass`, or `ID: ` and the problems found, j
 a worker's prompt is the same whether the bead was linted or not; it never changes
 labels or routing (docs/design-measurement.md decisions 8, 17, 18, 21).
 
+`--run` adds, per bead and after those static checks: a throwaway `git worktree
+add --detach` of the base branch under the repo's state dir; `repo.setup` there when
+it is set; each acceptance command (the backtick spans `stamp::acceptance_commands`
+picks out) under `bash -c`, a 600 s timeout each; the worktree removed again before the
+next bead. A command that exits non-zero there is red, which is what a bead's check is
+for; when none of them is, the problem is `acceptance is green on base: a bead's check
+must fail before its change`. Without `--run` lint never executes anything.
+
 ```
 05:41:12   bead-supervisor watch (every 5s, ctrl-c to stop)
 

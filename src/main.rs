@@ -19,6 +19,8 @@
 //!   bead-supervisor lint REPO [ID...]     a dated note on each bead (every ready bead, if none given) saying
 //!                                         whether its DESCRIPTION paths are on the base branch and its
 //!                                         ACCEPTANCE CRITERIA is a command — never changes labels or routing
+//!   bead-supervisor lint --run ...        also: each acceptance command, run in a throwaway worktree of the
+//!                                         base — a problem when none of them is red there
 //!   bead-supervisor publish REPO ID [--title T] [--body-file F]   open the PR an open_pr = "ask" round
 //!                                         left in proposed/ID — its title/body, or these instead
 //!   bead-supervisor open REPO ID          an interactive Claude Code session in the bead's worktree, the bead,
@@ -128,6 +130,7 @@ fn main() {
     let mut once = false;
     let mut serial = false;
     let mut json = false;
+    let mut run = false;
     let mut args: Vec<String> = Vec::new();
     let mut it = std::env::args().skip(1);
     while let Some(a) = it.next() {
@@ -140,6 +143,7 @@ fn main() {
             "--serial" => serial = true,
             "--json" => json = true,
             "--local" => opts.local = true,
+            "--run" => run = true,
             "--model" => opts.model_flag = it.next(),
             "-h" | "--help" => usage(),
             _ => args.push(a),
@@ -265,7 +269,7 @@ fn main() {
         }
         "lint" => {
             let repo = repo_at(0);
-            lint::lint(&repo, &rest[1..]);
+            lint::lint(&repo, &rest[1..], run);
         }
         "open" => {
             let repo = repo_at(0);
