@@ -205,6 +205,9 @@ pub fn write_claim(repo: &Repo, id: &str, bead_json: &Value) {
     );
 }
 
+const ACCEPTANCE_COMMAND_PREFIXES: &[&str] =
+    &["cargo", "bash", "sh", "test", "grep", "rg", "git", "node", "npm", "make", "flox", "shellcheck", "./", "test/"];
+
 /// `none` for an empty acceptance; `command` when a backtick span in it starts with one
 /// of the shapes a loop check runs (`cargo`, `bash`, `sh`, `test`, `grep`, `rg`, `git`,
 /// `node`, `npm`, `make`, `flox`, `shellcheck`, `./` or `test/`); else `prose`.
@@ -212,14 +215,23 @@ pub fn acceptance_kind(s: &str) -> &'static str {
     if s.is_empty() {
         return "none";
     }
-    const PREFIXES: &[&str] =
-        &["cargo", "bash", "sh", "test", "grep", "rg", "git", "node", "npm", "make", "flox", "shellcheck", "./", "test/"];
-    let is_command = s.split('`').enumerate().any(|(i, span)| i % 2 == 1 && PREFIXES.iter().any(|p| span.trim_start().starts_with(p)));
-    if is_command {
-        "command"
-    } else {
+    if acceptance_commands(s).is_empty() {
         "prose"
+    } else {
+        "command"
     }
+}
+
+/// The backtick spans of an acceptance text that `acceptance_kind` counts as commands,
+/// trimmed, in order.
+pub fn acceptance_commands(s: &str) -> Vec<String> {
+    s.split('`')
+        .enumerate()
+        .filter(|(i, _)| i % 2 == 1)
+        .map(|(_, span)| span.trim())
+        .filter(|span| ACCEPTANCE_COMMAND_PREFIXES.iter().any(|p| span.starts_with(p)))
+        .map(|span| span.to_string())
+        .collect()
 }
 
 /// `pass` for a notes line `bead-loop lint DATE: pass`, `fail` for any other
@@ -307,6 +319,13 @@ pub fn for_session(repo: &Repo, agent: &str, model: &str, dir: &Path, logf: &Pat
 mod tests {
     use super::*;
     use crate::config::{scratch, test_repo, Provider, Seat};
+
+    #[test]
+    fn acceptance_commands_trims_each_backtick_span_in_order() {
+        let s = "Run `cargo test foo` then check ` bash -c \"echo hi\" ` and ignore `foo bar`.";
+        assert_eq!(acceptance_commands(s), vec!["cargo test foo", "bash -c \"echo hi\""]);
+        assert_eq!(acceptance_commands("no backticks here"), Vec::<String>::new());
+    }
 
     #[test]
     fn hash_tree_is_equal_for_two_copies_and_differs_on_a_change() {
