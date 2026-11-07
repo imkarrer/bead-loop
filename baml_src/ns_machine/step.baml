@@ -108,6 +108,7 @@ function charge(b: Bead, o: ModelOutcome) -> Step throws never {
     let n = b.at(Ready { kind: "ready" });
     n.failures = b.failures + 1;
     n.kept = keep;
+    n.last_note = note_of(o);
     n.order
         = if (keep) {
             Order.FixInPlace

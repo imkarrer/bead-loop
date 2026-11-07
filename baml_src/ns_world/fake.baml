@@ -14,6 +14,8 @@ class FakeWorld {
     running_now: RoundRunning[],
     finished_now: RoundDone[],
     calls: string[],
+    /// The send-back note each round was started with.
+    notes_given: string[],
     /// Calls that throw, by name, each used up once.
     failing: string[],
 
@@ -24,6 +26,7 @@ class FakeWorld {
             running_now: [],
             finished_now: [],
             calls: [],
+            notes_given: [],
             failing: [],
         }
     }
@@ -46,14 +49,20 @@ class FakeWorld {
     }
 
     function script_of(self, id: string) -> Script? throws never {
-        self.scripts.find((s) -> { s.id == id })
+        self.scripts.find((s) -> {
+            s.id == id
+        })
     }
 
     /// Ends a running round now, for tests that run a round across ticks.
     function finish(self) -> void throws never {
         for (let r in self.running_now) {
             let s = self.script_of(r.id);
-            let queue = if (r.kind == RoundKind.Work) { s?.work } else { s?.review };
+            let queue = if (r.kind == RoundKind.Work) {
+                s?.work
+            } else {
+                s?.review
+            };
             let events = queue?.shift() ?? [];
             self.finished_now.push(RoundDone { id: r.id, kind: r.kind, events: events });
         }
@@ -65,14 +74,25 @@ class FakeWorld {
             self.record("tickets");
             self.tickets_now
         }
-        function prepare_worktree(self, id: string, resume: bool) -> void throws root.machine.Infra {
+        function prepare_worktree(
+            self,
+            id: string,
+            resume: bool,
+        ) -> void throws root.machine.Infra {
             self.record("prepare_worktree");
         }
         function remove_branch(self, id: string) -> void throws root.machine.Infra {
             self.record("remove_branch");
         }
-        function start_round(self, id: string, kind: RoundKind, model: string) -> void throws root.machine.Infra {
+        function start_round(
+            self,
+            id: string,
+            kind: RoundKind,
+            model: string,
+            note: string,
+        ) -> void throws root.machine.Infra {
             self.record(`start_round ${kind} ${model}`);
+            self.notes_given.push(note);
             self.running_now.push(RoundRunning { id: id, kind: kind });
         }
         function running(self) -> RoundRunning[] throws never {
@@ -83,11 +103,18 @@ class FakeWorld {
             self.finished_now = [];
             done
         }
-        function observe_pr(self, id: string, pr: string) -> root.machine.Event[] throws root.machine.Infra {
+        function observe_pr(
+            self,
+            id: string,
+            pr: string,
+        ) -> root.machine.Event[] throws root.machine.Infra {
             self.record("observe_pr");
             self.script_of(id)?.pr?.shift() ?? []
         }
-        function push_and_open_pr(self, id: string) -> root.machine.PrOpened throws root.machine.Infra {
+        function push_and_open_pr(
+            self,
+            id: string,
+        ) -> root.machine.PrOpened throws root.machine.Infra {
             self.record("push_and_open_pr");
             root.machine.PrOpened { kind: "pr_opened", url: `pr/${id}`, head: "head" }
         }
@@ -109,7 +136,11 @@ class FakeWorld {
         function close_bead(self, id: string, url: string?) -> void throws root.machine.Infra {
             self.record("close_bead");
         }
-        function write_park_brief(self, id: string, because: string) -> void throws root.machine.Infra {
+        function write_park_brief(
+            self,
+            id: string,
+            because: string,
+        ) -> void throws root.machine.Infra {
             self.record("write_park_brief");
         }
     }

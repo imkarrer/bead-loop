@@ -86,6 +86,8 @@ class Bead {
     /// The head CI was last charged for, and the head already re-run once.
     charged_head: string?,
     rerun_head: string?,
+    /// What the last send-back said, for the next round to act on.
+    last_note: string?,
 
     function new(id: string) -> Bead throws never {
         Bead {
@@ -100,6 +102,7 @@ class Bead {
             last_reject: null,
             charged_head: null,
             rerun_head: null,
+            last_note: null,
         }
     }
 
@@ -116,6 +119,7 @@ class Bead {
             last_reject: self.last_reject,
             charged_head: self.charged_head,
             rerun_head: self.rerun_head,
+            last_note: self.last_note,
         }
     }
 

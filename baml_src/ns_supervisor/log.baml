@@ -32,7 +32,13 @@ class MemoryLog {
             out
         }
         function load(self, id: string) -> root.machine.Event[] throws never {
-            self.entries.filter((e) -> { e.id == id }).map((e) -> { e.event })
+            self.entries
+                .filter((e) -> {
+                    e.id == id
+                })
+                .map((e) -> {
+                    e.event
+                })
         }
     }
 }

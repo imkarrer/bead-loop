@@ -1,0 +1,88 @@
+// The log on disk: one append-only file per bead. A line that does not parse is skipped and
+// said, because a crash can leave a half-written last line.
+
+class FileLog {
+    state: string,
+
+    function path(self, id: string) -> string throws never {
+        `${self.state}/beads/${id}/events.jsonl`
+    }
+
+    implements Log {
+        function append(self, id: string, event: root.machine.Event) -> void throws never {
+            let dir = `${self.state}/beads/${id}`;
+            let _ = baml.sys.run("mkdir", args = ["-p", dir]) catch_all (e) {
+                _ => null,
+            };
+            let line = baml.json.stringify(event) catch_all (e) {
+                _ => {
+                    log.error(`cannot encode an event for ${id}: ${e}`);
+                    return;
+                },
+            };
+            let wrote = write_line(self.path(id), line) catch_all (e) {
+                _ => {
+                    log.error(`cannot append to ${id}'s log: ${e}`);
+                },
+            };
+        }
+
+        function ids(self) -> string[] throws never {
+            let out = baml.sys.run("ls", args = [`${self.state}/beads`], capture_output = true) catch_all (e) {
+                _ => {
+                    let none: string[] = [];
+                    return none;
+                },
+            };
+            out.stdout.to_string().split("\n").filter((f) -> {
+                f.length() > 0
+            })
+        }
+
+        function load(self, id: string) -> root.machine.Event[] throws never {
+            let events: root.machine.Event[] = [];
+            let text = baml.fs.read(self.path(id)) catch_all (e) {
+                _ => {
+                    return events;
+                },
+            };
+            for (let line in text.split("\n")) {
+                if (line.length() > 0) {
+                    let parsed = decode_line(line) catch_all (e) {
+                        _ => {
+                            log.warn(`skipping a bad line in ${id}'s log: ${line}`);
+                            null
+                        },
+                    };
+                    if let event: root.machine.Event = parsed {
+                        events.push(event);
+                    }
+                }
+            }
+            events
+        }
+    }
+}
+
+function write_line(path: string, line: string) -> void {
+    let out = baml.fs.open(path, "a");
+    let _ = out.write(line + "\n");
+    out.close();
+}
+
+function decode_line(line: string) -> root.machine.Event {
+    baml.json.decode<root.machine.Event>(line)
+}
+
+test "the log survives a restart and a half-written line" {
+    let dir = "/tmp/bead-loop-log-test";
+    let _ = baml.sys.run("rm", args = ["-rf", dir]);
+    let log_file = FileLog { state: dir };
+    log_file.append("t-1", root.machine.Picked { kind: "picked" });
+    log_file.append("t-1", root.machine.Rejected { kind: "rejected", line: "l", text: "t" });
+    let _ = write_line(log_file.path("t-1"), `{"kind":"comm`);
+    let again = FileLog { state: dir };
+    assert.equal(again.ids(), ["t-1"]);
+    assert.equal(again.load("t-1").length(), 2);
+    let _ = baml.sys.run("rm", args = ["-rf", dir]);
+}

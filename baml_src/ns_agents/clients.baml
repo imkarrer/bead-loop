@@ -16,3 +16,21 @@ client Devbox = openai.GenericClient.new(
 );
 
 client Sonnet = claude_code.ClaudeCodeClient.new(model = "sonnet", timeout_ms = 3600000);
+
+client Acbox = openai.GenericClient.new(
+    model = "reviewer",
+    base_url = env.ACBOX_URL,
+    temperature = 0.1,
+    max_tokens = 8192,
+    request_body = { "parallel_tool_calls": false },
+    timeout = baml.time.Duration.from_seconds(1800),
+);
+
+/// The client a stage's model name means.
+function client_for(model: string) -> ai.Client throws never {
+    match (model) {
+        "acbox/reviewer" => Acbox,
+        "claude/sonnet" => Sonnet,
+        _ => Devbox,
+    }
+}

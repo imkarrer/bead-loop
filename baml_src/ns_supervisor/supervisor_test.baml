@@ -5,21 +5,47 @@ function ticket(id: string) -> root.world.Ticket throws never {
 }
 
 function committed() -> root.machine.Event[] throws never {
-    [root.machine.Committed { kind: "committed", sha: "s" }, root.machine.GatePassed { kind: "gate_passed" }]
+    [
+        root.machine.Committed { kind: "committed", sha: "s" },
+        root.machine.GatePassed { kind: "gate_passed" },
+    ]
 }
-function approved() -> root.machine.Event[] throws never { [root.machine.Approved { kind: "approved" }] }
+
+function approved() -> root.machine.Event[] throws never {
+    [root.machine.Approved { kind: "approved" }]
+}
+
 function rejected() -> root.machine.Event[] throws never {
     [root.machine.Rejected { kind: "rejected", line: "REJECT: a", text: "REJECT: a" }]
 }
-function no_commit() -> root.machine.Event[] throws never { [root.machine.NoCommit { kind: "no_commit" }] }
-function green() -> root.machine.Event[] throws never { [root.machine.ChecksGreen { kind: "checks_green" }] }
-function merged() -> root.machine.Event[] throws never { [root.machine.PrMerged { kind: "pr_merged", url: "pr/t-1" }] }
+
+function no_commit() -> root.machine.Event[] throws never {
+    [root.machine.NoCommit { kind: "no_commit" }]
+}
+
+function green() -> root.machine.Event[] throws never {
+    [root.machine.ChecksGreen { kind: "checks_green" }]
+}
+
+function merged() -> root.machine.Event[] throws never {
+    [root.machine.PrMerged { kind: "pr_merged", url: "pr/t-1" }]
+}
 
 function policy() -> root.machine.Policy throws never {
     root.machine.Policy {
         stages: [
-            root.machine.Stage { name: "local", worker: "devbox/coder", reviewer: "acbox/reviewer", attempts: 2 },
-            root.machine.Stage { name: "frontier", worker: "claude/sonnet", reviewer: "claude/sonnet", attempts: 1 },
+            root.machine.Stage {
+                name: "local",
+                worker: "devbox/coder",
+                reviewer: "acbox/reviewer",
+                attempts: 2,
+            },
+            root.machine.Stage {
+                name: "frontier",
+                worker: "claude/sonnet",
+                reviewer: "claude/sonnet",
+                attempts: 1,
+            },
         ],
         on_exhaust: root.machine.OnExhaust.Park,
         merge: root.machine.MergeMode.Auto,
@@ -42,8 +68,15 @@ function turns(s: Supervisor, w: root.world.FakeWorld, n: int) -> void throws ne
     }
 }
 
-function one_bead(work: root.machine.Event[][], review: root.machine.Event[][], pr: root.machine.Event[][]) -> root.world.FakeWorld throws never {
-    root.world.FakeWorld.new([ticket("t-1")], [root.world.Script { id: "t-1", work: work, review: review, pr: pr }])
+function one_bead(
+    work: root.machine.Event[][],
+    review: root.machine.Event[][],
+    pr: root.machine.Event[][],
+) -> root.world.FakeWorld throws never {
+    root.world.FakeWorld.new(
+        [ticket("t-1")],
+        [root.world.Script { id: "t-1", work: work, review: review, pr: pr }],
+    )
 }
 
 function place_of(s: Supervisor) -> root.machine.Place? throws never {
@@ -68,6 +101,13 @@ test "a rejected bead is fixed and lands, and the worker is the stage's" {
     assert.equal(s.bead("t-1")?.failures, 1);
     assert.is_true(w.calls.includes("start_round Work devbox/coder"));
     assert.is_true(w.calls.includes("start_round Review acbox/reviewer"))
+}
+
+test "the next round is told why the last was sent back" {
+    let w = one_bead([committed(), committed()], [rejected(), approved()], [merged()]);
+    let s = Supervisor.new(w, MemoryLog.new(), policy());
+    turns(s, w, 8);
+    assert.contains(w.notes_given.at(2) ?? "", "REJECT: a")
 }
 
 test "failures walk the stages, then the bead parks with a brief" {
@@ -118,10 +158,18 @@ test "gh failing while watching holds the bead, then the merge is seen" {
 }
 
 test "one lane runs one round, fewest failures first" {
-    let w = root.world.FakeWorld.new([ticket("a"), ticket("b")], [
-        root.world.Script { id: "a", work: [no_commit(), committed()], review: [approved()], pr: [] },
-        root.world.Script { id: "b", work: [committed()], review: [approved()], pr: [] },
-    ]);
+    let w = root.world.FakeWorld.new(
+        [ticket("a"), ticket("b")],
+        [
+            root.world.Script {
+                id: "a",
+                work: [no_commit(), committed()],
+                review: [approved()],
+                pr: [],
+            },
+            root.world.Script { id: "b", work: [committed()], review: [approved()], pr: [] },
+        ],
+    );
     let s = Supervisor.new(w, MemoryLog.new(), policy());
     tick(s);
     assert.equal(w.running_now.length(), 1);

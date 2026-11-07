@@ -1,0 +1,284 @@
+// One round, in its own process. It reads a spec, works in the bead's worktree, and leaves
+// a result file; the supervisor reads that on a later tick. The round may outlive the
+// supervisor that started it.
+
+class RoundSpec {
+    id: string,
+    kind: root.world.RoundKind,
+    model: string,
+    dir: string,
+    base: string,
+    bead: string,
+    gate: string,
+    /// What the last round was sent back with.
+    note: string,
+    report: string,
+    log_file: string,
+    result_file: string,
+}
+
+const MAX_STEPS: int = 80;
+
+function infra_harness(words: string) -> root.machine.Event throws never {
+    root.machine.Infra { kind: "infra", what: root.machine.Trouble.Harness, words: words }
+}
+
+function git_head(dir: string) -> string throws never {
+    let out = baml.sys.run("git", args = ["rev-parse", "HEAD"], cwd = dir, capture_output = true) catch_all (e) {
+        _ => {
+            return "";
+        },
+    };
+    out.stdout.to_string().trim()
+}
+
+class GateRun {
+    ok: bool,
+    output: string,
+}
+
+/// The gate decides, whatever the model reported.
+function run_gate(dir: string, gate: string) -> GateRun throws never {
+    if (gate.length() == 0) {
+        return GateRun { ok: true, output: "" };
+    }
+    let out = baml.sys.shell(
+        gate,
+        cwd = dir,
+        capture_output = true,
+        timeout = baml.time.Duration.from_seconds(3600),
+    ) catch_all (e) {
+        _ => {
+            return GateRun { ok: false, output: `the gate did not finish: ${e}` };
+        },
+    };
+    GateRun {
+        ok: out.exit_code == 0,
+        output: root.tools.tail(out.stdout.to_string() + out.stderr.to_string()),
+    }
+}
+
+/// What a worker's report and the commits it left add up to. Pure, so it is tested alone.
+function work_outcome(
+    report: root.agents.Report,
+    before: string,
+    after: string,
+) -> root.machine.Event? throws never {
+    if (report.outcome == "blocked") {
+        return root.machine.WorkerBlocked { kind: "worker_blocked", line: `BLOCKED: ${report.summary}` };
+    }
+    if (before == after) {
+        return root.machine.NoCommit { kind: "no_commit" };
+    }
+    null
+}
+
+function event_log(path: string) -> (ai.events.Event) -> void throws never {
+    let out = baml.fs.open(path, "a") catch_all (e) {
+        _ => {
+            return (x) -> {};
+        },
+    };
+    (x) -> {
+        let line = baml.json.stringify(x) catch_all (e) {
+            _ => "{}",
+        };
+        let _ = out.write(line + "\n") catch_all (e) {
+            _ => 0,
+        };
+    }
+}
+
+function run_worker(spec: RoundSpec, task: string) -> root.agents.Report {
+    let agent = ai.Agent.new(
+        client = root.agents.client_for(spec.model),
+        max_steps = MAX_STEPS,
+        on_event = event_log(spec.log_file),
+    );
+    agent.run(root.agents.Work@spec(task)).value
+}
+
+function failed_session(e: unknown) -> root.machine.Event throws never {
+    match (e) {
+        let x: ai.errors.StepBudgetExceeded => {
+            root.machine.RoundTimedOut { kind: "round_timed_out" }
+        },
+        let x: ai.errors.ParseFailed => {
+            root.machine.WorkerCrashed { kind: "worker_crashed", words: "its report did not parse" }
+        },
+        let x: ai.errors.FinishReasonError => {
+            root.machine.WorkerCrashed { kind: "worker_crashed", words: "its reply was cut off" }
+        },
+        let x: ai.errors.ToolFailedError => {
+            root.machine.WorkerCrashed { kind: "worker_crashed", words: x.message }
+        },
+        _ => infra_harness(`${e}`),
+    }
+}
+
+function work_round(spec: RoundSpec) -> root.machine.Event[] throws never {
+    let before = git_head(spec.dir);
+    let task = if (spec.note.length() > 0) {
+        `${spec.bead}\n\nThe last round was sent back:\n${spec.note}`
+    } else {
+        spec.bead
+    };
+    let failed: root.machine.Event? = null;
+    let report = run_worker(spec, task) catch_all (e) {
+        _ => {
+            let out: root.machine.Event[] = [failed_session(e)];
+            return out;
+        },
+    };
+    let after = git_head(spec.dir);
+    let stop = work_outcome(report, before, after);
+    if let event: root.machine.Event = stop {
+        return [event];
+    }
+    let done: root.machine.Event = root.machine.Committed { kind: "committed", sha: after };
+    let first = run_gate(spec.dir, spec.gate);
+    if (first.ok) {
+        return [done, root.machine.GatePassed { kind: "gate_passed" }];
+    }
+    //# One fix round, with the gate's output
+    let fix = `${spec.bead}\n\nYour commit is on this branch, but the gate failed. Fix it and commit:\n${first.output}`;
+    let _ = run_worker(spec, fix) catch_all (e) {
+        _ => {
+            let out: root.machine.Event[] = [done, failed_session(e)];
+            return out;
+        },
+    };
+    let second = run_gate(spec.dir, spec.gate);
+    if (second.ok) {
+        [done, root.machine.GatePassed { kind: "gate_passed" }]
+    } else {
+        [done, root.machine.GateFailedTwice { kind: "gate_failed_twice", errors: second.output }]
+    }
+}
+
+function review_text(v: root.agents.Verdict) -> string throws never {
+    if let w: root.agents.WorkOrder = v.work_order {
+        `REJECT: ${v.reason}\n\nFor the worker:\n- What is wrong: ${w.what_is_wrong}\n- Why it fails the bead: ${w.why_it_fails}\n- What to do: ${w.what_to_do}\n- How to check: ${w.how_to_check}\n- Leave alone: ${w.leave_alone}`
+    } else {
+        `REJECT: ${v.reason}`
+    }
+}
+
+/// A verdict as an event. Pure, so it is tested alone.
+function review_outcome(v: root.agents.Verdict) -> root.machine.Event throws never {
+    if (v.decision == root.agents.Decision.Approve) {
+        root.machine.Approved { kind: "approved" }
+    } else {
+        root.machine.Rejected {
+            kind: "rejected",
+            line: `REJECT: ${v.reason}`,
+            text: review_text(v),
+        }
+    }
+}
+
+function run_reviewer(spec: RoundSpec, diff: string) -> root.agents.Verdict {
+    let agent = ai.Agent.new(
+        client = root.agents.client_for(spec.model),
+        max_steps = 40,
+        on_event = event_log(spec.log_file),
+    );
+    agent.run(root.agents.Review@spec(spec.bead, spec.report, diff)).value
+}
+
+function review_round(spec: RoundSpec) -> root.machine.Event[] throws never {
+    let diff = baml.sys.run(
+        "git",
+        args = ["diff", `${spec.base}...HEAD`],
+        cwd = spec.dir,
+        capture_output = true,
+    ) catch_all (e) {
+        _ => {
+            let out: root.machine.Event[] = [infra_harness(`git diff failed: ${e}`)];
+            return out;
+        },
+    };
+    let verdict = run_reviewer(spec, diff.stdout.to_string()) catch_all (e) {
+        _ => {
+            let out: root.machine.Event[] = [
+                match (e) {
+                    let x: ai.errors.StepBudgetExceeded => {
+                        root.machine.ReviewerCrashed {
+                            kind: "reviewer_crashed",
+                            words: "out of steps",
+                        }
+                    },
+                    let x: ai.errors.ParseFailed => {
+                        root.machine.ReviewerCrashed {
+                            kind: "reviewer_crashed",
+                            words: "its verdict did not parse",
+                        }
+                    },
+                    _ => infra_harness(`${e}`),
+                },
+            ];
+            return out;
+        },
+    };
+    [review_outcome(verdict)]
+}
+
+/// The process entry: `bead-agent round --spec_file PATH`, started in the worktree, since
+/// the tools take paths relative to it.
+function round(spec_file: string) -> string {
+    let spec = baml.json.decode<RoundSpec>(baml.fs.read(spec_file));
+    let events = if (spec.kind == root.world.RoundKind.Work) {
+        work_round(spec)
+    } else {
+        review_round(spec)
+    };
+    let done = root.world.RoundDone { id: spec.id, kind: spec.kind, events: events };
+    let _ = baml.fs.write(spec.result_file, baml.json.stringify(done));
+    spec.result_file
+}
+
+function report_of(outcome: "done" | "blocked") -> root.agents.Report throws never {
+    root.agents.Report { outcome: outcome, summary: "s" }
+}
+
+test "a blocked report is the worker's line" {
+    let e = work_outcome(report_of("blocked"), "a", "b");
+    assert.is_type<root.machine.WorkerBlocked>(e);
+}
+
+test "done with no new commit is no commit, whatever it claims" {
+    assert.is_type<root.machine.NoCommit>(work_outcome(report_of("done"), "a", "a"));
+}
+
+test "done with a commit goes on to the gate" {
+    assert.equal(work_outcome(report_of("done"), "a", "b"), null)
+}
+
+test "the gate decides, not the report" {
+    assert.is_true(!run_gate("/tmp", "exit 3").ok);
+    assert.is_true(run_gate("/tmp", "exit 0").ok);
+    assert.contains(run_gate("/tmp", "echo broke; exit 1").output, "broke")
+}
+
+test "an approval" {
+    let v = root.agents.Verdict { decision: root.agents.Decision.Approve, reason: "r", work_order: null };
+    assert.is_type<root.machine.Approved>(review_outcome(v));
+}
+
+test "a rejection carries the whole work order" {
+    let w = root.agents.WorkOrder {
+        what_is_wrong: "w",
+        why_it_fails: "y",
+        what_to_do: "d",
+        how_to_check: "c",
+        leave_alone: "l",
+    };
+    let v = root.agents.Verdict { decision: root.agents.Decision.Reject, reason: "r", work_order: w };
+    let e = review_outcome(v);
+    if let x: root.machine.Rejected = e {
+        assert.equal(x.line, "REJECT: r");
+        assert.contains(x.text, "- What to do: d");
+    } else {
+        assert.is_true(false);
+    }
+}

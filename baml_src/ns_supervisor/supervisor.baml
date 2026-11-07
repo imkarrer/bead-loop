@@ -13,7 +13,11 @@ class Supervisor {
     hold_ticks: int,
     held_for: map<string, int>,
 
-    function new(world: root.world.World, log: Log, policy: root.machine.Policy) -> Supervisor throws never {
+    function new(
+        world: root.world.World,
+        log: Log,
+        policy: root.machine.Policy,
+    ) -> Supervisor throws never {
         Supervisor {
             world: world,
             log: log,
@@ -26,7 +30,9 @@ class Supervisor {
     }
 
     function bead(self, id: string) -> root.machine.Bead? throws never {
-        self.beads.find((b) -> { b.id == id })
+        self.beads.find((b) -> {
+            b.id == id
+        })
     }
 
     function put(self, bead: root.machine.Bead) -> void throws never {
@@ -64,7 +70,11 @@ function apply(s: Supervisor, id: string, event: root.machine.Event) -> void thr
 
 /// Does one effect. Each is safe to repeat, because a crash can land between doing it and
 /// recording it. Returns the events the effect produced.
-function perform(s: Supervisor, id: string, effect: root.machine.Effect) -> root.machine.Event[] throws root.machine.Infra {
+function perform(
+    s: Supervisor,
+    id: string,
+    effect: root.machine.Effect,
+) -> root.machine.Event[] throws root.machine.Infra {
     let none: root.machine.Event[] = [];
     match (effect) {
         let x: root.machine.Note => {
@@ -184,9 +194,16 @@ function expire_holds(s: Supervisor) -> void throws never {
 }
 
 /// Fewest failures first, so everything is tried once before anything is tried twice.
-function queue_of(s: Supervisor, wanted: (root.machine.Bead) -> bool throws never) -> root.machine.Bead[] throws never {
-    let waiting = s.beads.filter((b) -> { b.hold == null && wanted(b) });
-    waiting.sort_by_key((b) -> { b.failures })
+function queue_of(
+    s: Supervisor,
+    wanted: (root.machine.Bead) -> bool throws never,
+) -> root.machine.Bead[] throws never {
+    let waiting = s.beads.filter((b) -> {
+        b.hold == null && wanted(b)
+    });
+    waiting.sort_by_key((b) -> {
+        b.failures
+    })
 }
 
 function start_rounds(s: Supervisor) -> void throws never {
@@ -196,12 +213,20 @@ function start_rounds(s: Supervisor) -> void throws never {
         },
     };
     let free = s.lanes - busy.length();
-    for (let b in queue_of(s, (x) -> { x.place is root.machine.InReview })) {
+    for (
+        let b in queue_of(s, (x) -> {
+            x.place is root.machine.InReview
+        })
+    ) {
         if (free > 0) {
             free = free - start_review(s, b);
         }
     }
-    for (let b in queue_of(s, (x) -> { x.place is root.machine.Ready })) {
+    for (
+        let b in queue_of(s, (x) -> {
+            x.place is root.machine.Ready
+        })
+    ) {
         if (free > 0) {
             free = free - start_work(s, b);
         }
@@ -224,20 +249,34 @@ function start_review(s: Supervisor, b: root.machine.Bead) -> int throws never {
     start(s, b.id, root.world.RoundKind.Review, model)
 }
 
-function start(s: Supervisor, id: string, kind: root.world.RoundKind, model: string) -> int throws never {
+function start(
+    s: Supervisor,
+    id: string,
+    kind: root.world.RoundKind,
+    model: string,
+) -> int throws never {
     let ok = true;
-    let _ = s.world.start_round(id, kind, model) catch (e) {
+    let note = s.bead(id)?.last_note ?? "";
+    let _ = s.world.start_round(id, kind, model, note) catch (e) {
         root.machine.Infra => {
             apply(s, id, e);
             ok = false;
         },
     };
-    if (ok) { 1 } else { 0 }
+    if (ok) {
+        1
+    } else {
+        0
+    }
 }
 
 /// Start is the only path: fold every log, then settle any round that has no process left.
 /// A stop needs no handling of its own, because a stop is a restart.
-function recover(world: root.world.World, log: Log, policy: root.machine.Policy) -> Supervisor throws never {
+function recover(
+    world: root.world.World,
+    log: Log,
+    policy: root.machine.Policy,
+) -> Supervisor throws never {
     let s = Supervisor.new(world, log, policy);
     for (let id in log.ids()) {
         s.put(root.machine.fold(id, log.load(id), policy));
@@ -251,7 +290,12 @@ function recover(world: root.world.World, log: Log, policy: root.machine.Policy)
     };
     for (let b in s.beads) {
         let on_a_round = b.place is root.machine.Working || b.place is root.machine.Reviewing;
-        if (on_a_round && !alive.some((r) -> { r.id == b.id })) {
+        if (
+            on_a_round
+                && !alive.some((r) -> {
+                    r.id == b.id
+                })
+        ) {
             apply(s, b.id, root.machine.RoundLost { kind: "round_lost" });
         }
     }
