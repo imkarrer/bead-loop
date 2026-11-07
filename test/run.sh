@@ -2374,6 +2374,21 @@ case_usage_limit_holds_the_provider() {
   : >"$TEST_CTRL/calls"; BEAD_LOOP_HOLD_BACKOFF=0 sup --once tick; BEAD_LOOP_HOLD_BACKOFF=0 sup --once tick
   assert_eq "$(grep -c ' claude/opus claude$' "$TEST_CTRL/calls")" 2 "the reset time has passed: both run"
 }
+case_usage_limit_mid_session() {
+  # The limit lands after a few turns, tokens already spent (bl-boc.5, bl-v7q.3's 30 Oct
+  # park): still the provider's limit, not the model's failed round — held with no
+  # failure charged, same as an empty session, and the provider is held too.
+  setup true auto '' "$(stages claude/opus::1)"
+  printf "You've hit your session limit · resets 7:40am (UTC)" >"$TEST_CTRL/claude-usage-limit-mid-session"
+  sup --once tick
+  assert_eq "$(bead .status)" open "back in the dev queue"
+  assert_eq "$(cat "$BEAD_LOOP_STATE/repo/beads/t-1/failures" 2>/dev/null || echo 0)" 0 "no failure charged"
+  assert_match "$(cat "$BEAD_LOOP_STATE/repo/held/t-1")" "hit your session limit" "held, with Claude's own words"
+  assert_file "$BEAD_LOOP_STATE/limit.claude" "the provider held too"
+  jq '. + [{id:"t-2", title:"Second", description:"y", status:"open", priority:3, labels:["delegate:local"]}]' "$BD_STATE/issues.json" >"$BD_STATE/i.tmp" && mv "$BD_STATE/i.tmp" "$BD_STATE/issues.json"
+  : >"$TEST_CTRL/calls"; BEAD_LOOP_HOLD_BACKOFF=0 sup --once tick
+  assert_eq "$(wc -l <"$TEST_CTRL/calls")" 0 "limited: the second bead does not start either"
+}
 
 case_lanes_from_toml() {
   # [[lanes]] in the global config: a lane per model server, each taking the worker and
