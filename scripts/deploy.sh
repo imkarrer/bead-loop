@@ -127,6 +127,9 @@ if ! cmp -s "$dl/bead-supervisor" "$HOME/.local/bin/bead-supervisor"; then
   exit 1
 fi
 
+# Flush before recording: on 30 Oct a hard stop zeroed the binary, the clone's objects and a
+# doc after deployed was written. A bare sync, since the clone is at stake too, not one file.
+sync
 echo "$want" >"$DEPLOY/deployed"
 echo "at $tag: $(git -C "$SRC" log -1 --format='%h %s')"
 

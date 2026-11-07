@@ -2772,6 +2772,9 @@ setup_deploy() {
   mkdir -p "$T/localbin"
   printf '#!/usr/bin/env bash\nset -euo pipefail\nshift\n[ "$1" = -d ] && shift 2\n[ "$1" = -- ] && shift\nexec "$@"\n' >"$T/localbin/flox"
   chmod +x "$T/localbin/flox"
+  # sync: records whether deployed was already written when the flush ran.
+  printf '#!/usr/bin/env bash\n[ -e "$BEAD_LOOP_DEPLOY/deployed" ] && echo after >>"$TEST_CTRL/sync.log" || echo before >>"$TEST_CTRL/sync.log"\n' >"$T/localbin/sync"
+  chmod +x "$T/localbin/sync"
 }
 # shellcheck disable=SC2120  # neither case passes an arg; a --force or --dry-run case could
 run_deploy() { PATH=$T/localbin:$PATH bash "$T/here/scripts/deploy.sh" "$@"; }
@@ -2790,6 +2793,15 @@ case_deploy_heals_empty_binary() {
   [ -s "$HOME/.local/bin/bead-supervisor" ] && ok || bad "the installed binary is non-empty after the heal"
   assert_eq "$(cat "$BEAD_LOOP_DEPLOY/deployed")" "$WANT" "deployed still names the healed commit"
   assert_match "$(cat "$TEST_CTRL/systemctl.log")" "restart bead-supervisor.service" "the service was restarted"
+}
+case_deploy_syncs_before_recording() {
+  # A crash must not leave deployed naming a commit whose bytes never reached the disk.
+  setup_deploy
+  printf 'main-%s\n' "${WANT:0:7}" >"$TEST_CTRL/releases"
+  rc=0; out=$(run_deploy 2>&1) || rc=$?
+  assert_eq "$rc" 0 "the deploy ran: $out"
+  assert_eq "$(cat "$TEST_CTRL/sync.log")" before "flushed once, before deployed was written"
+  assert_eq "$(cat "$BEAD_LOOP_DEPLOY/deployed")" "$WANT" "then recorded"
 }
 case_deploy_empty_download_fails() {
   # The release's own binary can be the 0-byte one (the pipeline's upload truncated, or
