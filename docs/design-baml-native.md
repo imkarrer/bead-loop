@@ -160,6 +160,21 @@ passing on an independent run. Three lessons stand:
 - **That bead spelled out its edit**, and context peaked at 18k tokens, so it tested tool use
   and not reasoning, and never touched compaction.
 
+**A harder bead found the next gap.** `bl-b1a.1` ran out of its 50 minutes after 5 steps. Its
+one edit was right, but the model sent `\"id\"` for the file's `"id"`. That is a common
+local-model habit, and opencode recovers from it. Ours refused, so the model re-read an 831-line
+file, its context reached about 35k tokens, and each step took about 10 minutes. `edit_file` now
+undoes escaped quotes and newlines when that makes a unique match, and shows the real lines on
+a near miss; replayed, the model's own edit applies and matches the merged change. Two things
+are still missing: compaction, and keeping whole-file reads from piling up.
+
+**Long stalls are the box, not the harness.** Single calls took 5 to 7 minutes on `bl-gld` and
+`bl-b1a.1`. During one, disk and swap were silent, the CPU was about 90% idle, and the GPU sat
+near 100% with 16.0 of 16.4 GB of VRAM used. Opencode's logs show the same: on busy days 2–3%
+of steps took over 2 minutes, the longest 11. Two rules follow. A request that times out keeps
+running on the server and blocks the next, so client timeouts stay long. And a model-server
+timeout is `Infra`, never a failure.
+
 **The tools are small, except one.** Across 7,501 worker tool calls on this repo, 48% were
 read, 32% bash and 12% write or edit. Functions over `baml.fs` and `baml.sys` cover those.
 Edit is the exception: how it copes with a 30B's near-misses is much of a harness's quality.

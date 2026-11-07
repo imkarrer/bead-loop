@@ -64,23 +64,46 @@ function edit_file(path: string, old_text: string, new_text: string) -> string t
     if (old_text.length() == 0) {
         return "old_text is empty: use write_file to create a file";
     }
-    let parts = text.split(old_text);
-    let found = parts.length() - 1;
+    let found = count(text, old_text);
+    // A local model often escapes quotes and newlines that are not escaped in the file
+    // (bl-b1a.1, 7 Nov: \"id\" for "id"). Undone on both sides, when that makes it match.
+    if (found == 0 && unescaped(old_text) != old_text && count(text, unescaped(old_text)) == 1) {
+        return replace_once(path, text, unescaped(old_text), unescaped(new_text), " (after undoing escaped quotes)");
+    }
     if (found == 0) {
         return not_found(path, text, old_text);
     }
     if (found > 1) {
         return `old_text appears ${found} times in ${path}: include more of the lines around it`;
     }
-    let n = baml.fs.write(path, parts.join(new_text)) catch_all (e) {
+    replace_once(path, text, old_text, new_text, "")
+}
+
+function count(text: string, part: string) -> int throws never {
+    text.split(part).length() - 1
+}
+
+function unescaped(s: string) -> string throws never {
+    s.split("\\\"").join("\"").split("\\n").join("\n")
+}
+
+function replace_once(
+    path: string,
+    text: string,
+    old_text: string,
+    new_text: string,
+    how: string,
+) -> string throws never {
+    let n = baml.fs.write(path, text.split(old_text).join(new_text)) catch_all (e) {
         _ => {
             return `cannot write ${path}: ${e}`;
         },
     };
-    `edited ${path}`
+    `edited ${path}${how}`
 }
 
-/// Says where the match broke, because a near miss is the common case for a small model.
+/// Says where the match broke and shows the real lines there, so the model can copy them
+/// without reading the whole file again.
 function not_found(path: string, text: string, old_text: string) -> string throws never {
     let wanted = old_text.split("\n");
     let lines = text.split("\n");
@@ -89,11 +112,17 @@ function not_found(path: string, text: string, old_text: string) -> string throw
     while (i < lines.length()) {
         if ((lines.at(i) ?? "").trim() == first && first.length() > 0) {
             let n = i + 1;
-            return `old_text not found in ${path}. Its first line matches line ${n} once spaces are ignored, so the indentation or a later line differs. Read from line ${n} and copy the text exactly.`;
+            let end = if (i + wanted.length() + 2 < lines.length()) {
+                i + wanted.length() + 2
+            } else {
+                lines.length()
+            };
+            let real = lines.slice(i, end).join("\n");
+            return `old_text not found in ${path}. Its first line matches line ${n} once spaces are ignored, but a later line differs. The file has, from line ${n}:\n${real}\nCopy from that exactly.`;
         }
         i = i + 1;
     }
-    `old_text not found in ${path}, and its first line is nowhere in the file. Read the file again and copy the text exactly.`
+    `old_text not found in ${path}, and its first line is nowhere in the file. Search for a distinctive word from it, then copy the text exactly.`
 }
 
 /// Search the repository's tracked files for a regular expression.
@@ -150,6 +179,24 @@ test "edit refuses text that appears twice" {
     let p = "/tmp/bead-loop-edit-twice.txt";
     let _ = baml.fs.write(p, "x\nx\n");
     assert.contains(edit_file(p, "x", "y"), "appears 2 times");
+    let _ = baml.fs.remove(p);
+}
+
+test "edit undoes a model's escaped quotes" {
+    let p = "/tmp/bead-loop-edit-esc.txt";
+    let _ = baml.fs.write(p, "let b = json!({\"id\": id});\n");
+    assert.equal(
+        edit_file(p, "json!({\\\"id\\\": id})", "json!({\\\"id\\\": x})"),
+        `edited ${p} (after undoing escaped quotes)`,
+    );
+    assert.equal(baml.fs.read(p), "let b = json!({\"id\": x});\n");
+    let _ = baml.fs.remove(p);
+}
+
+test "a near miss shows the real lines" {
+    let p = "/tmp/bead-loop-edit-show.txt";
+    let _ = baml.fs.write(p, "fn a() {\n    let x = 1;\n    let y = 2;\n}\n");
+    assert.contains(edit_file(p, "fn a() {\n    let x = 9;", "z"), "    let x = 1;");
     let _ = baml.fs.remove(p);
 }
 
