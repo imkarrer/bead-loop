@@ -1,0 +1,732 @@
+// The outcome table of docs/state-machine.md, a test per row, each named for its row.
+// Rows about reading the world (a skipped build, a check's required-ness) belong to the
+// observation layer and are listed at the bottom.
+
+function policy() -> Policy throws never {
+    Policy {
+        stages: [
+            Stage { name: "local", worker: "devbox/coder", reviewer: "acbox/reviewer", attempts: 2 },
+            Stage {
+                name: "frontier",
+                worker: "claude/sonnet",
+                reviewer: "claude/sonnet",
+                attempts: 1,
+            },
+        ],
+        on_exhaust: OnExhaust.Park,
+        merge: MergeMode.Pipeline,
+        second_opinion: true,
+        ask_before_pr: false,
+    }
+}
+
+function with_merge(mode: MergeMode) -> Policy throws never {
+    let p = policy();
+    p.merge = mode;
+    p
+}
+
+function bead(place: Place, failures: int = 0) -> Bead throws never {
+    let b = Bead.new("t-1").at(place);
+    b.failures = failures;
+    b
+}
+
+function ready() -> Place throws never {
+    Ready { kind: "ready" }
+}
+
+function working() -> Place throws never {
+    Working { kind: "working", committed: false }
+}
+
+function committed_work() -> Place throws never {
+    Working { kind: "working", committed: true }
+}
+
+function reviewing() -> Place throws never {
+    Reviewing { kind: "reviewing" }
+}
+
+function in_review() -> Place throws never {
+    InReview { kind: "in_review" }
+}
+
+function researching() -> Place throws never {
+    Researching { kind: "researching" }
+}
+
+function merging() -> Place throws never {
+    Merging { kind: "merging", pr: "pr/1", adopted: false }
+}
+
+function adopted() -> Place throws never {
+    Merging { kind: "merging", pr: "pr/1", adopted: true }
+}
+
+function parked() -> Place throws never {
+    Parked { kind: "parked", question: "q" }
+}
+
+function infra(what: Trouble) -> Event throws never {
+    Infra { kind: "infra", what: what, words: "the words" }
+}
+
+function removes(s: Step) -> bool throws never {
+    s.effects.some((e) -> {
+        e is RemoveBranch
+    })
+}
+
+function briefs(s: Step) -> bool throws never {
+    s.effects.some((e) -> {
+        e is WriteParkBrief
+    })
+}
+
+function refuses(s: Step) -> bool throws never {
+    s.effects.some((e) -> {
+        e is Refuse
+    })
+}
+
+function relabels(s: Step) -> bool throws never {
+    s.effects.some((e) -> {
+        e is Relabel
+    })
+}
+
+function merges(s: Step) -> bool throws never {
+    s.effects.some((e) -> {
+        e is MergePr
+    })
+}
+
+function notes(s: Step) -> int throws never {
+    s.effects
+        .filter((e) -> {
+            e is Note
+        })
+        .length()
+}
+
+function is_held(s: Step) -> bool throws never {
+    s.bead.hold != null
+}
+
+// --- research ---
+
+test "Researcher writes a brief" {
+    let s = step(bead(researching()), BriefWritten { kind: "brief_written", overruled: false }, policy());
+    assert.is_type<Ready>(s.bead.place);
+    assert.equal(s.bead.failures, 0)
+}
+
+test "Researcher BLOCKED asks for a second opinion" {
+    let s = step(
+        bead(researching()),
+        ResearchBlocked { kind: "research_blocked", line: "BLOCKED: x", second_opinion: false },
+        policy(),
+    );
+    assert.is_type<Researching>(s.bead.place);
+    assert.is_true(
+        s.effects.some((e) -> {
+            e is SecondOpinion
+        }),
+    )
+}
+
+test "the second opinion writes a brief" {
+    let s = step(bead(researching()), BriefWritten { kind: "brief_written", overruled: true }, policy());
+    assert.is_type<Ready>(s.bead.place);
+    assert.equal(s.bead.failures, 0)
+}
+
+test "the second opinion says BLOCKED too" {
+    let s = step(
+        bead(researching()),
+        ResearchBlocked { kind: "research_blocked", line: "BLOCKED: x", second_opinion: true },
+        policy(),
+    );
+    assert.is_type<Parked>(s.bead.place);
+    assert.equal(s.bead.failures, 0);
+    assert.is_true(briefs(s))
+}
+
+test "no second opinion to ask parks at once" {
+    let p = policy();
+    p.second_opinion = false;
+    let s = step(
+        bead(researching()),
+        ResearchBlocked { kind: "research_blocked", line: "BLOCKED: x", second_opinion: false },
+        p,
+    );
+    assert.is_type<Parked>(s.bead.place);
+}
+
+// --- the dev lane ---
+
+test "a lane picks a ready bead" {
+    let s = step(bead(ready()), Picked { kind: "picked" }, policy());
+    assert.is_type<Working>(s.bead.place);
+    assert.equal(s.bead.rounds, 1)
+}
+
+test "Worker BLOCKED" {
+    let s = step(bead(working()), WorkerBlocked { kind: "worker_blocked", line: "BLOCKED: x" }, policy());
+    assert.is_type<Ready>(s.bead.place);
+    assert.equal(s.bead.failures, 1);
+    assert.is_true(removes(s))
+}
+
+test "Worker BLOCKED at the last stage parks with the brief" {
+    let s = step(
+        bead(working(), failures = 2),
+        WorkerBlocked { kind: "worker_blocked", line: "BLOCKED: x" },
+        policy(),
+    );
+    assert.is_type<Parked>(s.bead.place);
+    assert.equal(s.bead.failures, 3);
+    assert.is_true(briefs(s));
+    assert.is_true(removes(s))
+}
+
+test "No commit" {
+    let s = step(bead(working()), NoCommit { kind: "no_commit" }, policy());
+    assert.equal(s.bead.failures, 1);
+    assert.is_true(removes(s))
+}
+
+test "the session timed out" {
+    let s = step(bead(working()), RoundTimedOut { kind: "round_timed_out" }, policy());
+    assert.equal(s.bead.failures, 1);
+    assert.is_true(removes(s))
+}
+
+test "the worker exits non-zero after real work" {
+    let s = step(bead(working()), WorkerCrashed { kind: "worker_crashed", words: "rc 1" }, policy());
+    assert.equal(s.bead.failures, 1)
+}
+
+test "Setup fails" {
+    let s = step(bead(working()), infra(Trouble.Setup), policy());
+    assert.is_type<Ready>(s.bead.place);
+    assert.equal(s.bead.failures, 0);
+    assert.is_true(is_held(s));
+    assert.is_true(removes(s))
+}
+
+test "Git refuses the worktree" {
+    let s = step(bead(working()), infra(Trouble.Git), policy());
+    assert.equal(s.bead.failures, 0);
+    assert.is_true(is_held(s));
+    assert.is_true(!removes(s))
+}
+
+test "Harness exits with nothing from the model" {
+    let s = step(bead(working()), infra(Trouble.Harness), policy());
+    assert.equal(s.bead.failures, 0);
+    assert.is_true(is_held(s));
+    assert.is_true(removes(s))
+}
+
+test "Harness exits with nothing, once a round had committed" {
+    let s = step(bead(committed_work()), infra(Trouble.Harness), policy());
+    assert.equal(s.bead.failures, 0);
+    assert.is_true(!removes(s));
+    assert.is_true(s.bead.kept)
+}
+
+test "Gate fails twice" {
+    let s = step(bead(working()), GateFailedTwice { kind: "gate_failed_twice", errors: "e" }, policy());
+    assert.equal(s.bead.failures, 1);
+    assert.is_true(removes(s))
+}
+
+test "Gate passes" {
+    let s = step(bead(committed_work()), GatePassed { kind: "gate_passed" }, policy());
+    assert.is_type<InReview>(s.bead.place);
+    assert.is_true(s.bead.kept)
+}
+
+test "Gate passes, diff checks find a problem" {
+    let s = step(bead(committed_work()), DiffProblems { kind: "diff_problems", problems: "p" }, policy());
+    assert.equal(s.bead.failures, 1);
+    assert.is_true(!removes(s));
+    assert.equal(s.bead.order, Order.FixInPlace)
+}
+
+test "Pre-check SEND BACK" {
+    let s = step(bead(committed_work()), PrecheckSentBack { kind: "precheck_sent_back", block: "b" }, policy());
+    assert.equal(s.bead.failures, 1);
+    assert.is_true(!removes(s))
+}
+
+// --- the review lane ---
+
+test "a lane picks a bead in review" {
+    let s = step(bead(in_review()), ReviewPicked { kind: "review_picked" }, policy());
+    assert.is_type<Reviewing>(s.bead.place);
+}
+
+test "Reviewer REJECT" {
+    let s = step(
+        bead(reviewing()),
+        Rejected { kind: "rejected", line: "REJECT: a", text: "REJECT: a" },
+        policy(),
+    );
+    assert.is_type<Ready>(s.bead.place);
+    assert.equal(s.bead.failures, 1);
+    assert.is_true(!removes(s));
+    assert.equal(s.bead.order, Order.FixInPlace)
+}
+
+test "The same REJECT twice escalates to a different worker" {
+    let b = bead(reviewing(), failures = 0);
+    b.last_reject = "REJECT:   same  thing";
+    let s = step(b, Rejected { kind: "rejected", line: "REJECT: same thing", text: "t" }, policy());
+    assert.equal(s.bead.failures, 2);
+    assert.equal(stage_for(policy(), s.bead.failures)?.worker, "claude/sonnet")
+}
+
+test "The same REJECT twice with no other worker parks" {
+    let b = bead(reviewing(), failures = 2);
+    b.last_reject = "REJECT: same";
+    let s = step(b, Rejected { kind: "rejected", line: "REJECT: same", text: "t" }, policy());
+    assert.is_type<Parked>(s.bead.place);
+}
+
+test "the reviewer exits non-zero after work" {
+    let s = step(bead(reviewing()), ReviewerCrashed { kind: "reviewer_crashed", words: "rc 1" }, policy());
+    assert.is_type<Ready>(s.bead.place);
+    assert.equal(s.bead.failures, 1);
+    assert.is_true(!removes(s))
+}
+
+test "the reviewer comes back with nothing from the model" {
+    let s = step(bead(reviewing()), infra(Trouble.Harness), policy());
+    assert.is_type<InReview>(s.bead.place);
+    assert.equal(s.bead.failures, 0);
+    assert.is_true(is_held(s))
+}
+
+test "Reviewer APPROVE pushes, then the PR moves it to merge" {
+    let a = step(bead(reviewing()), Approved { kind: "approved" }, policy());
+    assert.is_true(
+        a.effects.some((e) -> {
+            e is PushAndOpenPr
+        }),
+    );
+    let s = step(a.bead, PrOpened { kind: "pr_opened", url: "pr/1", head: "h" }, policy());
+    assert.is_type<Merging>(s.bead.place);
+}
+
+test "Reviewer APPROVE under ask is ready to publish" {
+    let s = step(bead(reviewing()), BranchPushed { kind: "branch_pushed", compare_url: "c" }, policy());
+    assert.is_type<Publishable>(s.bead.place);
+    let o = step(s.bead, PrOpened { kind: "pr_opened", url: "pr/1", head: "h" }, policy());
+    assert.is_type<Merging>(o.bead.place);
+}
+
+test "Push or gh pr create refused" {
+    let s = step(bead(reviewing()), infra(Trouble.Push), policy());
+    assert.is_type<InReview>(s.bead.place);
+    assert.is_true(is_held(s));
+    assert.equal(s.bead.failures, 0)
+}
+
+test "APPROVE on the commit CI was red on asks CI again" {
+    let b = bead(reviewing());
+    b.charged_head = "h";
+    let s = step(b, PrOpened { kind: "pr_opened", url: "pr/1", head: "h" }, policy());
+    assert.is_true(relabels(s))
+}
+
+// --- the merge queue ---
+
+test "CI green, auto" {
+    assert.is_true(
+        merges(step(bead(merging()), ChecksGreen { kind: "checks_green" }, with_merge(MergeMode.Auto))),
+    )
+}
+
+test "CI green, pipeline waits for the pipeline" {
+    let s = step(bead(merging()), ChecksGreen { kind: "checks_green" }, policy());
+    assert.is_true(!merges(s));
+    assert.is_true(!is_held(s))
+}
+
+test "CI green, pipeline, not merged in time is held" {
+    assert.is_true(
+        is_held(step(bead(merging()), WaitedTooLong { kind: "waited_too_long", why: "30 min" }, policy())),
+    )
+}
+
+test "CI green, manual" {
+    assert.is_true(
+        is_held(step(bead(merging()), ChecksGreen { kind: "checks_green" }, with_merge(MergeMode.Manual))),
+    )
+}
+
+test "CI green, external" {
+    let s = step(bead(merging()), ChecksGreen { kind: "checks_green" }, with_merge(MergeMode.External));
+    assert.is_true(!is_held(s));
+    assert.equal(notes(s), 0)
+}
+
+test "no hold for external however long it waits" {
+    assert.is_true(
+        !is_held(
+            step(
+                bead(merging()),
+                WaitedTooLong { kind: "waited_too_long", why: "w" },
+                with_merge(MergeMode.External),
+            ),
+        ),
+    )
+}
+
+test "CI green, GitHub refuses the merge" {
+    assert.is_true(
+        is_held(step(bead(merging()), infra(Trouble.MergeRefused), with_merge(MergeMode.Auto))),
+    )
+}
+
+test "BEHIND under auto updates the branch" {
+    let s = step(bead(merging()), Behind { kind: "behind" }, with_merge(MergeMode.Auto));
+    assert.is_true(
+        s.effects.some((e) -> {
+            e is UpdateBranch
+        }),
+    )
+}
+
+test "CI red" {
+    let s = step(bead(merging()), ChecksRed { kind: "checks_red", checks: "c", head: "h" }, policy());
+    assert.is_type<Ready>(s.bead.place);
+    assert.equal(s.bead.failures, 1);
+    assert.equal(s.bead.charged_head, "h");
+    assert.equal(s.bead.pr, null);
+}
+
+test "CI red again on the commit already charged, pipeline" {
+    let b = bead(merging(), failures = 1);
+    b.charged_head = "h";
+    let s = step(b, ChecksRed { kind: "checks_red", checks: "c", head: "h" }, policy());
+    assert.equal(s.bead.failures, 1);
+    assert.is_true(relabels(s));
+    assert.is_type<Merging>(s.bead.place);
+}
+
+test "CI red again on the commit already charged, otherwise held" {
+    let b = bead(merging(), failures = 1);
+    b.charged_head = "h";
+    let s = step(b, ChecksRed { kind: "checks_red", checks: "c", head: "h" }, with_merge(MergeMode.Auto));
+    assert.equal(s.bead.failures, 1);
+    assert.is_true(is_held(s))
+}
+
+test "CI red, every failing required check killed, runs once more" {
+    let s = step(bead(merging()), RedKilled { kind: "red_killed", checks: "c", head: "h" }, policy());
+    assert.equal(s.bead.failures, 0);
+    assert.is_true(relabels(s));
+    assert.equal(s.bead.rerun_head, "h")
+}
+
+test "killed again is charged like any red" {
+    let b = bead(merging());
+    b.rerun_head = "h";
+    let s = step(b, RedKilled { kind: "red_killed", checks: "c", head: "h" }, policy());
+    assert.equal(s.bead.failures, 1)
+}
+
+test "CI red only in checks the base does not require" {
+    let s = step(bead(merging()), RedNotRequired { kind: "red_not_required" }, policy());
+    assert.equal(s.bead.failures, 0);
+    assert.is_type<Merging>(s.bead.place);
+}
+
+test "CI red on an adopted PR" {
+    let s = step(bead(adopted()), ChecksRed { kind: "checks_red", checks: "c", head: "h" }, policy());
+    assert.equal(s.bead.failures, 0);
+    assert.is_true(is_held(s))
+}
+
+test "CI pending for over two hours" {
+    assert.is_true(
+        is_held(
+            step(
+                bead(merging()),
+                WaitedTooLong { kind: "waited_too_long", why: "is the agent up?" },
+                policy(),
+            ),
+        ),
+    )
+}
+
+test "gh cannot read the PR" {
+    let s = step(bead(merging()), infra(Trouble.Gh), policy());
+    assert.is_true(is_held(s));
+    assert.is_type<Merging>(s.bead.place);
+}
+
+test "PR conflicts with the base" {
+    let s = step(bead(merging()), Conflicting { kind: "conflicting" }, policy());
+    assert.is_type<Ready>(s.bead.place);
+    assert.equal(s.bead.failures, 0);
+    assert.equal(s.bead.order, Order.Rebase);
+    assert.is_true(s.bead.kept)
+}
+
+test "Adopted PR conflicts" {
+    assert.is_type<Merging>(
+        step(bead(adopted()), Conflicting { kind: "conflicting" }, policy()).bead.place,
+    );
+}
+
+test "merged" {
+    assert.is_type<Closed>(
+        step(bead(merging()), PrMerged { kind: "pr_merged", url: "pr/1" }, policy()).bead.place,
+    );
+}
+
+test "Merged, but bd close fails" {
+    let s = step(bead(merging()), PrMerged { kind: "pr_merged", url: "pr/1" }, policy());
+    assert.is_true(is_held(step(s.bead, infra(Trouble.Bd), policy())))
+}
+
+test "PR closed unmerged" {
+    let s = step(bead(merging()), PrClosed { kind: "pr_closed", url: "pr/1" }, policy());
+    assert.is_type<Parked>(s.bead.place);
+    assert.is_true(briefs(s))
+}
+
+test "A dev-queue bead's PR merged outside the loop" {
+    assert.is_type<Closed>(
+        step(bead(ready()), MergedOutside { kind: "merged_outside", url: "u" }, policy()).bead.place,
+    );
+}
+
+test "A parked bead's PR merged outside the loop" {
+    assert.is_type<Closed>(
+        step(bead(parked()), MergedOutside { kind: "merged_outside", url: "u" }, policy()).bead.place,
+    );
+}
+
+test "an open PR the loop did not open is adopted" {
+    let s = step(bead(ready()), PrAdopted { kind: "pr_adopted", url: "u" }, policy());
+    assert.is_type<Merging>(s.bead.place);
+    assert.is_true(relabels(s))
+}
+
+test "a PR the loop sent back is not adopted" {
+    let b = bead(ready());
+    b.pr = "pr/1";
+    assert.is_type<Ready>(
+        step(b, PrAdopted { kind: "pr_adopted", url: "pr/1" }, policy()).bead.place,
+    );
+}
+
+// --- exhaustion and you ---
+
+test "Failures exhausted" {
+    let s = step(bead(ready(), failures = 3), Picked { kind: "picked" }, policy());
+    assert.is_type<Parked>(s.bead.place);
+    assert.is_true(briefs(s))
+}
+
+test "repeat cycles the stages" {
+    let p = policy();
+    p.on_exhaust = OnExhaust.Repeat;
+    assert.equal(stage_for(p, 4)?.worker, "devbox/coder");
+    assert.is_type<Working>(
+        step(bead(ready(), failures = 3), Picked { kind: "picked" }, p).bead.place,
+    );
+}
+
+test "an answer takes one off the count" {
+    let s = step(bead(parked(), failures = 3), Answered { kind: "answered", text: "use x" }, policy());
+    assert.is_type<Ready>(s.bead.place);
+    assert.equal(s.bead.failures, 2)
+}
+
+test "reopen keeps the count" {
+    assert.equal(
+        step(bead(parked(), failures = 3), Reopened { kind: "reopened" }, policy()).bead.failures,
+        3,
+    )
+}
+
+test "escalate lands on the last stage" {
+    let s = step(bead(parked(), failures = 0), Escalated { kind: "escalated" }, policy());
+    assert.equal(stage_for(policy(), s.bead.failures)?.worker, "claude/sonnet")
+}
+
+test "the merge queue refuses an answer, reopen and escalate" {
+    assert.is_true(
+        refuses(step(bead(merging()), Answered { kind: "answered", text: "x" }, policy())),
+    );
+    assert.is_true(refuses(step(bead(merging()), Reopened { kind: "reopened" }, policy())));
+    assert.is_true(refuses(step(bead(merging()), Escalated { kind: "escalated" }, policy())))
+}
+
+// --- the loop ---
+
+test "The loop stopped mid dev round" {
+    let s = step(bead(working()), RoundLost { kind: "round_lost" }, policy());
+    assert.is_type<Ready>(s.bead.place);
+    assert.equal(s.bead.failures, 0);
+    assert.is_true(s.bead.kept)
+}
+
+test "the loop stopped mid review" {
+    let s = step(bead(reviewing()), RoundLost { kind: "round_lost" }, policy());
+    assert.is_type<InReview>(s.bead.place);
+    assert.equal(s.bead.failures, 0)
+}
+
+test "a hold is said once and cleared by the world" {
+    let a = step(bead(merging()), infra(Trouble.Gh), policy());
+    assert.equal(notes(a), 1);
+    let b = step(a.bead, infra(Trouble.Gh), policy());
+    assert.equal(notes(b), 0);
+    let c = step(b.bead, HoldCleared { kind: "hold_cleared" }, policy());
+    assert.is_true(!is_held(c))
+}
+
+// --- properties ---
+
+test "infrastructure never charges a failure, in any place" {
+    let places = [
+        ready(),
+        researching(),
+        working(),
+        committed_work(),
+        in_review(),
+        reviewing(),
+        merging(),
+        adopted(),
+        parked(),
+    ];
+    let troubles = [
+        Trouble.Setup,
+        Trouble.Git,
+        Trouble.Harness,
+        Trouble.Push,
+        Trouble.Gh,
+        Trouble.Bd,
+        Trouble.SignedOut,
+        Trouble.NoSuchTarget,
+        Trouble.MergeRefused,
+    ];
+    for (let place in places) {
+        for (let t in troubles) {
+            assert.equal(step(bead(place, failures = 1), infra(t), policy()).bead.failures, 1);
+        }
+    }
+}
+
+function exits() -> Event[] throws never {
+    [
+        Picked { kind: "picked" },
+        BriefWritten { kind: "brief_written", overruled: false },
+        GatePassed { kind: "gate_passed" },
+        ReviewPicked { kind: "review_picked" },
+        PrOpened { kind: "pr_opened", url: "u", head: "h" },
+        PrMerged { kind: "pr_merged", url: "u" },
+        Reopened { kind: "reopened" },
+    ]
+}
+
+test "every place but Closed has an exit" {
+    let places: Place[] = [
+        ready(),
+        researching(),
+        working(),
+        in_review(),
+        reviewing(),
+        Publishable { kind: "publishable", compare_url: "c" },
+        merging(),
+        parked(),
+    ];
+    for (let place in places) {
+        let moved = exits().some((e) -> {
+            step(bead(place), e, policy()).bead.place != place
+        });
+        assert.is_true(moved);
+    }
+}
+
+test "a bead folds from its log" {
+    let log: Event[] = [
+        Picked { kind: "picked" },
+        Committed { kind: "committed", sha: "a" },
+        GatePassed { kind: "gate_passed" },
+        ReviewPicked { kind: "review_picked" },
+        Rejected { kind: "rejected", line: "REJECT: x", text: "t" },
+        Picked { kind: "picked" },
+        Committed { kind: "committed", sha: "b" },
+        GatePassed { kind: "gate_passed" },
+        ReviewPicked { kind: "review_picked" },
+        Approved { kind: "approved" },
+        PrOpened { kind: "pr_opened", url: "u", head: "h" },
+        PrMerged { kind: "pr_merged", url: "u" },
+    ];
+    let b = fold("t-1", log, policy());
+    assert.is_type<Closed>(b.place);
+    assert.equal(b.failures, 1);
+    assert.equal(b.rounds, 2)
+}
+
+function all_events() -> Event[] throws never {
+    [
+        WorkerBlocked { kind: "worker_blocked", line: "l" },
+        NoCommit { kind: "no_commit" },
+        RoundTimedOut { kind: "round_timed_out" },
+        WorkerCrashed { kind: "worker_crashed", words: "w" },
+        GateFailedTwice { kind: "gate_failed_twice", errors: "e" },
+        DiffProblems { kind: "diff_problems", problems: "p" },
+        PrecheckSentBack { kind: "precheck_sent_back", block: "b" },
+        Rejected { kind: "rejected", line: "l", text: "t" },
+        ReviewerCrashed { kind: "reviewer_crashed", words: "w" },
+        ChecksRed { kind: "checks_red", checks: "c", head: "h" },
+        Infra { kind: "infra", what: Trouble.Gh, words: "w" },
+        ResearchPicked { kind: "research_picked" },
+        BriefWritten { kind: "brief_written", overruled: true },
+        ResearchBlocked { kind: "research_blocked", line: "l", second_opinion: true },
+        Picked { kind: "picked" },
+        Committed { kind: "committed", sha: "s" },
+        GatePassed { kind: "gate_passed" },
+        ReviewPicked { kind: "review_picked" },
+        Approved { kind: "approved" },
+        PrOpened { kind: "pr_opened", url: "u", head: "h" },
+        BranchPushed { kind: "branch_pushed", compare_url: "c" },
+        PrMerged { kind: "pr_merged", url: "u" },
+        PrClosed { kind: "pr_closed", url: "u" },
+        Conflicting { kind: "conflicting" },
+        RedKilled { kind: "red_killed", checks: "c", head: "h" },
+        RedNotRequired { kind: "red_not_required" },
+        ChecksGreen { kind: "checks_green" },
+        Behind { kind: "behind" },
+        WaitedTooLong { kind: "waited_too_long", why: "w" },
+        PrAdopted { kind: "pr_adopted", url: "u" },
+        MergedOutside { kind: "merged_outside", url: "u" },
+        Answered { kind: "answered", text: "t" },
+        Reopened { kind: "reopened" },
+        Escalated { kind: "escalated" },
+        RoundLost { kind: "round_lost" },
+        HoldCleared { kind: "hold_cleared" },
+    ]
+}
+
+test "every event survives the log's JSON" {
+    for (let e in all_events()) {
+        let text = baml.json.stringify(e);
+        let back = baml.json.decode<Event>(text);
+        assert.equal(back, e);
+    }
+}
+
+// Rows for the observation layer, not this function: a build CI skipped, no checks five
+// minutes on, a check the base does not require, a label that cannot be added, no brief
+// yet and nothing else to take.

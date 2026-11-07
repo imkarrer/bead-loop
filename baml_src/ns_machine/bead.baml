@@ -1,0 +1,127 @@
+// What a bead is, as the loop knows it. A bead has exactly one Place, so "one place"
+// (docs/state-machine.md) needs no filter: it cannot be in two queues.
+//
+// Every persisted variant carries a literal `kind`. JSON drops the class name, and with
+// `kind` a baml.json.decode<T> gets the right variant back.
+
+class Ready {
+    kind: "ready",
+}
+
+class Researching {
+    kind: "researching",
+}
+
+class Working {
+    kind: "working",
+    committed: bool,
+}
+
+class InReview {
+    kind: "in_review",
+}
+
+class Reviewing {
+    kind: "reviewing",
+}
+
+class Publishable {
+    kind: "publishable",
+    compare_url: string,
+}
+
+class Merging {
+    kind: "merging",
+    pr: string,
+    adopted: bool,
+}
+
+class Parked {
+    kind: "parked",
+    question: string,
+}
+
+class Closed {
+    kind: "closed",
+    url: string?,
+}
+
+type Place = Ready
+    | Researching
+    | Working
+    | InReview
+    | Reviewing
+    | Publishable
+    | Merging
+    | Parked
+    | Closed;
+
+/// Something outside the loop must change. Orthogonal to Place: a held bead stays in its
+/// queue and nothing is charged.
+class Hold {
+    what: string,
+    words: string,
+}
+
+/// What the next worker round is told to do with the branch.
+enum Order {
+    Fresh,
+    FixInPlace,
+    Rebase,
+}
+
+class Bead {
+    id: string,
+    place: Place,
+    failures: int,
+    rounds: int,
+    hold: Hold?,
+    /// A branch survives from an earlier round; the next one resumes it.
+    kept: bool,
+    order: Order,
+    /// An open PR the next push updates: sent back from the merge queue.
+    pr: string?,
+    /// The first REJECT line of the last rejection, to catch the same one twice.
+    last_reject: string?,
+    /// The head CI was last charged for, and the head already re-run once.
+    charged_head: string?,
+    rerun_head: string?,
+
+    function new(id: string) -> Bead throws never {
+        Bead {
+            id: id,
+            place: Ready { kind: "ready" },
+            failures: 0,
+            rounds: 0,
+            hold: null,
+            kept: false,
+            order: Order.Fresh,
+            pr: null,
+            last_reject: null,
+            charged_head: null,
+            rerun_head: null,
+        }
+    }
+
+    function copy(self) -> Bead throws never {
+        Bead {
+            id: self.id,
+            place: self.place,
+            failures: self.failures,
+            rounds: self.rounds,
+            hold: self.hold,
+            kept: self.kept,
+            order: self.order,
+            pr: self.pr,
+            last_reject: self.last_reject,
+            charged_head: self.charged_head,
+            rerun_head: self.rerun_head,
+        }
+    }
+
+    function at(self, place: Place) -> Bead throws never {
+        let n = self.copy();
+        n.place = place;
+        n
+    }
+}
