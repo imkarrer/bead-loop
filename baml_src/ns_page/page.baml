@@ -324,7 +324,7 @@ test "a repo's view is a fold of its log, closed beads counted not listed" {
 test "the page's script parses as served" {
     let parts = PAGE_HTML.split("<script>");
     let script = (parts.at(1) ?? "").split("</script>").at(0) ?? "";
-    let path = "/tmp/bead-loop-page-script.js";
+    let path = root.tools.scratch("page-script.js");
     baml.fs.write(path, script);
     let out = baml.sys.run("node", args = ["--check", path], capture_output = true);
     assert.equal(out.stderr.to_string(), "");

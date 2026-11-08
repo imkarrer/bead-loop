@@ -505,7 +505,7 @@ test "a world that cannot list its beads keeps the last list" {
 }
 
 test "a folder with no log is not a bead of this loop's" {
-    let state = "/tmp/bead-loop-filelog-test";
+    let state = root.tools.scratch("filelog-test");
     let _ = baml.sys.run("rm", args = ["-rf", state]);
     let _ = baml.sys.run("mkdir", args = ["-p", `${state}/beads/rust-only`]);
     let log = FileLog { state: state };

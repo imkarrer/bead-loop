@@ -372,7 +372,7 @@ test "a case is a ticket" {
     let c = case_of(
         `{"id":"t-1","title":"t","description":"d","acceptance":"a","repo":"/tmp/x","base":"HEAD","gate":"true"}`,
     );
-    let w = OfflineWorld.new(c, "/tmp/bead-loop-offline", "/bin/false");
+    let w = OfflineWorld.new(c, root.tools.scratch("offline"), "/bin/false");
     assert.equal(w.tickets().at(0)?.id, "t-1");
     assert.contains(w.bead_text("t-1"), "TITLE: t")
 }
@@ -381,7 +381,7 @@ test "a bench PR is local, not github" {
     let c = case_of(
         `{"id":"t-1","title":"t","description":"d","acceptance":"a","repo":"/tmp/x","base":"HEAD","gate":"true"}`,
     );
-    let w = OfflineWorld.new(c, "/tmp/bead-loop-offline", "/bin/false");
+    let w = OfflineWorld.new(c, root.tools.scratch("offline"), "/bin/false");
     let opened = w.push_and_open_pr("t-1");
     assert.equal(opened.url, "bench://t-1");
     assert.is_type<root.machine.ChecksGreen>(w.observe_pr("t-1", opened.url).at(0));

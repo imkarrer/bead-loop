@@ -1253,7 +1253,7 @@ test "a timed-out round marks itself, and only on the clock" {
     assert.equal(argv.at(3), "/r/t-1.timedout");
     assert.equal(argv.at(4), "5");
     assert.equal(argv.at(5), "bin");
-    let dir = "/tmp/bead-loop-timed-test";
+    let dir = root.tools.scratch("timed-test");
     let _ = baml.sys.run("rm", args = ["-rf", dir]);
     let _ = baml.sys.run("mkdir", args = ["-p", dir]);
     let slow = baml.sys.run("sh", args = timed_argv(["sleep", "5"], 1, `${dir}/slow.timedout`));

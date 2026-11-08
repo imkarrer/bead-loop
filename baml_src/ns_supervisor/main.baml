@@ -236,7 +236,7 @@ test "tell knows its three words and nothing else" {
 }
 
 test "a mail written by tell reads back as its event" {
-    let state = "/tmp/bead-loop-tell-test";
+    let state = root.tools.scratch("tell-test");
     let _ = baml.sys.run("rm", args = ["-rf", state]);
     let _ = baml.sys.run("mkdir", args = ["-p", `${state}/inbox`]);
     let e = told("answer", "use the \"other\" file") ?? root.machine.Reopened { kind: "reopened" };
