@@ -176,22 +176,25 @@ function on_ready(b: Bead, e: Event, p: Policy) -> Step throws never {
                 effects: [PrepareWorktree { resume: b.kept }],
             }
         },
-        let x: PrAdopted => {
-            if (b.pr != null) {
-                return stay(b);
-            }
-            let n = b.at(Merging { kind: "merging", pr: x.url, adopted: !(x.own ?? false) });
-            n.pr = x.url;
-            let effects: Effect[] = if (p.merge == MergeMode.Pipeline) {
-                [Relabel {}]
-            } else {
-                []
-            };
-            Step { bead: n, effects: effects }
-        },
+        let x: PrAdopted => adopt(b, x, p),
         let x: MergedOutside => closed(b, x.url),
         _ => elsewhere(b, e),
     }
+}
+
+/// A `bead/ID` PR the loop is not carrying joins the merge queue, from ready or parked.
+function adopt(b: Bead, x: PrAdopted, p: Policy) -> Step throws never {
+    if (b.pr != null) {
+        return stay(b);
+    }
+    let n = b.at(Merging { kind: "merging", pr: x.url, adopted: !(x.own ?? false) });
+    n.pr = x.url;
+    let effects: Effect[] = if (p.merge == MergeMode.Pipeline) {
+        [Relabel {}]
+    } else {
+        []
+    };
+    Step { bead: n, effects: effects }
 }
 
 function closed(b: Bead, url: string?) -> Step throws never {
@@ -516,6 +519,9 @@ function on_parked(b: Bead, e: Event, p: Policy) -> Step throws never {
             n.kept = true;
             stay(n)
         },
+        // Landed by hand: the PR you opened from its branch is watched like any adopted
+        // one (bl-dze.2, 8 Nov: merged as #241 and left parked in bd).
+        let x: PrAdopted => adopt(b, x, p),
         let x: MergedOutside => closed(b, x.url),
         _ => elsewhere(b, e),
     }

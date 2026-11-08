@@ -583,6 +583,20 @@ test "a PR the loop sent back is not adopted" {
     );
 }
 
+test "a PR opened by hand from a parked bead's branch is adopted" {
+    let s = step(bead(parked()), PrAdopted { kind: "pr_adopted", url: "u", own: true }, policy());
+    assert.is_type<Merging>(s.bead.place);
+    assert.equal(s.bead.pr, "u");
+    if let m: Merging = s.bead.place {
+        assert.equal(m.adopted, false);
+    }
+}
+
+test "a parked bead merged outside the loop is closed" {
+    let s = step(bead(parked()), MergedOutside { kind: "merged_outside", url: "u" }, policy());
+    assert.is_type<Closed>(s.bead.place);
+}
+
 // --- exhaustion and you ---
 
 test "Failures exhausted" {

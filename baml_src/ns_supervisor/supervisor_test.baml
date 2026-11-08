@@ -736,3 +736,39 @@ test "a rebuttal is reviewed by the last stage's reviewer" {
     b.rebutted = true;
     assert.equal(reviewer_of(s, b), "claude/sonnet")
 }
+
+// bl-dze.2, 8 Nov: parked after three rounds, landed by hand as #241 from bead/bl-dze.2,
+// and left `blocked` with loop:parked in bd until it was closed by hand.
+test "a parked bead's open PR is adopted, merged and the bead closed" {
+    let w = one_bead([no_commit(), no_commit(), no_commit()], [], [green(), merged()]);
+    let s = Supervisor.new(w, MemoryLog.new(), policy());
+    turns(s, w, 6);
+    assert.is_type<root.machine.Parked>(place_of(s));
+    w.adoptable_now = [root.world.Adoptable { id: "t-1", url: "pr/t-1", own: true }];
+    turns(s, w, 2);
+    assert.is_type<root.machine.Closed>(place_of(s));
+    assert.is_true(w.calls.includes("observe_pr"));
+    assert.is_true(w.calls.includes("close_bead"));
+    assert.equal(s.bead("t-1")?.pr, "pr/t-1")
+}
+
+test "a parked bead whose PR already merged is closed" {
+    let w = one_bead([no_commit(), no_commit(), no_commit()], [], []);
+    let s = Supervisor.new(w, MemoryLog.new(), policy());
+    turns(s, w, 6);
+    assert.is_type<root.machine.Parked>(place_of(s));
+    w.adoptable_now = [root.world.Adoptable { id: "t-1", url: "pr/t-1", own: true, merged: true }];
+    tick(s);
+    assert.is_type<root.machine.Closed>(place_of(s));
+    assert.is_true(w.calls.includes("close_bead"))
+}
+
+test "a merged bead PR closes no bead the loop has not parked" {
+    let w = one_bead([], [], []);
+    w.tickets_now = [];
+    w.adoptable_now = [root.world.Adoptable { id: "t-1", url: "pr/t-1", own: false, merged: true }];
+    let s = Supervisor.new(w, MemoryLog.new(), policy());
+    tick(s);
+    assert.equal(s.bead("t-1"), null);
+    assert.equal(w.calls.includes("close_bead"), false)
+}
