@@ -4,7 +4,7 @@
 #
 #   scripts/ci.sh baml      fmt --check, then the BAML tests (the state machine)
 #   scripts/ci.sh scripts   syntax, shellcheck, the skills/agents lint
-#   scripts/ci.sh suite     pack the binary and check the subcommands the unit execs
+#   scripts/ci.sh suite     pack the binary, check its subcommands, run test/e2e on it
 #   scripts/ci.sh package   flox build bead-loop, and test/package.sh on what it built
 #   scripts/ci.sh release   main only: that binary as the GitHub release main-<sha7>
 #
@@ -38,10 +38,10 @@ case ${1:-} in
     ;;
   scripts)
     echo "--- :bash: syntax"
-    bash -n install.sh scripts/*.sh test/lint-skills.sh test/package.sh
+    bash -n install.sh scripts/*.sh test/lint-skills.sh test/package.sh test/e2e/*.sh test/e2e/cases/*.sh test/e2e/bin/*
     bash -n bin/bead-loop-ui
     echo "--- :bash: shellcheck"
-    shellcheck -S warning install.sh scripts/*.sh test/lint-skills.sh test/package.sh bin/bead-loop-ui
+    shellcheck -S warning -x install.sh scripts/*.sh test/lint-skills.sh test/package.sh bin/bead-loop-ui test/e2e/*.sh test/e2e/cases/*.sh test/e2e/bin/*
     echo "--- :memo: skills and agents"
     test/lint-skills.sh
     echo "--- :spider_web: the page"
@@ -49,14 +49,17 @@ case ${1:-} in
     node test/ui-onclicks.js test/ui-state.json
     ;;
   suite)
-    # The tests ran in the baml step. This is the binary the unit will exec, which the
-    # tests never start: run, round and page, and --help, because deploy checks that.
+    # The BAML tests ran in the baml step, against a fake world. This is the binary the
+    # unit will exec: its subcommands (deploy checks --help), then test/e2e on it, which
+    # runs it against real git, bd and a gate, with gh and the models scripted.
     echo "--- :package: pack"
     scripts/pack.sh "$HERE/target/bead-supervisor"
     "$HERE/target/bead-supervisor" --help >/dev/null
     "$HERE/target/bead-supervisor" run --help >/dev/null
     "$HERE/target/bead-supervisor" round --help >/dev/null
     "$HERE/target/bead-supervisor" page --help >/dev/null
+    echo "--- :link: end to end"
+    test/e2e/run.sh
     ;;
   package)
     # What `flox install imkarrer/bead-loop` would install: the manifest's

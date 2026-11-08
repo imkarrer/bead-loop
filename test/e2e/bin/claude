@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+# claude for the end-to-end suite: one Claude Code turn from a script. Each call takes the
+# next file of $E2E_CTRL/claude/replies/ (name order, moved to used/ once taken), JSON:
+#   {"sh": "COMMANDS", "result": "TEXT"}   run COMMANDS in the round's directory, then
+#                                          answer TEXT as the session's result
+#   {"exit": N, "stderr": "TEXT"}          the CLI failing
+# Its arguments, one per line, are kept as $E2E_CTRL/claude/argv-NNN; its prompt (stdin,
+# when the client sends one) as prompt-NNN.
+set -euo pipefail
+C=$E2E_CTRL/claude
+mkdir -p "$C/replies/used"
+[ "${1:-}" = --version ] && { echo "2.0.0 (Claude Code)"; exit 0; }
+n=$(( $(find "$C" -maxdepth 1 -name 'argv-*' | wc -l) + 1 ))
+id=$(printf '%03d' "$n")
+printf '%s\n' "$@" >"$C/argv-$id"
+[ -t 0 ] || cat >"$C/prompt-$id"
+f=$(find "$C/replies" -maxdepth 1 -name '*.json' | sort | head -1)
+[ -n "$f" ] || { echo "stub claude: the script ran out" >&2; exit 1; }
+r=$(cat "$f")
+mv "$f" "$C/replies/used/"
+code=$(jq -r '.exit // empty' <<<"$r")
+if [ -n "$code" ]; then
+  jq -r '.stderr // ""' <<<"$r" >&2
+  exit "$code"
+fi
+sh=$(jq -r '.sh // ""' <<<"$r")
+[ -z "$sh" ] || bash -c "$sh" >&2
+result=$(jq -r '.result // ""' <<<"$r")
+jq -cn --arg s "stub-$id" '{type:"system",subtype:"init",session_id:$s,model:"sonnet",tools:[]}'
+jq -cn --arg s "stub-$id" --arg t "$result" \
+  '{type:"assistant",session_id:$s,message:{role:"assistant",content:[{type:"text",text:$t}]}}'
+jq -cn --arg s "stub-$id" --arg t "$result" \
+  '{type:"result",subtype:"success",is_error:false,session_id:$s,result:$t,num_turns:1,duration_ms:1,total_cost_usd:0,usage:{input_tokens:1,output_tokens:1}}'
