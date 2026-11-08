@@ -81,11 +81,10 @@ flowchart LR
 | Role | What | Configured by |
 | --- | --- | --- |
 | Supervisor | `bead-supervisor`, one packed BAML binary (`baml_src/`), resident | the global config and each repo's `.bead-loop.toml`; kept up by `bead-supervisor.timer` |
-| Implementor | opencode agent `bead-worker` — or Claude Code, aider, a `command` | `[[stages]].worker`, one provider per stage; `research_model` for the optional research round |
-| Reviewer | opencode agent `bead-reviewer`, read-only (or another harness, per seat) | `[[stages]].reviewer`, one or more seats, with `approvals`; `precheck_model` for the pre-check |
-| Pre-checker | opencode agent `bead-prechecker`, read-only | `precheck_model` — a small resident model beside the workers; ~20 s a call, evicts nothing |
-| Post-mortem | agent `bead-postmortem`, no tools; one call when a round is sent back without a verdict | the same `precheck_model` |
-| Briefer | agent `bead-briefer`, read-only; one call when a bead is parked, and the second opinion (agent `bead-researcher`) on a researcher's `BLOCKED:` | `brief_model` |
+| Implementor | the BAML `Work` agent on the stage's model, with the loop's own tools (read, write, edit, search, run) — or one Claude Code turn for `claude/*` | `[[stages]].worker`, one provider per stage; `research_model` for the optional research round |
+| Reviewer | the BAML `Review` agent, read-only, returning a typed verdict and work order | `[[stages]].reviewer`; `precheck_model` for the pre-check |
+| Pre-checker | the BAML `Precheck` function, one call on the diff | `precheck_model` — a small resident model beside the workers; ~20 s a call, evicts nothing |
+| Second opinion | the `Research` agent again, on a researcher's `BLOCKED:` | `brief_model` |
 
 Each model is a `[providers.NAME]` in the config, naming how it is reached, how many
 sessions it runs at once and what it costs; `NAME/model` names it everywhere else — a
@@ -155,13 +154,12 @@ the failure count.
 It never blocks or holds: a pre-check that cannot run — the model down, no verdict in
 its answer — falls through to the review queue, as if no `precheck_model` were set.
 
-The scoreboard's `pre-check: N sent back, M passed, K skipped` line (`bead-supervisor
-stats`, and the page under "Where rounds go back") counts these apart from a reviewer's
-`REJECT`; a send-back it catches still shows under `send-backs by reason` as `precheck`.
+A send-back it catches is a `precheck_sent_back` event in the bead's log, apart from a
+reviewer's `rejected`.
 
 ## Layout
 
-The three units (`bead-supervisor`, `bead-loop-ui`, `opencode-web`) run their command
+The units (`bead-supervisor`, `bead-loop-ui`) run their command
 through `flox activate -d @HERE@ --` (where `@HERE@` is the directory from which `install.sh`
 is executed), so every tool resolves from `.flox/env/manifest.toml` the same way on every
 box; `systemctl --user show -p Environment` carries no `PATH=` line. `flox activate` on a
@@ -176,8 +174,9 @@ warm env adds under 100ms.
 — the timer is the keeper, see systemd/bead-supervisor.timer) so it is running when the
 script returns and comes back on its own after a crash or a reboot. Re-running it (every
 deploy) never interrupts a session in flight: `enable --now` only starts a unit that
-isn't already up. At run time it needs `bd`, `git`, `gh`, `opencode` and `curl`; the UI
-needs `node`. `flox activate` in this checkout provides them. `baml-cli` is downloaded
+isn't already up. At run time it needs `bd`, `git`, `gh` and GNU `timeout`; `flox activate`
+in this checkout provides them. opencode is no longer used: rounds call the model servers
+themselves. `baml-cli` is downloaded
 by `scripts/ensure-baml.sh`.
 
 The loop surviving a reboot with nobody logged in also needs **linger** for this user —
@@ -249,14 +248,14 @@ and `nix run github:imkarrer/bead-loop#planner` is Claude Code with them and not
 ## Run
 
 ```bash
-bead-supervisor doctor                                  # every dependency probed, red or green, one line each; --json for the page
-bead-supervisor publish REPO ID [--title T] [--body-file F]   # open the PR an open_pr = "ask" round proposed and the merge mode `external` (maintainer merges) is also supported
+bead-supervisor run --config_file ~/.config/bead-loop/config.toml      # what the unit runs
+bead-supervisor lint --config_file REPO/.bead-loop.toml --ids ID --run true
+bead-supervisor tell --config_file REPO/.bead-loop.toml --id ID --what answer --text "..."
 ```
 
-The page, **<http://127.0.0.1:4097>**, shows the flow — the workflow as one graph, a band
-per stage, every bead at the node it is at — the lanes, the scoreboard and **Needs you**
-— every parked bead with its question, every held bead with its reason — with a lever
-for each thing you would otherwise type.
+The page, **<http://127.0.0.1:4097>**, shows every repo's beads where they are, every held
+bead with its reason and every parked one with its question and the Answer, Reopen and
+Escalate levers ([docs/operating.md](docs/operating.md)).
 
 ## Docs
 
