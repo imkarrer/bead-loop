@@ -195,14 +195,48 @@ function list_files(part: string = "") -> string throws never {
     )
 }
 
+const RUN_SECONDS: int = 900;
+
+/// The command under GNU timeout, which signals the command's whole process group. A
+/// shell killed alone leaves what it started running: bl-gld's model ran the gate, the
+/// tool gave up, and test/run.sh went on for five hours (7 Nov).
+function bounded(command: string, seconds: int) -> string throws never {
+    let quoted = command.split("'").join("'\\''");
+    `timeout -k 10 ${seconds} sh -c '${quoted}'`
+}
+
 /// Run a shell command in the worktree and see its exit code and output.
 function run(command: string) -> string throws never {
-    let out = baml.sys.shell(command, capture_output = true, timeout = baml.time.Duration.from_seconds(900)) catch_all (e) {
+    run_for(command, RUN_SECONDS)
+}
+
+function run_for(command: string, seconds: int) -> string throws never {
+    let out = baml.sys.shell(
+        bounded(command, seconds),
+        capture_output = true,
+        timeout = baml.time.Duration.from_seconds(seconds + 30),
+    ) catch_all (e) {
         _ => {
             return `the command did not finish: ${e}`;
         },
     };
+    if (out.exit_code == 124) {
+        return `[timed out after ${seconds}s, and everything it started was stopped]\n${tail(out.stdout.to_string() + out.stderr.to_string())}`;
+    }
     `[exit ${out.exit_code}]\n${tail(out.stdout.to_string() + out.stderr.to_string())}`
+}
+
+test "a command that times out takes what it started with it" {
+    let mark = "/tmp/bead-loop-orphan-mark";
+    let _ = baml.sys.run("rm", args = ["-f", mark]);
+    let said = run_for(`(sleep 4; touch ${mark}) & sleep 30`, 1);
+    assert.contains(said, "timed out after 1s");
+    baml.sys.sleep(baml.time.Duration.from_seconds(5));
+    assert.is_true(!baml.fs.exists(mark))
+}
+
+test "quotes survive the wrapping" {
+    assert.contains(run("echo 'it''s' \"ok\""), "its ok")
 }
 
 test "edit replaces text that appears once" {
