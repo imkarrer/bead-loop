@@ -8,6 +8,18 @@ name. Both are read afresh on every round, so an edit takes effect on the next r
 
 With neither, the run stops (`stage 1 names no worker`): no agent has a model of its own.
 
+**The BAML loop.** Since the cutover the loop is the packed BAML binary, and it reads the
+keys below except these, which belonged to the opencode and aider harnesses or are not
+ported yet: `[[lanes]]` (a lane is now a provider: `[providers.NAME] parallel`), `model` and
+`review_model` (name `[[stages]]`), `research = "every"` (research runs once per bead),
+`research_aider`, `diff_checks`, `stall_compactions`, `stall_steps`, `attach`, the
+`harness`, `cost`, `via`, `command` and `model_flag` provider keys, `[reference_rate]`,
+and the `stage:NAME` and `harness:*` labels. A target's `base_remote` defaults to
+`origin`. Each round runs under `worker_timeout` (work and review) or `research_timeout`.
+A model `PROVIDER/MODEL` runs on that provider's server: `[providers.NAME] url`, or the
+OpenAI root its `probe` implies (`http://host:8100/health` is `http://host:8100/v1`).
+`claude/*` is one Claude Code turn.
+
 | Key | Default | What |
 | --- | --- | --- |
 | `repos` | `[]` | global only: the repos the lanes walk, `~` allowed |
@@ -39,6 +51,7 @@ With neither, the run stops (`stage 1 names no worker`): no agent has a model of
 | `stall_compactions` | `10` | opencode sessions only: past this many compactions in one session, the watchdog aborts it as stalled — a read/compaction loop, not the model at work. `0` disables the check |
 | `stall_steps` | `60` | opencode sessions only: past this many tool calls since the last edit/write/patch call, the watchdog aborts the session as stalled. `0` disables the check |
 | `attach` | none | an opencode server url; sessions run there and stream in its web UI |
+| `sandbox` | `false` | run each round under bwrap: only its worktree, the git dir, the state dir and `/tmp` writable. A gate that writes a cache outside them (`flox activate`, `npm ci`) fails under it, and the network is not cut yet |
 | `target_label` | `"work"` | the label prefix that names a target: a bead's `work:NAME` label sends its round to `[targets.NAME]` (see Targets below) |
 
 ## Lanes per model server
@@ -87,6 +100,7 @@ takes several sessions at once — `claude/*`, say — not for a GPU that serves
 | `attach` | none | for opencode: an opencode server url; sessions run there and stream in its web UI |
 | `command` | none | for `command` harness: a command to run |
 | `model_flag` | none | for `command` harness: a flag to pass to the command to specify the model |
+| `url` | what `probe` implies | the OpenAI-compatible root the BAML loop sends this provider's models to (`http://127.0.0.1:8100/v1`) |
 | Implicit provider rule | - | a model `NAME/model` whose NAME has no table gets one (claude: Claude Code, metered; any other: opencode, local, one slot)
 
 ## Reference rate

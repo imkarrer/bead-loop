@@ -1,6 +1,6 @@
-# The checks, the merge, the deploy. Every step runs inside this repo's .flox/ (cargo,
-# rustc, clippy, rustfmt, gcc, bd, git, jq, gh, node, shellcheck — .flox/env/manifest.toml)
-# through the imkarrer/flox plugin.
+# The checks, the merge, the deploy. Every step runs inside this repo's .flox/ (bd, git,
+# jq, gh, node, shellcheck — .flox/env/manifest.toml) through the imkarrer/flox plugin.
+# baml-cli is not a flox package; scripts/ensure-baml.sh downloads the pinned binary.
 #
 # The plugin ref is main, like inquire-platform's: the agent runs natively on NixOS,
 # which has no /bin/bash, and the hooks' move to #!/usr/bin/env bash (a218a63) is on
@@ -18,28 +18,26 @@
 # One agent serves every build on `self`, so every step has a timeout, the cheap steps
 # go first, and a failing build cancels what is behind it. The pipeline's own setting
 # "cancel intermediate builds" is the other half: a new push cancels the older build
-# still running for the branch. The cargo cache (scripts/ci.sh) lives beside the
-# checkouts on the agent, so a build recompiles only what changed.
+# still running for the branch. The baml-cli download (scripts/ci.sh) lives beside the
+# checkouts on the agent, so a later build does not fetch it again.
 #
-# What is proven on main: the crate builds, its unit tests pass, the scripts and skills
-# lint, and the supervisor's state machine does what docs/state-machine.md says against
-# the fresh binary (test/run.sh) — and then, within two minutes of the release, that
-# binary is what runs.
+# What is proven on main: the BAML is formatted, its tests pass, the scripts and skills
+# lint, and the packed binary has the subcommands the unit execs — and then, within two
+# minutes of the release, that binary is what runs.
 
 agents:
   queue: self
 
 env:
   CI: "true"
-  CARGO_TERM_COLOR: never
 
 steps:
-  - label: ":rust: fmt · clippy · build · unit tests"
-    key: rust
+  - label: ":hammer: baml fmt · tests"
+    key: baml
     timeout_in_minutes: 25
     plugins:
       - imkarrer/flox#main:
-          command: scripts/ci.sh rust
+          command: scripts/ci.sh baml
 
   - label: ":bash: scripts · skills"
     key: scripts
@@ -50,7 +48,7 @@ steps:
 
   - wait
 
-  - label: ":repeat: supervisor state machine"
+  - label: ":package: packed binary"
     key: suite
     timeout_in_minutes: 15
     cancel_on_build_failing: true

@@ -1,257 +1,77 @@
 # Operating the loop: the page, the terminal, the state on disk
 
+The loop is one packed BAML binary, `~/.local/bin/bead-supervisor`
+(`scripts/pack.sh`). `bead-supervisor.service` runs `bead-supervisor run --config_file
+~/.config/bead-loop/config.toml`, which walks every repo the global file lists and every
+`[targets.NAME]` those repos name. docs/state-machine.md is what happens to one bead.
+
 ## The page
 
-**<http://127.0.0.1:4097>** — `bead-loop-ui.service`, one page, pushed on every change
-(an event stream; nobody presses refresh). Top to bottom:
+**<http://127.0.0.1:4097>** — `bead-loop-ui.service`, which runs `bead-supervisor page`
+(`bin/bead-loop-ui` is the two-line wrapper). One section per repo and target: every bead
+that is not closed, where it is (ready, researching, working, in review, reviewing,
+publishable, merging, parked), its failures and rounds, its PR, and why it is held when
+it is. A **parked** bead shows its question and takes **Answer** (your text becomes its
+next round's note and one failure is forgiven), **Reopen** (back to its queue as it was)
+or **Escalate** (straight to the last stage). A **publishable** bead (`open_pr = "ask"`)
+shows the compare link to open its PR; the loop picks the PR up once it exists.
 
-- **The header**: the loop — up since when and what it is on, or down — with **Wake**,
-  **Stop** (the keeper timer brings it back in a minute: a breather) and **Off** (timer
-  too: down until you start it); **Sign in** when `claude` is signed out (it runs `claude
-  auth login`: open the link, sign in, paste the code back into the page; the bell rings
-  when it is done); and, where the box has a `gpu-mode` command, a **Work / Game** switch
-  (`game` stops the loop and the local model server to free the GPU, `work` starts them
-  again; run as `sudo -n gpu-mode`, so sudoers must allow it without a password).
-- **The flow**: the workflow as one graph, every bead listed at the node it is at. A band
-  per stage — the worker and reviewer its failure count puts a bead on, marked local or
-  metered — with a round's steps left to right: **Ready** (the dev queue's beads for that
-  stage, fewest failures first), **Work** (the worker, then the gate), **Review queue**,
-  **Review**; then **CI · merge**, which every stage shares, and what **Landed** in the
-  last 24h. The dashed rail under a band is every send-back (+1 failure) to that band's
-  Ready; the edge down the left is the failures a stage takes before the next band, and
-  after the last, **Parked**. With a researcher configured, **Research** sits above the
-  first band. A bead on a lane shows the lane and how long; a held one says so, with the
-  reason on hover. Repos with the same stages share one graph (each bead names its repo);
-  it scrolls sideways on a narrow screen.
-- **Press a bead** and it opens in a panel at the corner (× or Escape closes it): where it
-  sits, its title, failures and stage, its rounds behind a toggle (each with its note and
-  logs), **✎ note** (a word to the bead before its next round — context it lacked, a claim
-  that changed — put on the bead as an operator note, which that round reads; nothing
-  else moves), and **Work with Claude** for a queued bead; on a lane, the live session's
-  model, when it last produced output, a link into it, **Abort**, and its last lines; in
-  CI, GitHub's word on the PR (CI running m/n, red with the failing check, green, merged,
-  conflicting); parked, its question and the way to Needs you.
-- **The lanes**, a strip under the graph, one each for the whole loop: the bead it is on
-  and at which step (research, work, review), its session's last lines — or why it is
-  idle (nothing queued for it; N queued and starting; its provider's probe failing) — and
-  **Pause / Resume** (the round it is on finishes and it starts no new one; resume is
-  instant).
-- **The scoreboard**, over 24h, 7d, 30d or all of it: **Landed**, **First try** (no
-  send-back), **Without Claude** (landed by a local model: the point of the local stack),
-  **Rounds per landing**, **Time to land** (first claim to merge), **Needed you**; under
-  them where rounds go back (by reason: no commit, gate, review, CI red, blocked, timed
-  out, crashed), by model, model cost by role (what each session's own transcript says it
-  spent — $0 for a local model), the **avoided cost** beside it (the local models' tokens at the
-  `[reference_rate]` in the global config: an estimate of what a metered model would have
-  charged, not a bill) with the **empty rounds** (a session the server never
-  answered), and the beads finished, newest first. Read from what the beads and the
-  session logs already carry, once a minute (`bead-supervisor --json stats`).
-- **Per repo**, with **★ make priority** on its heading and its config (base, merge mode,
-  stages) beside it: **Needs you**. First each **decision** — a bead of type `decision` (or
-  labelled `needs-human`) is a question for you, asked by the loop, by an agent planning
-  work, or by yourself (`bd create -t decision "the question" -d "the context"`); its
-  text in full and an answer box. **Answer & close** puts the answer on the bead as its
-  close reason, where whoever asked reads it, and rings the bell: beads that depended on
-  the decision are ready. Then each bead **parked**, with **the question** first — the
-  brief's, or the loop's own — and, folded under it, the brief in full, **the rounds**
-  (each with its worker, stage, when, the whole note it left and its **logs**: the
-  worker's session, the gate, the reviewer, the brief, each opening in place) and the
-  bead's notes; then the ways out: **Answer & resume** (your reply goes on the bead, the
-  bead returns to the dev queue at the stage it stopped on with that round forgiven),
-  **Work with Claude** (the last stage, now), **Reopen** (as is), or the one-line
-  `bead-supervisor open` command. Then each bead **held** — still in its queue, waiting
-  on something outside the loop, with the reason and where it sits; nothing to press, it
-  clears itself when the world changes. Last, only when there is one, a session the
-  server is still running that is on no lane (an orphan of a killed round, a hand-run
-  `work`), with Abort.
-- **The supervisor's log**, live. It follows its tail until you scroll up to read
-  something, and again once you scroll back down.
-
-The page is patched in place on every push, never rebuilt: what you have typed into an
-answer or note box, the cursor in it, an open history and how far down a log you are all
-stay as they were, and a bead that moves along the flow takes its open box along. A box
-also keeps its draft across a reload of the page (in the browser, per box) until it is
-sent. **Ctrl+Enter** in a box presses its button. No browser dialogs: a lever that asks
-first (Stop, Off, Game, Abort, Work with Claude) gives way to its question and a yes in
-its own place — Escape or Cancel puts the button back — and what a lever said, or the
-error it hit, comes as a note at the bottom right. The tab's title counts what waits on
-you.
-
-The server binds to loopback and refuses cross-site requests; it needs `node`, and
-`systemctl`/`journalctl` for the units and log (without them, those parts say so and the
-rest works). With `BEAD_LOOP_LOG` set, the log is that file's last lines instead of the
-journal's: on macOS the launchd agent sets it to the file the loop writes.
-
-## The brief
-
-Before the loop parks a bead for you it writes the **brief**: one call to `brief_model`
-(the last stage's worker unless set) that reads every round's note and the end of every
-round's log and answers *what happened*, *why* (the bead is wrong about X; the bead is
-underspecified; the environment; the model) and *the question*, with the options and
-what each would mean. A bead the researcher blocked has no rounds, so its brief reads
-what the researcher and the second opinion answered instead. Without a brief (no model,
-Claude signed out, the call failing) the
-loop's own question stands: the `BLOCKED:` line and what you can do about it, or the
-count of rounds and the last send-back. So what reaches you is a question, not a stack
-of notes. `bead-supervisor answer` and `open` are the page's Answer and the one-line
-command from a terminal.
+The page refreshes every five seconds, folding each repo's event log afresh. It never
+asks bd, git or gh and never starts anything: the levers leave mail in the repo's inbox,
+which the loop takes on its next tick.
 
 ## The terminal
 
 ```bash
-bead-supervisor watch                                     # the screen below, every 5 s (BEAD_LOOP_WATCH=N)
-bead-supervisor status                                    # the same, once
-bead-supervisor --json status                             # one JSON object per repo: what the UI reads
-bead-supervisor stats                                     # the scoreboard, one line per window (--json for the page's)
-journalctl --user -u bead-supervisor.service -f -o cat    # stage transitions, one line each, live
-tail -f ~/Library/Logs/bead-loop/bead-supervisor.log       # the same on macOS, under launchd
-bead-supervisor log ~/src/repo [bead-id]                  # the newest session's log, one line per tool call
+journalctl --user -u bead-supervisor.service -f -o cat     # the loop's own lines
+bead-supervisor tell --config_file ~/src/repo/.bead-loop.toml --id ID --what answer --text "..."
+bead-supervisor lint --config_file ~/src/repo/.bead-loop.toml --ids "ID ID" --run true
+cat ~/.local/state/bead-loop/<repo>/baml/beads/<id>/events.jsonl   # one bead's history
 ```
 
-`bead-supervisor stats --rows` prints JSONL instead of the scoreboard: one row per bead
-`bd` ever showed the loop touching, any outcome, with no window — landed, parked, open
-or closed by hand, the claim it was filed with, its send-back reasons in order, its
-model time and cost, and how many times it needed you. The scoreboard sums these away
-into four windows; the rows are what a later question (did this change help, is config
-A better than config B — docs/design-measurement.md) slices for itself.
+`tell` is the page's levers: `--what` is `answer`, `reopen` or `escalate`. A bead
+labelled `work:NAME` goes to that target's inbox.
 
-`bead-supervisor bench freeze REPO ID...` writes `bench/cases/ID/case.json` in the
-repo's checkout, one per id, for the operator to review and commit: the merge commit on
-the base branch whose subject starts with `ID:`, its first parent as `base_sha`, the
-bead's title, description and acceptance as the claim line first saw them (or, lacking
-one, as `bd show` has them now), and whether the merge's diff added a test (`set:
-"tests"`) or not (`"gate-only"`) — docs/design-bench.md's cases for the replay bench. An
-id with no such merge commit is skipped and named on the log.
+`lint` checks a bead's claims before a label lands (the delegate skill runs it): every
+path the DESCRIPTION names exists on the base branch, and the ACCEPTANCE CRITERIA has a
+command in backticks. `--run true` also runs each acceptance command in a throwaway
+worktree of the base: one of them must fail there, since a bead's check that already
+passes proves nothing. It prints `ID: pass` or the problems and notes `bead-loop lint
+DATE: ...` on the bead; no `--ids` lints every ready bead.
 
-For a `"tests"` case, it also writes `bench/cases/ID/hidden/`: the tests the merge added,
-cut out by name (docs/design-bench.md "The hidden check: transplant by name", decision
-26) for the bench run to place into a worker's tree later. `hidden/rust/NAME.rs` holds
-each `#[test] fn NAME` the merge added under `src/`, whole, with a leading `// from
-PATH` line (`NAME` added in two files: the second gets `.2` before `.rs`).
-`hidden/cases/NAME.sh` holds each `case_NAME` function the merge added to
-`test/run.sh`, whole. `hidden/files.json` names both: `{"rust": [{"name", "path"}],
-"cases": [NAME, ...]}`, `path` the file the test lived in at the merge, for the bench
-run to transplant it back into. The helpers a transplanted test leans on (decision 31)
-are not cut here.
+### Traces
 
-`bead-supervisor lint REPO [ID...]` (every ready bead, if none given) prints, and notes
-on each bead, whether its DESCRIPTION paths exist on the base branch and its ACCEPTANCE
-CRITERIA is a command to run — `ID: pass`, or `ID: ` and the problems found, joined by
-`; `. It is deterministic and run by hand or from the planner, never inside a round, so
-a worker's prompt is the same whether the bead was linted or not; it never changes
-labels or routing (docs/design-measurement.md decisions 8, 17, 18, 21).
-
-`--run` adds, per bead and after those static checks: a throwaway `git worktree
-add --detach` of the base branch under the repo's state dir; `repo.setup` there when
-it is set; each acceptance command (the backtick spans `stamp::acceptance_commands`
-picks out) under `bash -c`, a 600 s timeout each; the worktree removed again before the
-next bead. A command that exits non-zero there is red, which is what a bead's check is
-for; when none of them is, the problem is `acceptance is green on base: a bead's check
-must fail before its change`. Without `--run` lint never executes anything.
-
-```
-05:41:12   bead-supervisor watch (every 5s, ctrl-c to stop)
-
-05:39:22 inquire-platform: dev: bead inq-ufz.13 — grading.dlq: 30-day retention (0 failures, worker devbox/coder, reviewer acbox/reviewer)
-05:39:32 inquire-platform: review: inq-85h.5 by acbox/reviewer (1 failures)
-05:40:01 inquire-platform: inq-85h.5: review approved
-05:40:03 inquire-platform: opened https://github.com/imkarrer/inquire-platform/pull/44
-
-inquire-platform  label=delegate:local base=master merge=pipeline stages=devbox/coder⇢acbox/reviewer×3 → acbox/coder⇢acbox/reviewer×1 → claude/sonnet⇢claude/sonnet×1  [priority]
-  gpu lane:    inq-ufz.13 grading.dlq: 30-day retention as a per-topic config (2m)
-  cpu lane:    idle
-  claude lane: idle
-  dev queue (4):
-    1   inq-5rm.11     0× devbox/coder   scripts/*.mjs: replace the never-firing process.on('exit') pg cleanup
-    2   inq-8gg.10     1× devbox/coder   packages/domain bands: BAND_CUTS keyed by (rubricVersion, graderModel)
-    3   inq-h2i.8      1× devbox/coder   Gate a Claimed Session to its owner
-    4   inq-c0t.23     4× acbox/coder    scripts/lib/gate.mjs: Composite spread ratio, tail rank correlation
-  review queue (1):
-    1   inq-c0t.28     0× devbox/coder   ladderVersion: blind ratings are evidence for the ladder text
-  merge queue (1):
-    inq-85h.5      https://github.com/imkarrer/inquire-platform/pull/44
-  parked: inq-8gg.8
-  held (waiting on you or the world; still in its queue):
-    inq-h2i.7      [merge] https://github.com/imkarrer/inquire-platform/pull/41 reports no CI checks; merge it yourself or set merge = "manual"
-```
-
-The last log lines, then per repo: what each lane is on, the queues in the order the
-lanes take them (position, id, failures, the stage's worker, title), the merge queue's
-PRs, the parked and held beads — and any session the attached opencode server is still
-running that is on no lane, with its state, agent, model, when it last produced anything,
-and the url that opens it. `busy` with a stale "ago" is the CPU box thinking: a cold
-20k-token prompt is minutes of prefill before its first token.
-
-A session the server calls busy with no `opencode run` client left on this box shows as
-one of two states, and they call for opposite responses:
-
-- **`REJOIN`** is a session a restart found still running under a bead's worktree
-  (`recover`, `lanes.rs`): the bead went back in its queue with a `rejoin/ID` marker, and
-  the lane that takes it waits on the session instead of starting one (no client is ever
-  spawned for a rejoin — the loop polls it directly, `harness.rs` `rejoin_session`) — so
-  seeing it with no client is expected, not a fault. Leave it; the line under it says so.
-  Aborting it does the wrong thing twice: it throws away a round that may already be
-  finished, and the lane still rejoins by the marker, reads no text from the now-dead
-  session, and charges the bead a failure. To actually stop it, abort the session *and*
-  remove its `rejoin/ID` marker together, so the lane starts a fresh round instead.
-- **`ORPHAN`** is the real thing: no `rejoin/ID` marker names this session, so nothing is
-  coming back for it. With `attach`, killing the client does not stop the server-side
-  session, and on a one-model box it starves the next round. The loop aborts its own
-  sessions on the server whenever their client dies — on `worker_timeout`, on
-  `systemctl stop`, at start (recover), before it recreates a worktree — so an orphan
-  means something else killed the client (`kill -9`, a crash); the line under it is the
-  command that stops it.
-
-**<http://127.0.0.1:4096>** is the opencode server itself (`opencode-web.service`): with
-`attach = "http://127.0.0.1:4096"` in the global config every worker and reviewer session
-runs inside it and streams there live, titled by bead, with the diff. The unit runs
-`opencode serve`, not `opencode web`: the same server and UI, but `web` opens a browser
-tab every time it starts, and a deploy is a start.
+Every model call a round makes is recorded by the BAML runtime under the repo's
+`.baml/btel`, stamped with the bead (`BAML_CONTEXT`: distinct id the bead, metadata its
+kind and log). `baml-cli query --local` reads them with SQL. A round's own tool calls are
+in `logs/<id>.<pid>.<kind>.jsonl`.
 
 ## Stop, restart, recover
 
-`systemctl stop` aborts the model sessions the lanes are on; a worker, gate or reviewer
-that comes back under the stop is cut short, never judged: no failure, no note, the
-branch kept. A **restart** — the deploy's, which drops `$STATE_DIR/restart` first —
-aborts nothing: the sessions go on inside `opencode-web.service`, and the next process
-**rejoins** them (`recover` finds a session still running under a bead's worktree, puts
-the bead back in its queue first with a `rejoin/ID` marker, and the lane that takes it
-waits on that session instead of starting one). A deploy that restarts
-`opencode-web.service` (`agents/`, `skills/` or its unit changed) stops the loop instead
-of restarting it, before the server goes: the sessions are aborted while the server is
-still up, and the rounds are reopened with no failure charged. A session that instead *finished* in the
-gap between the stop and the start — the model said DONE while no process was
-listening — is rejoined too: `recover` asks the server what ran under the worktree
-(`GET /session?directory=`), and a session titled by this bead's round is rejoined the
-same way, so its result is read rather than the bead reopened as interrupted. A restart
-leaves the lane markers and a plain stop clears them. `recover` rejoins a finished session
-only when a marker named the bead, the session's title names this round (`ID · KIND ·
-round N`, N = failures + 1), and it was updated after the marker. A lane rejoins no
-session for a round whose model runs outside opencode (claude-code or aider, which die
-with the process), nor a session whose model is not the round's. A session whose last step never ended —
-the server died under it — is not taken for a finished one either. Every start **recovers** first: stale
-lane markers go, orphan sessions are aborted (or rejoined), and a dev round a stop cut
-short is back in the dev queue with no failure charged. The binary also watches its own
-path, and re-execs itself at the next moment every lane is idle when the file there has
-changed.
+A round is its own detached process, and the unit has `KillMode=process`, so `systemctl
+stop` and a restart leave rounds running. Every start recovers: it folds each bead's log,
+takes the result of any round that finished while the loop was down, and marks a bead
+whose round has no process and no result as lost, which puts it back in its queue with
+no failure charged. Each tick does the same for a round that dies under a running loop.
+
+Each round runs under `timeout`: `worker_timeout` (3600 s) for work and review,
+`research_timeout` (900 s) for research. A worker past it is a failure; a reviewer past
+it is held; a researcher past it lets the worker go without a brief.
 
 ## State on disk
 
-`~/.local/state/bead-loop/<repo>/`: `inflight/<id>` (the PR url, with
-`.<id>.red|nocheck|adopted|fixing|conflict` markers beside it), `logs/<id>.<stamp>.*`
-(setup, worker, gate, reviewer, brief output per round), `wt/<id>` (the worktree while a
-bead is on a lane or waiting for review), `brief/<id>` (a detached checkout of the bead's branch while a parking's brief runs, once `wt/<id>` is gone; removed after it), `review/<id>` (the review queue: the worker's
-last words), `beads/<id>/` (what the loop keeps of one bead between rounds: `failures`
-the count, `rounds.jsonl` the history, one record per send-back with the whole note and
-the round's log files, `brief` the research round's brief), `parked/<id>` (the loop's
-record of a parking: the reason, the stage it stopped on, the question, the brief),
-`held/<id>` (the reason a bead waits), `rejoin/<id>` (a session to wait on after a
-restart), `lane.<name>` (the bead that lane is on). Under the state dir itself: `wake`
-(the bell), `priority`, `pause.<lane>`, `restart`, `lock` and `lock.<lane>`, and
-`deploy/` (the deploy's clone and what is deployed).
+`~/.local/state/bead-loop/<repo>/baml/` (a target's is under it, `targets/<name>/`):
 
-Environment: `BEAD_LOOP_CONFIG` (the global config's directory), `BEAD_LOOP_STATE` (the
-state dir), `BEAD_LOOP_HOME` (the checkout, for `agents/` and `ui/`),
-`BEAD_LOOP_HOLD_BACKOFF` (seconds before a held bead is tried again, 300), `BEAD_LOOP_LOG`
-(the page's log file in place of the journal; the macOS agent sets it), `BEADS_ACTOR`
-(who the loop's `bd` changes are by; the label otherwise).
+- `beads/<id>/events.jsonl` — the bead's log, the source of truth: its state is a fold
+  of these events. Beside it `report` (the worker's last words, for the reviewer),
+  `brief` (the researcher's), `park.md` (a parking's question) and `watch.json` (the PR
+  watcher's clocks and the newest comment seen).
+- `rounds/<id>.{spec.json,pid,result.json,timedout}` — a round in flight and what it
+  left.
+- `wt/<id>` — the bead's worktree, on branch `bead/<id>`.
+- `logs/` — each round's tool calls; `inbox/` — mail from the page and `tell`.
+- `gh-login` — the account the loop acts as, asked once.
+
+The Rust loop's state is beside it, in `~/.local/state/bead-loop/<repo>/`, and nothing
+reads it. A PR the Rust loop left open is adopted as the loop's own: its author is the
+same account.

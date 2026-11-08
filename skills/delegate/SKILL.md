@@ -35,4 +35,4 @@ Aider gets every token of the DESCRIPTION with a `/` or a `.` in it that is a fi
 
 # Before the label lands
 
-`bd show <id>` and read it as the worker will: every path exists (`git ls-tree -r origin/<base> --name-only | grep`), every claim about the code is true, the acceptance check runs from a fresh worktree of the base branch. A false claim is a wasted round on every stage. Then run `bead-supervisor lint REPO ID` and fix what it reports, adding `--run` when the acceptance is a command.
+`bd show <id>` and read it as the worker will: every path exists (`git ls-tree -r origin/<base> --name-only | grep`), every claim about the code is true, the acceptance check runs from a fresh worktree of the base branch. A false claim is a wasted round on every stage. Then run `bead-supervisor lint --config_file REPO/.bead-loop.toml --ids ID` and fix what it reports, adding `--run true` when the acceptance is a command.

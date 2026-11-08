@@ -15,9 +15,10 @@
 # sessions running on the server and the next process rejoins them (recover): a change to
 # src/ costs no round.
 #
-# What this box needs: git, gh (signed in), flox — no compiler. The binary links the
-# flox env's glibc by store path, and `flox activate` on the clone realizes that env at
-# the deployed commit's manifest.lock before the binary runs. The release is named by
+# What this box needs: git, gh (signed in), flox — no compiler. The binary is the
+# packed one (static), and `flox activate` on the clone realizes the env at the
+# deployed commit's manifest.lock before the binary runs, so bd, git and gh are there.
+# The release is named by
 # origin/main exactly: while the pipeline is still on that commit there is no release
 # yet, and the timer's next firing finds it.
 #

@@ -39,18 +39,14 @@ if command -v claude >/dev/null; then
 fi
 
 # The binary: a prebuilt one in BEAD_SUPERVISOR_BIN (the deploy's, downloaded from the
-# release the pipeline built and tested), else cargo from PATH, else this checkout's
-# flox env. `install` replaces the file rather than writing into it, so a running loop
-# keeps its old inode until it re-execs at an idle moment (it watches the path for
-# exactly this).
-build() { (cd "$HERE" && cargo build --release --quiet); }
+# release the pipeline packed and tested), else `baml pack` of this checkout.
+# `install` replaces the file rather than writing into it, so a running loop keeps
+# its old inode until the unit restarts onto the new one.
 bin=${BEAD_SUPERVISOR_BIN:-}
 if [ -n "$packaged" ]; then
   echo "bin    $SRC/bin/bead-supervisor, $SRC/bin/bead-loop-ui (the flox package)"
 elif [ -n "$bin" ]; then [ -x "$bin" ] || { echo "       BEAD_SUPERVISOR_BIN=$bin is not an executable"; exit 1; }
-elif command -v cargo >/dev/null; then build; bin=$HERE/target/release/bead-supervisor
-elif command -v flox >/dev/null; then (cd "$HERE" && flox activate -- cargo build --release --quiet); bin=$HERE/target/release/bead-supervisor
-else echo "       cargo is missing: install rust, or flox (the env in .flox/ has it)"; exit 1; fi
+else "$HERE/scripts/pack.sh" "$HERE/target/bead-supervisor"; bin=$HERE/target/bead-supervisor; fi
 if [ -z "$packaged" ]; then
   install -m 755 "$bin" "$HOME/.local/bin/bead-supervisor"
   ln -sfn "$HERE/bin/bead-loop-ui" "$HOME/.local/bin/bead-loop-ui"
@@ -120,6 +116,7 @@ launchd_agents() {
     run=$run_sup; [ "$name" = ui ] && run=$run_ui
     new=$(cat "$HERE/launchd/$label.plist")
     new=${new//@RUN@/$run}; new=${new//@PATH@/$path}; new=${new//@SUPERVISOR@/$supervisor}; new=${new//@LOGS@/$logs}
+    new=${new//@CONFIG@/$HOME/.config/bead-loop/config.toml}
     if [ -f "$plist" ] && [ "$(cat "$plist")" = "$new" ] && launchctl print "$domain/$label" >/dev/null 2>&1; then
       echo "agent  $label: unchanged, running"; continue
     fi

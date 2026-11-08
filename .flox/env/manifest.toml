@@ -21,10 +21,11 @@ curl.outputs = "all"
 opencode.pkg-path = "opencode"
 opencode.version = "1.18.29"   # 1.18.30 fails every session: TypeError evaluating 'a.name' in SystemPrompt.environment
 opencode.pkg-group = "opencode"  # its own group, so the pin does not pull the rest back a catalog page
-nodejs.pkg-path = "nodejs"     # bin/bead-loop-ui
+nodejs.pkg-path = "nodejs"     # no longer used by the page (it is the binary); stays until the lock is regenerated
 shellcheck.pkg-path = "shellcheck"
 shellcheck.outputs = "all"
-# The supervisor is a Rust binary: cargo build --release in this checkout, or CI's.
+# The loop is packed by scripts/pack.sh, not cargo. These stay until the lock is
+# regenerated; nothing in the build calls them.
 cargo.pkg-path = "cargo"
 rustc.pkg-path = "rustc"
 clippy.pkg-path = "clippy"
@@ -73,8 +74,9 @@ command = '''OPENCODE_DISABLE_CLAUDE_CODE_SKILLS=1 exec opencode serve --port 40
 command = '''exec "$FLOX_ENV_PROJECT/bin/bead-loop-ui"'''
 
 # The loop itself: resident, the same thing bead-supervisor.service runs.
+# The global file lists the repos; a repo file would be that checkout alone.
 [services.loop]
-command = '''exec bead-supervisor run'''
+command = '''exec bead-supervisor run --config_file "${BEAD_LOOP_CONFIG:-$HOME/.config/bead-loop}/config.toml"'''
 
 # The package `flox install imkarrer/bead-loop` installs: the supervisor, the page,
 # bead-loop-install (install.sh: the opencode links, and the launchd agents or systemd
@@ -85,18 +87,15 @@ command = '''exec bead-supervisor run'''
 # packages, and moving the pinned opencode there pulls the whole group back a catalog
 # page (Rust 1.98 to 1.97, measured), so the environment that installs this installs
 # opencode itself.
-# Built from a git checkout, so build.rs stamps the commit. Hooks do not run in a
-# build, so the deployment target is set here. On macOS it links with the system cc:
-# the env's gcc writes rpaths into its own store paths, which the build's closure
-# check refuses.
+# The binary is `baml pack` of supervisor.run, rounds.round and page.page. baml-cli
+# is downloaded by scripts/ensure-baml.sh (pinned, not a flox package).
 [build.bead-loop]
 description = "Work beads with local and metered models in any repo: the supervisor, its page and its agents"
-version.command = '''sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n1'''
+version.command = '''echo 0.1.0'''
 command = '''
-  if [ "$(uname -s)" = Darwin ]; then export MACOSX_DEPLOYMENT_TARGET=14.0 CARGO_TARGET_AARCH64_APPLE_DARWIN_LINKER=/usr/bin/cc; fi
-  cargo build --release --locked
   mkdir -p "$out/bin"
-  cp "${CARGO_TARGET_DIR:-target}/release/bead-supervisor" bin/bead-loop-ui "$out/bin/"
+  scripts/pack.sh "$out/bin/bead-supervisor"
+  cp bin/bead-loop-ui "$out/bin/"
   cp install.sh "$out/bin/bead-loop-install"
   cp -R agents ui skills launchd "$out/"
 '''

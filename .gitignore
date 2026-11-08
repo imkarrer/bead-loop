@@ -8,3 +8,6 @@ target/
 result
 result-*
 .agent-stacks/
+
+# BAML's recordings and packed binaries (docs/design-baml-native.md)
+.baml/
