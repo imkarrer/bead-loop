@@ -62,6 +62,9 @@ function policy() -> root.machine.Policy throws never {
         second_opinion: true,
         ask_before_pr: false,
         research: "",
+        conflict_worker: "",
+        update_behind: false,
+        brief_model: "",
     }
 }
 
@@ -508,4 +511,25 @@ test "a folder with no log is not a bead of this loop's" {
     let log = FileLog { state: state };
     log.append("t-1", root.machine.Picked { kind: "picked" });
     assert.equal(log.ids().join(","), "t-1")
+}
+
+test "a rebase round goes to the last stage's worker, or the conflict worker" {
+    let w = two_beads();
+    let s = Supervisor.new(w, MemoryLog.new(), policy());
+    let b = root.machine.Bead.new("t-1");
+    b.order = root.machine.Order.Rebase;
+    assert.equal(worker_of(s, b), "claude/sonnet");
+    s.policy.conflict_worker = "acbox/coder";
+    assert.equal(worker_of(s, b), "acbox/coder");
+    b.order = root.machine.Order.Fresh;
+    assert.equal(worker_of(s, b), "devbox/coder")
+}
+
+test "update_behind is on under auto unless the files say otherwise" {
+    let auto = config_from_toml("merge = \"auto\"\n", "", "/r", "/s", "b");
+    assert.equal(auto.policy.update_behind, true);
+    let pipe = config_from_toml("merge = \"pipeline\"\n", "", "/r", "/s", "b");
+    assert.equal(pipe.policy.update_behind, false);
+    let ext = config_from_toml("merge = \"external\"\nupdate_behind = true\n", "", "/r", "/s", "b");
+    assert.equal(ext.policy.update_behind, true)
 }

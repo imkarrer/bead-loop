@@ -349,7 +349,7 @@ function on_merging(b: Bead, m: Merging, e: Event, p: Policy) -> Step throws nev
         },
         let x: RedNotRequired => stay(b),
         let x: Behind => {
-            let effects: Effect[] = if (p.merge == MergeMode.Auto) {
+            let effects: Effect[] = if (p.update_behind) {
                 [UpdateBranch {}]
             } else {
                 []

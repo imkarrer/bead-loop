@@ -121,7 +121,12 @@ function perform(
         },
         let x: root.machine.SecondOpinion => {
             let started: root.machine.Event[] = [];
-            let _ = s.world.start_round(id, root.world.RoundKind.Research, s.policy.research, x.first_reply) catch (e) {
+            let second = if (s.policy.brief_model.length() > 0) {
+                s.policy.brief_model
+            } else {
+                s.policy.research
+            };
+            let _ = s.world.start_round(id, root.world.RoundKind.Research, second, x.first_reply) catch (e) {
                 root.machine.Infra => {
                     started = [e];
                 },
@@ -355,7 +360,17 @@ function dev_paused(s: Supervisor) -> bool throws never {
         || (s.max_open_prs > 0 && here + s.group_inflight >= s.max_open_prs)
 }
 
+/// A rebase round goes to the conflict worker, else the last stage's; any other round to
+/// the stage its failures are at.
 function worker_of(s: Supervisor, b: root.machine.Bead) -> string throws never {
+    if (b.order == root.machine.Order.Rebase) {
+        let last = s.policy.stages.at(s.policy.stages.length() - 1)?.worker ?? "";
+        return if (s.policy.conflict_worker.length() > 0) {
+            s.policy.conflict_worker
+        } else {
+            last
+        };
+    }
     root.machine.stage_for(s.policy, b.failures)?.worker ?? ""
 }
 

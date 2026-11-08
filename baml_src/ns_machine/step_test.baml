@@ -18,6 +18,9 @@ function policy() -> Policy throws never {
         second_opinion: true,
         ask_before_pr: false,
         research: "",
+        conflict_worker: "",
+        update_behind: false,
+        brief_model: "",
     }
 }
 
@@ -411,8 +414,10 @@ test "CI green, GitHub refuses the merge" {
     )
 }
 
-test "BEHIND under auto updates the branch" {
-    let s = step(bead(merging()), Behind { kind: "behind" }, with_merge(MergeMode.Auto));
+test "BEHIND with update_behind updates the branch, whatever the merge mode" {
+    let p = with_merge(MergeMode.External);
+    p.update_behind = true;
+    let s = step(bead(merging()), Behind { kind: "behind" }, p);
     assert.is_true(
         s.effects.some((e) -> {
             e is UpdateBranch
@@ -749,3 +754,8 @@ test "every event survives the log's JSON" {
 // Rows for the observation layer, not this function: a build CI skipped, no checks five
 // minutes on, a check the base does not require, a label that cannot be added, no brief
 // yet and nothing else to take.
+
+test "BEHIND without update_behind leaves the branch alone" {
+    let s = step(bead(merging()), Behind { kind: "behind" }, with_merge(MergeMode.Auto));
+    assert.equal(s.effects.length(), 0)
+}

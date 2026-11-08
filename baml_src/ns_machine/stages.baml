@@ -38,6 +38,13 @@ class Policy {
     ask_before_pr: bool,
     /// The researcher model; empty means the worker round runs without a brief.
     research: string,
+    /// Who rebases a PR that conflicts with the base: a rebase is judgement, so the last
+    /// stage's worker unless set. Empty is that default.
+    conflict_worker: string,
+    /// Bring a PR that is behind the base up to it, whatever the merge mode.
+    update_behind: bool,
+    /// Who gives the second opinion on a researcher's BLOCKED; empty is the researcher.
+    brief_model: string,
 }
 
 function total_attempts(stages: Stage[]) -> int throws never {

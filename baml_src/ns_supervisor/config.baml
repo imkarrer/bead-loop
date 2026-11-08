@@ -227,9 +227,16 @@ function config_from_toml(
             stages: stages,
             on_exhaust: exhaust_of(pick(repo_table, global, "on_exhaust", "park")),
             merge: merge,
-            second_opinion: false,
+            second_opinion: research_model(global).length() > 0,
             ask_before_pr: open_pr == "ask",
             research: research_model(global),
+            conflict_worker: pick(repo_table, global, "conflict_worker", ""),
+            update_behind: bool_at(
+                repo_table,
+                "update_behind",
+                bool_at(global, "update_behind", merge == root.machine.MergeMode.Auto),
+            ),
+            brief_model: pick(repo_table, global, "brief_model", ""),
         },
         lanes: 1,
         capacity: capacity_of(global),
@@ -428,6 +435,9 @@ function target_config(
         second_opinion: parent.policy.second_opinion,
         ask_before_pr: open_pr == "ask",
         research: parent.policy.research,
+        conflict_worker: parent.policy.conflict_worker,
+        update_behind: bool_at(t, "update_behind", merge_of(merge) == root.machine.MergeMode.Auto),
+        brief_model: parent.policy.brief_model,
     };
     LoopConfig {
         repo: expand_home(text_at(t, "path"), home),
