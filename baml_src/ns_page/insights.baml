@@ -96,6 +96,19 @@ function cell(v: json) -> string throws never {
     }
 }
 
+/// A table cell as a number; 0 when it is null or not a number.
+function number_cell(v: json) -> float throws never {
+    baml.json.to<float>(v) catch_all (e) {
+        _ => 0.0,
+    }
+}
+
+/// "POST http://192.168.1.51:8100/v1/chat/completions" -> "192.168.1.51:8100".
+function server_of(call: string) -> string throws never {
+    let after_scheme = call.split("://").at(1) ?? call;
+    after_scheme.split("/").at(0) ?? after_scheme
+}
+
 function empty_insight(
     key: string,
     title: string,
@@ -117,12 +130,46 @@ function empty_insight(
 
 /// 1. Model calls, from the traces of every repo.
 function model_calls(tables: TraceTable[]) -> Insight throws never {
-    empty_insight(
-        "model_calls",
-        "Model calls",
-        "every call a round made to a model server, by server and round kind",
-        ["server", "kind", "calls", "failed", "avg s", "max s"],
-    )
+    let rows: string[][] = [];
+    let level = "ok";
+    let hint = "";
+    for (let t in tables) {
+        for (let r in t.rows) {
+            let call = cell(r.at(0) ?? null);
+            let kind = cell(r.at(1) ?? null);
+            let calls = cell(r.at(2) ?? null);
+            let failed = cell(r.at(3) ?? null);
+            let avg_s = cell(r.at(4) ?? null);
+            let max_s = cell(r.at(5) ?? null);
+            let n = number_cell(r.at(2) ?? null);
+            let n_failed = number_cell(r.at(3) ?? null);
+            let n_max = number_cell(r.at(5) ?? null);
+            let server = server_of(call);
+            rows.push([server, kind, calls, failed, avg_s, max_s]);
+            if (n_failed > 0.1 * n) {
+                if (level != "bad") {
+                    level = "bad";
+                    hint
+                        = `${server} failed ${failed} of ${calls} ${kind} calls: read that server's log`;
+                }
+            } else if (n_max > 600.0) {
+                if (level == "ok") {
+                    level = "warn";
+                    hint
+                        = `${server} ${kind} calls took up to ${max_s}s: rounds queue for its one slot; raise [providers.NAME] parallel or move a stage off it`;
+                }
+            }
+        }
+    }
+    Insight {
+        key: "model_calls",
+        title: "Model calls",
+        about: "every call a round made to a model server, by server and round kind",
+        columns: ["server", "kind", "calls", "failed", "avg s", "max s"],
+        rows: rows,
+        level: level,
+        hint: hint,
+    }
 }
 
 /// 2. What rounds came to, by kind and model.
@@ -217,4 +264,18 @@ test "a cell is its text" {
     assert.equal(cell("acbox"), "acbox");
     assert.equal(cell(3), "3");
     assert.equal(cell(null), "null")
+}
+
+test "model calls name the server and flag slow ones" {
+    let table = TraceTable {
+        columns: [],
+        rows: [["POST http://192.168.1.51:8100/v1/chat/completions", "review", 6, 0, 202.2, 895.2]],
+    };
+    let i = model_calls([table]);
+    let row = i.rows.at(0) ?? [];
+    assert.equal(row.at(0) ?? "", "192.168.1.51:8100");
+    assert.equal(row.at(1) ?? "", "review");
+    assert.equal(row.at(2) ?? "", "6");
+    assert.equal(i.level, "warn");
+    assert.is_true(i.hint.includes("895.2"))
 }
