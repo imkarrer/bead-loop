@@ -36,6 +36,8 @@ class LiveWorld {
     /// `loop`: the title is `ID: TITLE`. `plain`: the bead's title and description alone.
     pr_style: string,
     merge_label: string,
+    /// Review comments from others on the loop's own PR send it back to act on them.
+    feedback: bool,
     /// Each provider's server, from `[providers.NAME]`.
     urls: map<string, string>,
     /// The pre-check model; empty is none.
@@ -390,7 +392,17 @@ class LiveWorld {
                 rerun_head: prev.rerun_head,
             };
             let events = watch_pr(view, clock);
-            self.save_watch(id, next_watch(prev, situation, now, view, events));
+            let next = next_watch(prev, situation, now, view, events);
+            next.feedback_at = prev.feedback_at;
+            if (self.feedback) {
+                let said = self.comments(pr);
+                let fresh = feedback_of(said, self.login(), prev.feedback_at);
+                next.feedback_at = newest_comment(said, prev.feedback_at ?? "");
+                if let f: root.machine.Feedback = fresh {
+                    events.push(f);
+                }
+            }
+            self.save_watch(id, next);
             events
         }
 
@@ -609,10 +621,24 @@ class LiveWorld {
             _ => "",
         };
         if (text.length() == 0) {
-            return Watch { green_since: 0, quiet_since: 0, red_since: 0, rerun_head: "" };
+            return Watch {
+                green_since: 0,
+                quiet_since: 0,
+                red_since: 0,
+                rerun_head: "",
+                feedback_at: null,
+            };
         }
         baml.json.decode<Watch>(text) catch_all (e) {
-            _ => Watch { green_since: 0, quiet_since: 0, red_since: 0, rerun_head: "" },
+            _ => {
+                Watch {
+                    green_since: 0,
+                    quiet_since: 0,
+                    red_since: 0,
+                    rerun_head: "",
+                    feedback_at: null,
+                }
+            },
         }
     }
 
@@ -623,6 +649,48 @@ class LiveWorld {
         let _ = baml.fs.write(self.watch_path(id), baml.json.stringify(watch)) catch_all (e) {
             _ => null,
         };
+    }
+
+    /// The PR's reviews and comments, as gh gives them; "" when gh cannot say.
+    function comments(self, pr: string) -> string throws never {
+        let out = baml.sys.run(
+            "gh",
+            args = ["pr", "view", pr, "--json", "reviews,comments"],
+            cwd = self.repo,
+            capture_output = true,
+        ) catch_all (e) {
+            _ => {
+                return "";
+            },
+        };
+        if (out.exit_code == 0) {
+            out.stdout.to_string()
+        } else {
+            ""
+        }
+    }
+
+    /// The account the loop acts as: its own comments are not feedback. Asked once.
+    function login(self) -> string throws never {
+        let path = `${self.state}/gh-login`;
+        let known = baml.fs.read(path) catch_all (e) {
+            _ => "",
+        };
+        if (known.trim().length() > 0) {
+            return known.trim();
+        }
+        let out = baml.sys.run("gh", args = ["api", "user", "--jq", ".login"], capture_output = true) catch_all (e) {
+            _ => {
+                return "";
+            },
+        };
+        let me = out.stdout.to_string().trim();
+        if (out.exit_code == 0 && me.length() > 0) {
+            let _ = baml.fs.write(path, me) catch_all (e) {
+                _ => null,
+            };
+        }
+        me
     }
 
     function watch_path(self, id: string) -> string throws never {
@@ -679,6 +747,8 @@ class Watch {
     quiet_since: int,
     red_since: int,
     rerun_head: string,
+    /// The newest review comment already seen; null until the PR is first read.
+    feedback_at: string?,
 }
 
 function unix_now() -> int throws never {
@@ -759,6 +829,7 @@ function next_watch(
         quiet_since: touch(prev.quiet_since, situation == "quiet", now),
         red_since: touch(prev.red_since, situation == "red", now),
         rerun_head: rerun,
+        feedback_at: prev.feedback_at,
     }
 }
 
@@ -869,7 +940,7 @@ test "without bwrap the round is the binary itself" {
 }
 
 test "a green PR's clock starts when it is first seen green" {
-    let prev = Watch { green_since: 0, quiet_since: 0, red_since: 0, rerun_head: "" };
+    let prev = Watch { green_since: 0, quiet_since: 0, red_since: 0, rerun_head: "", feedback_at: null };
     let view = view_of(
         `{"url":"u","state":"OPEN","mergeStateStatus":"CLEAN","statusCheckRollup":[{"conclusion":"SUCCESS"}]}`,
     );
@@ -970,4 +1041,109 @@ test "a fork's owner comes from its remote" {
 /// The server a model runs on: `devbox/coder` is `devbox`.
 function provider_of(model: string) -> string throws never {
     model.split("/").at(0) ?? model
+}
+
+class Login {
+    login: string,
+}
+
+class ReviewRow {
+    author: Login?,
+    body: string?,
+    state: string?,
+    submittedAt: string?,
+}
+
+class CommentRow {
+    author: Login?,
+    body: string?,
+    createdAt: string?,
+}
+
+class PrComments {
+    reviews: ReviewRow[]?,
+    comments: CommentRow[]?,
+}
+
+class Said {
+    who: string,
+    body: string,
+    at: string,
+}
+
+/// Every review and comment with a body, as who said what when.
+function said_of(text: string) -> Said[] throws never {
+    let none: Said[] = [];
+    let c = baml.json.decode<PrComments>(text) catch_all (e) {
+        _ => {
+            return none;
+        },
+    };
+    let out: Said[] = [];
+    for (let r in c.reviews ?? []) {
+        let body = (r.body ?? "").trim();
+        if (body.length() > 0 || r.state == "CHANGES_REQUESTED") {
+            out.push(Said { who: r.author?.login ?? "", body: body, at: r.submittedAt ?? "" });
+        }
+    }
+    for (let m in c.comments ?? []) {
+        let body = (m.body ?? "").trim();
+        if (body.length() > 0) {
+            out.push(Said { who: m.author?.login ?? "", body: body, at: m.createdAt ?? "" });
+        }
+    }
+    out
+}
+
+/// The newest time among the comments, or `since` when none is newer.
+function newest_comment(text: string, since: string) -> string throws never {
+    let newest = since;
+    for (let s in said_of(text)) {
+        if (s.at > newest) {
+            newest = s.at;
+        }
+    }
+    newest
+}
+
+/// What others said after `since`, as one Feedback. The first look at a PR (`since`
+/// null) only marks the comments already there as seen: they were answered, or not
+/// meant for the loop, before it watched.
+function feedback_of(
+    text: string,
+    me: string,
+    since: string?,
+) -> root.machine.Feedback? throws never {
+    if let after: string = since {
+        let fresh = said_of(text).filter((s) -> {
+            s.at > after && s.who != me && s.who.length() > 0 && !s.who.ends_with("[bot]")
+        });
+        if (fresh.length() == 0) {
+            return null;
+        }
+        let text_of = fresh
+            .map((s) -> {
+                `${s.who}: ${s.body}`
+            })
+            .join("\n\n");
+        root.machine.Feedback { kind: "feedback", text: text_of, at: newest_comment(text, after) }
+    } else {
+        null
+    }
+}
+
+const COMMENTS_SAMPLE: string = `{"reviews":[{"author":{"login":"brownnrl"},"body":"","state":"CHANGES_REQUESTED","submittedAt":"2026-11-01T10:00:00Z"},{"author":{"login":"imkarrer"},"body":"thanks","state":"COMMENTED","submittedAt":"2026-11-01T11:00:00Z"}],"comments":[{"author":{"login":"brownnrl"},"body":"please keep the caption under twenty words","createdAt":"2026-11-02T09:00:00Z"},{"author":{"login":"buildkite[bot]"},"body":"build passed","createdAt":"2026-11-02T09:30:00Z"}]}`;
+
+test "the first look at a PR marks its comments seen and acts on none" {
+    assert.equal(feedback_of(COMMENTS_SAMPLE, "imkarrer", null) == null, true);
+    assert.equal(newest_comment(COMMENTS_SAMPLE, ""), "2026-11-02T09:30:00Z")
+}
+
+test "comments from others after the mark are feedback; the loop's own and bots' are not" {
+    let f = feedback_of(COMMENTS_SAMPLE, "imkarrer", "2026-11-01T10:30:00Z");
+    assert.is_type<root.machine.Feedback>(f);
+    assert.contains(f?.text ?? "", "brownnrl: please keep the caption");
+    assert.equal((f?.text ?? "").includes("thanks"), false);
+    assert.equal((f?.text ?? "").includes("build passed"), false);
+    assert.equal(feedback_of(COMMENTS_SAMPLE, "imkarrer", "2026-11-02T09:30:00Z") == null, true)
 }

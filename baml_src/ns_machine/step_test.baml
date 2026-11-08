@@ -759,3 +759,19 @@ test "BEHIND without update_behind leaves the branch alone" {
     let s = step(bead(merging()), Behind { kind: "behind" }, with_merge(MergeMode.Auto));
     assert.equal(s.effects.length(), 0)
 }
+
+test "a conflict sends the bead back told to rebase" {
+    let s = step(bead(merging()), Conflicting { kind: "conflicting" }, policy());
+    assert.is_type<Ready>(s.bead.place);
+    assert.equal(s.bead.order, Order.Rebase);
+    assert.contains(s.bead.last_note ?? "", "Rebase this branch")
+}
+
+test "review comments send the loop's own PR back to act on them, uncharged" {
+    let s = step(bead(merging()), Feedback { kind: "feedback", text: "rename x", at: "t" }, policy());
+    assert.is_type<Ready>(s.bead.place);
+    assert.equal(s.bead.failures, 0);
+    assert.equal(s.bead.kept, true);
+    assert.equal(s.bead.order, Order.Feedback);
+    assert.contains(s.bead.last_note ?? "", "rename x")
+}

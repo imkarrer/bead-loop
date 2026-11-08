@@ -177,6 +177,14 @@ class PrAdopted {
     url: string,
 }
 
+/// Review comments on the loop's own PR from someone else, newer than the last acted on.
+class Feedback {
+    kind: "feedback",
+    text: string,
+    /// The newest comment's time, so the same comments are acted on once.
+    at: string,
+}
+
 class MergedOutside {
     kind: "merged_outside",
     url: string,
@@ -227,6 +235,7 @@ type Event = ModelOutcome
     | WaitedTooLong
     | PrAdopted
     | MergedOutside
+    | Feedback
     | Answered
     | Reopened
     | Escalated

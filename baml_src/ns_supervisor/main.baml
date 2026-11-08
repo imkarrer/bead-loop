@@ -17,6 +17,7 @@ class LoopConfig {
     setup: string,
     pr_style: string,
     merge_label: string,
+    feedback: bool,
     /// Each provider's server: `url`, or its `probe` with `/health` made `/v1`.
     urls: map<string, string>,
     precheck: string,
@@ -49,6 +50,7 @@ function world_of(c: LoopConfig) -> root.world.LiveWorld throws never {
         merge: root.machine.merge_name(c.policy.merge),
         pr_style: c.pr_style,
         merge_label: c.merge_label,
+        feedback: c.feedback,
         urls: c.urls,
         precheck: c.precheck,
     }

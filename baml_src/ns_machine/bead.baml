@@ -68,6 +68,8 @@ enum Order {
     Fresh,
     FixInPlace,
     Rebase,
+    /// Act on the review comments on the open PR.
+    Feedback,
 }
 
 class Bead {

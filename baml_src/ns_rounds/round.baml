@@ -159,7 +159,7 @@ function failed_session(e: unknown) -> root.machine.Event throws never {
 }
 
 function worker_task(spec: RoundSpec) -> string throws never {
-    let body = spec.bead;
+    let body = `${spec.bead}\n\nThe base branch is ${spec.base}.`;
     if (spec.brief.length() > 0) {
         body = `${body}\n\n<research>\n${spec.brief}\n</research>`;
     }

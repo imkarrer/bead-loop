@@ -363,7 +363,7 @@ function dev_paused(s: Supervisor) -> bool throws never {
 /// A rebase round goes to the conflict worker, else the last stage's; any other round to
 /// the stage its failures are at.
 function worker_of(s: Supervisor, b: root.machine.Bead) -> string throws never {
-    if (b.order == root.machine.Order.Rebase) {
+    if (b.order == root.machine.Order.Rebase || b.order == root.machine.Order.Feedback) {
         let last = s.policy.stages.at(s.policy.stages.length() - 1)?.worker ?? "";
         return if (s.policy.conflict_worker.length() > 0) {
             s.policy.conflict_worker

@@ -333,6 +333,7 @@ function on_merging(b: Bead, m: Merging, e: Event, p: Policy) -> Step throws nev
             let n = b.at(Ready { kind: "ready" });
             n.kept = true;
             n.order = Order.Rebase;
+            n.last_note = REBASE_NOTE;
             Step { bead: n, effects: [Note { text: "PR conflicts with the base: a rebase round" }] }
         },
         let x: ChecksRed => red(b, m, x, p),
@@ -348,6 +349,20 @@ function on_merging(b: Bead, m: Merging, e: Event, p: Policy) -> Step throws nev
             red(b, m, ChecksRed { kind: "checks_red", checks: x.checks, head: x.head }, p)
         },
         let x: RedNotRequired => stay(b),
+        let x: Feedback => {
+            if (m.adopted) {
+                return stay(b);
+            }
+            let n = b.at(Ready { kind: "ready" });
+            n.kept = true;
+            n.order = Order.Feedback;
+            n.last_note
+                = `The PR has review comments to act on. Change the branch to answer them, and commit:\n${x.text}`;
+            Step {
+                bead: n,
+                effects: [Note { text: "review comments on the PR: a round to act on them" }],
+            }
+        },
         let x: Behind => {
             let effects: Effect[] = if (p.update_behind) {
                 [UpdateBranch {}]
@@ -420,3 +435,5 @@ function fold(id: string, events: Event[], p: Policy) -> Bead throws never {
         Bead.new(id),
     )
 }
+
+const REBASE_NOTE: string = "The PR conflicts with the base branch. Rebase this branch onto the base (git fetch, then git rebase onto it), resolve each conflict keeping what both sides meant, run the bead's check, and commit. Change nothing else.";
