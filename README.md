@@ -168,15 +168,14 @@ warm env adds under 100ms.
 ## Install
 
 `./install.sh` packs the binary (`scripts/pack.sh`), puts it in `~/.local/bin`, links
-`skills/` and `agents/` into opencode, installs the user units, seeds
+`skills/` into Claude Code and opencode, installs the user units, seeds
 `~/.config/bead-loop/config.toml`, and enables
 + starts the loop (`opencode-web.service`, `bead-loop-ui.service`, `bead-supervisor.timer`
 — the timer is the keeper, see systemd/bead-supervisor.timer) so it is running when the
 script returns and comes back on its own after a crash or a reboot. Re-running it (every
 deploy) never interrupts a session in flight: `enable --now` only starts a unit that
 isn't already up. At run time it needs `bd`, `git`, `gh` and GNU `timeout`; `flox activate`
-in this checkout provides them. opencode is no longer used: rounds call the model servers
-themselves. `baml-cli` is downloaded
+in this checkout provides them. Rounds call the model servers themselves; opencode is not in the loop's path. `baml-cli` is downloaded
 by `scripts/ensure-baml.sh`.
 
 The loop surviving a reboot with nobody logged in also needs **linger** for this user —
@@ -195,11 +194,10 @@ model server (llm-box), and optionally at Ollama on the Mac.
 
 The package is the supervisor, the page, `bead-loop-install` (this `install.sh`), and the
 agents, skills and launchd templates beside them. The tools a round runs (`bd`, `git`,
-`gh`, `jq`, `curl`, `node`, GNU `timeout`, bash 5) come with it. opencode does not, so the
-environment that installs the package installs it too:
+`gh`, `jq`, `curl`, `node`, GNU `timeout`, bash 5) come with it:
 
 ```bash
-flox install imkarrer/bead-loop opencode@1.18.29   # into the environment you live in
+flox install imkarrer/bead-loop                    # into the environment you live in
 bead-loop-install                                   # links, config, and the launchd agents
 ```
 
@@ -213,10 +211,9 @@ checkout, `./install.sh` does the same on macOS, with the agents running the che
 through its flox env, as the units do on Linux. To stop the loop:
 `launchctl bootout gui/$(id -u)/dev.bead-loop.supervisor`.
 
-On the page, the loop's state is `launchctl`'s. Stop sends the agent TERM and launchd
-starts it again ten seconds on; Off unloads it until Start loads it again. There is no
-keeper timer: the agent's `KeepAlive` is the keeper. A provider on the LAN needs one
-**Local Network** allow the first time the agent's opencode reaches it (System Settings →
+On macOS the agent's `KeepAlive` is the keeper, not a timer, and the page's Start and
+Stop act on the systemd units only. A provider on the LAN needs one
+**Local Network** allow the first time `bead-supervisor` reaches it (System Settings →
 Privacy & Security → Local Network). Until then its rounds are held, not failed.
 
 Per repo: label the beads the model may work (`bd label add <id> delegate:local`; each
@@ -235,11 +232,10 @@ and `nix run github:imkarrer/bead-loop#planner` is Claude Code with them and not
 ## Your setup
 
 - [docs/examples/homelab.md](docs/examples/homelab.md) — the live setup: a GPU box and a
-  big CPU box as two local providers, a `gpu`/`cpu`/`claude` lane each, Claude Code as the
+  big CPU box as two local providers, a lane per server, Claude Code as the
   last stage, and the three shapes of repo config it is used with.
 - [docs/examples/laptop-ollama.md](docs/examples/laptop-ollama.md) — one local provider
-  through opencode's Ollama support, a metered provider as the reviewer's second seat and
-  the last stage.
+  on Ollama and a metered reviewer (written for the Rust loop; see its status note).
 - [docs/examples/api-only.md](docs/examples/api-only.md) — no local model, one metered
   provider wide enough to run several beads at once.
 - [docs/examples/quorum.md](docs/examples/quorum.md) — three reviewer seats from three
@@ -263,7 +259,7 @@ Escalate levers ([docs/operating.md](docs/operating.md)).
 - [docs/state-machine.md](docs/state-machine.md) — one bead start to finish; every outcome, state and exit
 - [docs/operating.md](docs/operating.md) — the page, the terminal, stop/restart/recover, the state on disk
 - [docs/pipeline.md](docs/pipeline.md) — dogfood: the checks, Buildkite, the automerge label, the deploy
-- [docs/design.md](docs/design.md) — why this shape; the harnesses (opencode, Claude Code, aider)
+- [docs/design.md](docs/design.md) — why this shape (the Rust loop's harnesses; [docs/design-baml-native.md](docs/design-baml-native.md) is the rebuild)
 
 ## License
 

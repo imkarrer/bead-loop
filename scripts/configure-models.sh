@@ -92,10 +92,12 @@ backup "$CONFIG"
   echo
   echo '[providers.llmbox]                  # shared with others: one round at a time from here'
   echo 'parallel = 1'
+  echo "url = \"$url\"                 # the server the loop's rounds call"
   if [ "$use_ollama" = yes ]; then
     echo
     echo '[providers.mac]                     # Ollama: one model in memory at a time'
     echo 'parallel = 1'
+    echo 'url = "http://127.0.0.1:11434/v1"'
     echo
     echo '[[stages]]                          # this Mac writes, llm-box reviews'
     echo "worker = \"mac/$MAC_MODEL\""

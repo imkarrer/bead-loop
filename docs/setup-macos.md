@@ -48,12 +48,12 @@ exactly what to copy.
 
 ## 3. Allow it on your network
 
-The first time the loop talks to llm-box, macOS asks whether **opencode** may find
+The first time the loop talks to llm-box, macOS asks whether **bead-supervisor** may find
 devices on your local network. Click **Allow**. Until you do, the page shows its tasks
 as held, and nothing is lost.
 
 If you clicked Don't Allow by mistake: open **System Settings**, then **Privacy &
-Security**, then **Local Network**, and switch opencode on.
+Security**, then **Local Network**, and switch bead-supervisor on.
 
 ## Every day
 
@@ -79,11 +79,11 @@ rm ~/Library/LaunchAgents/dev.bead-loop.*.plist; rm -rf ~/bead-loop
 ## For whoever helps: what the setup did
 
 `scripts/setup-macos.sh` checks out this repo to `~/bead-loop` and runs `install.sh`
-in its flox env. That builds the supervisor, links the agents and skills into
+in its flox env. That packs the supervisor, links the agents and skills into
 `~/.config/opencode`, seeds `~/.config/bead-loop/config.toml`, and starts two launchd
 agents. It then runs `gh auth login` and adds the repo to `repos`.
-`scripts/configure-models.sh` writes the `llmbox` provider into
-`~/.config/opencode/opencode.json`, merged with any other providers, and llm-box's
-stages into the loop's config. Optionally it pulls `gpt-oss:20b` into Ollama with a
+`scripts/configure-models.sh` writes llm-box's stages, and each provider's `url`, into
+the loop's config (and the same providers into `~/.config/opencode/opencode.json`, for
+your own use). Optionally it pulls `gpt-oss:20b` into Ollama with a
 32k context as the first stage's worker. Any file it replaces is kept beside it as
 `.bak-DATE`. Either script can be run again.

@@ -1,92 +1,62 @@
 # Copy to <repo>/.bead-loop.toml. TOML; every key optional. Any key from the global
 # ~/.config/bead-loop/config.toml may appear here too and wins for this repo.
-# providers are global: ~/.config/bead-loop/config.toml, [providers.NAME]: parallel, probe, and url, the server the BAML loop sends its models to (docs/config.md, Providers)
-# so is [reference_rate]: what the scoreboard prices the local models' tokens at, for its avoided-cost estimate (docs/config.md, Reference rate)
-label = "delegate:qwen30b"            # bd ready -l LABEL picks the work           (default "delegate:local")
-base = "master"                        # branch to fork from and PR into           (default: origin's HEAD)
-setup = "npm ci"                       # runs in the fresh worktree before the worker (no node_modules there)
-gate = "npm run typecheck && npm run lint"   # after the worker, before review; unset = CI is the gate
-merge = "auto"                         # auto: the merge watcher squash-merges once every CI check is green
-                                       # pipeline: the loop labels the PR (merge_label, default "automerge") and CI merges it
-                                       # manual: PR only (the bead is held for you once green)
-review_model = "acbox/reviewer"        # the model that judges the diff before the push, when no [[stages]] table
-                                       # applies; unset = no review. A different family from the worker catches more
-on_exhaust = "repeat"                  # repeat: cycle the stages until it lands | park: leave it for you (default)
-# feedback = true                      # a maintainer's review/comment on an open PR of ours sends the bead back to dev
-                                       # on the same branch with the comments as the work order (default true; false = CI colour only)
-# conflict_worker = "claude/sonnet"    # who rebases a PR that conflicts with the base (default: the last stage's worker)
-# brief_model = "claude/sonnet"        # who writes the brief when a bead is parked for you — what each round tried, why it
-                                       # failed, the question to answer (default: the last stage's worker; "none" for no brief);
-                                       # also the second opinion on a researcher's BLOCKED before a bead is parked for it
-# research_model = "acbox/reviewer"    # who writes the research brief before the first worker round (default: off)
-# research = "first"                   # first: one brief per bead · every: refined after each send-back
-# research_timeout = 900               # seconds a research round may run, capped by the stage's `timeout`; past it the
-                                       # worker goes without a brief. A bead labelled `harness:aider` gets no research
-                                       # round at all: whoever filed it already named its files
-# research_aider = true                # a brief whose Files all exist puts the worker under aider (default true)
-# diff_checks = false                  # before the pre-check and the review, a deterministic look at the diff: a test file the bead names that the diff never touches, or an added assertion that checks nothing, sends the round back
-# adopt = true                         # open bead/* PRs from anyone join the loop and merge on green
-# max_inflight = 2                     # PRs in the merge queue before the dev lane pauses; unset = no cap, bd's
-                                       # dependencies are the only gate (the queues absorb the rest)
-# max_open_prs = 1                     # global only: the merge queue across EVERY target at once. max_inflight
-#                                      # counts one target, so 1 on two targets still allows two open PRs.
-#                                      # Set this when the PRs land on someone else's repo.
-# update_behind = true                 # an open PR BEHIND the base is brought up first (default: merge = "auto")
+# Providers are global: [providers.NAME] parallel, probe, and url, the server a model's
+# rounds call (docs/config.md, Providers). The loop reads both files when it starts.
+label = "delegate:local"               # bd ready -l LABEL is the queue              (default "delegate:local")
+base = "master"                        # branch to fork from and PR into            (default "main")
+# remote = "origin"                    # where the base is fetched and bead/* pushed (default "origin")
+setup = "npm ci"                       # runs in a fresh worktree before its first round
+gate = "npm run typecheck && npm run lint"   # after the worker, whatever it reports; unset = CI is the gate
+merge = "auto"                         # auto: the loop squash-merges once every check is green
+                                       # pipeline: the loop labels the PR (merge_label) and CI merges it
+                                       # manual: PR only (held for you once green)
+                                       # external: a maintainer merges; the loop only watches
+on_exhaust = "park"                    # park: leave it for you (default) | repeat: cycle the stages
+# feedback = true                      # a review or comment from someone else sends the bead back, no failure
+# conflict_worker = "claude/sonnet"    # who works a rebase or feedback round (default: the last stage's worker)
+# brief_model = "claude/sonnet"        # the second opinion on a researcher's BLOCKED (default: the researcher)
+# research_model = "acbox/coder"       # writes a brief before the first work round (default: off)
+# research = "first"                   # "off" turns research off even with a research_model
+# research_timeout = 900               # seconds a research round may run; past it the worker goes without a brief
+# precheck_model = "acbox/utility"     # after the gate, reads the diff; SEND BACK is a failure
+# adopt = true                         # open bead/* PRs from anyone join the merge queue
+# max_inflight = 2                     # this repo's own open PRs before the dev lane pauses (default: no cap)
+# max_open_prs = 1                     # global only: own open PRs across a repo and its targets
+# update_behind = true                 # bring a PR behind the base up first (default: merge = "auto")
 # merge_label = "automerge"            # the label merge = "pipeline" puts on each PR
-# worker_timeout = 3600                # seconds per model session
-# stall_compactions = 10                # opencode sessions only: abort a session past this many compactions
-                                       # in it -- a read/compaction loop, not the model at work (0 disables)
-# stall_steps = 60                      # opencode sessions only: abort a session past this many tool calls
-                                       # since its last edit/write/patch call (0 disables)
-# precheck_model = "acbox/reviewer"    # runs after the gate, before the review queue; SEND BACK is a failure,
-                                       # anything else is not
-# model = "devbox/coder"               # the worker when no [[stages]] table applies
-# attach = "http://localhost:8080"     # an opencode server url; sessions run there and stream in its web UI
+# open_pr = "ask"                      # push and stop at a compare link for you to open (default "auto")
+# pr_style = "plain"                   # loop: "ID: title" · plain: the bead's title and description
+# worker_timeout = 3600                # seconds a work or review round may run, gate included
+# sandbox = false                      # true: each round under bwrap, only its worktree, git dir, state and /tmp writable
 
-# Escalation, in order. Every send-back to the dev queue — the gate failing twice, a
-# REJECT from review, CI red — is one failure; a stage takes the bead for the next
-# `failures` of them, then the next stage does. So the bead reaches Claude below after
-# 3 + 1 = 4 failures. Usually set once, globally, with [[lanes]] beside it (one lane per
-# model server, so a round on the CPU box never holds the GPU's queue; docs/config.md).
-# (`attempts` is the older name for `failures` and still reads.)
+# Escalation, in order. Every send-back (the gate failing twice, the pre-check's SEND BACK,
+# a REJECT, CI red) is one failure; a stage takes the bead for its `attempts`, then the
+# next stage does. Below, the bead reaches Claude after 2 failures and parks after 3.
+# Usually set once, globally (docs/config.md, Stages).
 [[stages]]
-worker = "devbox/coder"                # an opencode agent on the devbox provider; "aider:devbox/coder" is aider on
 name = "local"
-reviewer = ["acbox/reviewer", "claude/sonnet"]   # two-seat reviewer with approvals = all
-failures = 3
-# each seat gives a brief on the round's work, and the PR only lands when all approve
+worker = "devbox/coder"                # MODEL "coder" on the devbox provider's server, with the loop's tools
+reviewer = "acbox/reviewer"            # a different family from the worker catches more
+attempts = 2
 
 [[stages]]
-worker = "acbox/coder"                 # the 80B implements; the same reviewer judges
-reviewer = "acbox/reviewer"
-failures = 1
-timeout = 14400                        # seconds; default worker_timeout
-
-[[stages]]
-worker = "claude/sonnet"               # runs in Claude Code instead of opencode
+name = "frontier"
+worker = "claude/sonnet"               # one Claude Code turn, with Claude's own tools
 reviewer = "claude/sonnet"
-failures = 1
+attempts = 1
 
-# target_label = "work"                 # the label prefix that names a target (default "work")
-                                       # a bead's work:NAME label sends the round to a [targets.NAME]
-                                       # checkout instead of this beads repo; no such label, or none of
-                                       # these tables, is today's behaviour unchanged (docs/design-targets.md)
+# target_label = "work"                # the label prefix that names a target (default "work"):
+                                       # a bead's work:NAME label sends it to [targets.NAME]
 
 # [targets.example]
 # path = "~/src/euclid"                # the checkout the round works in; required
-# base = "main"                        # branch to fork from and PR into           (default: base_remote's HEAD)
-# base_remote = "upstream"              # remote base forks from                    (default: "upstream" when that
-                                       # remote exists in the checkout, else "origin")
-# push_remote = "origin"                # remote bead/* branches are pushed to       (default "origin")
-# pr_repo = "brownnrl/euclid"           # owner/repo the PR is opened against        (default: base_remote's GitHub repo)
-# setup = "npm ci"                      # runs in the fresh worktree before the worker
-# gate = "npm test"                     # after the worker, before review
-# merge = "external"                    # auto | pipeline | manual | external (someone else merges; the loop watches)
-# update_behind = true                 # an open PR BEHIND the base is brought up first (default: merge = "auto")
-# merge_label = "automerge"             # the label merge = "pipeline" puts on each PR
-# adopt = true                          # bead/* PRs from anyone on this target join the loop
-# max_inflight = 1                      # PRs in the merge queue before the dev lane pauses on this target
-# open_pr = "ask"                       # auto | ask (the operator publishes it)     (default "auto")
-# pr_style = "plain"                    # loop | plain (a contribution, no loop id or line) (default "loop")
-
-# sandbox = false              # true: each round under bwrap, only its worktree, git dir, state and /tmp writable
+# base = "main"                        # branch to fork from and PR into            (default "main")
+# base_remote = "upstream"             # where the base is fetched from             (default "origin")
+# push_remote = "origin"               # where bead/* branches are pushed: your fork (default "origin")
+# pr_repo = "brownnrl/euclid"          # owner/repo the PR is opened against        (default: the checkout's own)
+# setup = "npm ci"                     # runs in a fresh worktree before its first round
+# gate = "npm test"                    # after the worker
+# merge = "external"                   # the maintainer merges; the loop watches
+# open_pr = "ask"                      # default "ask" when pr_repo is set
+# pr_style = "plain"                   # default "plain" under ask
+# max_inflight = 1                     # this target's own open PRs before its dev lane pauses

@@ -7,32 +7,32 @@ delegate:local` lists what the loop may take), `.bead-loop.toml` says how a work
 proven (the same checks CI runs, inside the flox env), and `~/src/bead-loop` is in the
 global `repos`. So an improvement to the loop is a bead, and the loop works it: worker,
 gate, reviewer, PR, CI, automerge, release, deploy. Within two minutes of the release the
-deploy timer installs it on this box; the running loop is restarted and rejoins the
-sessions it was on. A bead that touches `src/` should say so in its acceptance criteria.
+deploy timer installs it on this box; the running loop is restarted, and the rounds it was on keep running:
+each is its own process.
 
 ## Checks
 
-`cargo test` covers everything with a shape and no tool behind it: config layering and
-parsing, the stage table, the queue order and the one-place invariant, the merge
-verdicts, the prompts, the rejection that travels, the PR body, the status JSON.
-`test/run.sh` drives the binary through every row of the outcome table in
-[state-machine.md](state-machine.md) with stub `bd`, `opencode`, `claude`, `aider`, `gh`
-and `curl` (`test/bin/`) and a real git origin: no model, no network, the cases side by
-side (`JOBS=1` for one at a time), seconds. `test/lint-skills.sh` checks the frontmatter
-opencode needs. `scripts/ci.sh rust|scripts|suite` are the three steps.
+`baml-cli test` runs the BAML tests in `baml_src/`: the state machine against every row of
+the outcome table in [state-machine.md](state-machine.md), the supervisor end to end on a
+`FakeWorld` (scripted rounds, no model, no git, no gh), the config loader, the PR watcher
+on samples of gh's JSON, the tools, the page. A few run real `git`, `sh`, `timeout` and
+`node --check` against scratch folders named for the run, so two builds side by side do not
+collide. `test/lint-skills.sh` checks the skills' and agents' frontmatter.
+`scripts/ci.sh baml|scripts|suite|package` are the steps.
 
 ## Buildkite
 
 Buildkite runs them, merges, and releases (`.buildkite/pipeline.yml`). Every push and PR
-builds on queue `self` (arcade-box): `rust` (fmt, clippy `-D warnings`, build, unit tests)
-and `scripts` side by side, then the `suite`; then, on a PR carrying the `automerge`
+builds on queue `self` (arcade-box): `baml` (`baml-cli fmt --check` and the tests) and
+`scripts` side by side, then the `suite` (the packed binary and its subcommands) and the
+flox `package`; then, on a PR carrying the `automerge`
 label — which the loop puts on every PR it opens under `merge = "pipeline"` —
 `scripts/ci-merge.sh` squash-merges the commit the build tested (the label is read from
 the live PR, a moved head is refused, a removed label is a withdrawn request); and on
 main, `release`: the release binary as the GitHub release `main-<sha7>` at that commit
-(the last ten are kept).
+(the last ten are kept): `scripts/pack.sh`'s static binary.
 
-`main`'s protection requires the three step statuses (`buildkite/bead-loop/rust`,
+`main`'s protection requires three step statuses (`buildkite/bead-loop/baml`,
 `/scripts`, `/suite`) — never the build-level one, which would still be pending while
 the automerge step runs.
 
@@ -45,9 +45,11 @@ build finished starts a build of its own that tests the same head and merges it;
 added mid-build cancels that build for one that will merge; nothing depends on GitHub's
 own auto-merge, which private repos on the free plan do not have.
 
-Buildkite posts statuses only once its GitHub App has been given the repo. The cargo
-registry and target directory live beside the agent's checkouts (`scripts/ci.sh`), so a
-build recompiles only what changed and a docs-only push costs a no-op build. Two more
+Buildkite posts statuses only once its GitHub App has been given the repo. The pinned
+`baml-cli` is cached beside the agent's checkouts (`scripts/ci.sh`), so a build downloads it
+once. Renaming a step means changing `main`'s required checks by hand in the same breath:
+the cutover renamed `rust` to `baml`, and the cutover PR waited on a check nothing would
+ever report until that changed. Two more
 pipeline settings make the rest add up: "Build pull requests" and "cancel intermediate
 builds".
 
@@ -60,11 +62,9 @@ where the agent on arcade-box cannot reach it, so `bead-loop-deploy.timer` on th
 past what is deployed — then download the release `main-<sha7>` the pipeline published
 for exactly that commit (the tested binary, byte for byte; no compiler on the box), put
 the clone at the commit, `install.sh` with that binary, and restart what changed: the loop
-always (it rejoins its sessions); the opencode server, where the sessions live, only when
-`agents/`, `skills/` or its unit moved; the UI only when `bin/`, `ui/` or its unit did. When
-the opencode server does restart, the loop is stopped first (a plain stop, not a restart),
-the server restarted, and the loop started again, so the rounds in flight are reopened
-with no failure charged.
+always (its rounds are detached processes and keep running); the page when `bin/`, `ui/`
+or its unit moved. The opencode server is still restarted when `agents/` or `skills/`
+moves, though the loop no longer uses it.
 
 The clone is the deploy's alone — nothing else writes there, so a reset is always safe —
 and `~/src/bead-loop`, the project the loop works, is not read by the deploy at all:
