@@ -59,8 +59,9 @@ function run_gate(dir: string, gate: string) -> GateRun throws never {
     if (gate.length() == 0) {
         return GateRun { ok: true, output: "" };
     }
+    let quoted = gate.split("'").join("'\\''");
     let out = baml.sys.shell(
-        gate,
+        root.tools.unconfined(`sh -c '${quoted}'`),
         cwd = dir,
         capture_output = true,
         timeout = baml.time.Duration.from_seconds(3600),

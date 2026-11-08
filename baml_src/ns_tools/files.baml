@@ -326,7 +326,24 @@ const RUN_SECONDS: int = 900;
 /// tool gave up, and test/run.sh went on for five hours (7 Nov).
 function bounded(command: string, seconds: int) -> string throws never {
     let quoted = command.split("'").join("'\\''");
-    `timeout -k 10 ${seconds} sh -c '${quoted}'`
+    `timeout -k 10 ${seconds} ${unconfined(`sh -c '${quoted}'`)}`
+}
+
+/// A command run without BEAD_LOOP_WORKTREE. The confinement is the model's file tools';
+/// a command the round runs, the gate above all, is the repo's own. Left set, bead-loop's
+/// own tests ran confined: their /tmp scratch files were "outside the worktree", and
+/// bl-dze.2's gate failed eight tests its change never touched (8 Nov).
+function unconfined(command: string) -> string throws never {
+    `env -u BEAD_LOOP_WORKTREE ${command}`
+}
+
+test "a command and the gate run unconfined" {
+    assert.contains(bounded("echo hi", 5), "env -u BEAD_LOOP_WORKTREE sh -c 'echo hi'");
+    let out = baml.sys.shell(
+        unconfined("sh -c 'printenv BEAD_LOOP_WORKTREE || echo unset'"),
+        capture_output = true,
+    );
+    assert.equal(out.stdout.to_string().trim(), "unset")
 }
 
 /// Run a shell command in the worktree and see its exit code and output.
