@@ -233,6 +233,9 @@ function work_round(spec: RoundSpec) -> root.machine.Event[] throws never {
         },
     };
     save_report(spec.report_file, report);
+    if (report.outcome == "done") {
+        commit_left(spec.dir, spec.id, report.summary);
+    }
     let after = git_head(spec.dir);
     let stop = work_outcome(report, before, after);
     if let event: root.machine.Event = stop {
@@ -252,6 +255,9 @@ function work_round(spec: RoundSpec) -> root.machine.Event[] throws never {
         },
     };
     save_report(spec.report_file, fixed);
+    if (fixed.outcome == "done") {
+        commit_left(spec.dir, spec.id, fixed.summary);
+    }
     let second = run_gate(spec.dir, spec.gate);
     if (second.ok) {
         passed(spec, done)
@@ -490,4 +496,58 @@ test "a usage limit is the provider's, not the worker's" {
     let e = limit_hit("claude: You've hit your session limit · resets 7:40am (UTC)");
     assert.is_type<root.machine.Infra>(e);
     assert.equal(limit_hit("there is a limit on how much I can help") == null, true)
+}
+
+/// A worker that reports done with its change still uncommitted has done the work and
+/// skipped the last step (the 30B on fp-p1c, 8 Nov: wrote the test, ran it, reported done,
+/// never committed). The round commits for it; the gate still decides whether it is good.
+/// Nothing is committed for a blocked report, nor when the tree is clean.
+function commit_left(dir: string, id: string, summary: string) -> void throws never {
+    let status = baml.sys.run("git", args = ["status", "--porcelain"], cwd = dir, capture_output = true) catch_all (e) {
+        _ => {
+            return;
+        },
+    };
+    if (status.stdout.to_string().trim().length() == 0) {
+        return;
+    }
+    let line = (summary.split("\n").at(0) ?? "").trim();
+    let subject = if (line.length() > 72) {
+        line.slice(0, 72)
+    } else {
+        line
+    };
+    let _ = baml.sys.run("git", args = ["add", "-A"], cwd = dir, capture_output = true) catch_all (e) {
+        _ => null,
+    };
+    let _ = baml.sys.run(
+        "git",
+        args = ["commit", "-q", "-m", `${id}: ${subject}`],
+        cwd = dir,
+        capture_output = true,
+    ) catch_all (e) {
+        _ => null,
+    };
+}
+
+test "a done report's uncommitted change is committed for it" {
+    let dir = "/tmp/bead-loop-commit-left";
+    let _ = baml.sys.run("rm", args = ["-rf", dir]);
+    let _ = baml.sys.run("mkdir", args = ["-p", dir]);
+    let _ = baml.sys.run("git", args = ["init", "-q"], cwd = dir);
+    let _ = baml.sys.run(
+        "git",
+        args = ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "base"],
+        cwd = dir,
+    );
+    let before = git_head(dir);
+    commit_left(dir, "t-1", "nothing to commit");
+    assert.equal(git_head(dir), before);
+    baml.fs.write(`${dir}/a.txt`, "a");
+    let _ = baml.sys.run("git", args = ["config", "user.email", "t@t"], cwd = dir);
+    let _ = baml.sys.run("git", args = ["config", "user.name", "t"], cwd = dir);
+    commit_left(dir, "t-1", "wrote a.txt\nmore");
+    assert.equal(git_head(dir) != before, true);
+    let msg = baml.sys.run("git", args = ["log", "-1", "--format=%s"], cwd = dir, capture_output = true);
+    assert.equal(msg.stdout.to_string().trim(), "t-1: wrote a.txt")
 }
