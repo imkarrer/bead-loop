@@ -176,10 +176,10 @@ made no new commit, and `NoCommit` deleted the branch. Three fixes, none of them
 call: a reviewer with no verdict is Infra (held in review, retried), `charge` keeps a
 branch that already passed the gate, and the reviewer has `read_file` only, with 12 steps,
 because the diff is in the prompt. The worker's report is written to disk for the next
-review; the first e2e passed an empty one. Compaction is a pure function over tool
-outputs (oldest stubbed, last two kept) and `read_file` will not return the same lines
-twice in one process; a custom `ai.Runner` that can drop messages already sent is still
-ahead, because `Agent.run` always starts a fresh Journal.
+review; the first e2e passed an empty one. Compaction rewrites the journal before each worker call: the last two tool
+results stay, older ones become a length stub, and a read whose text was cut can
+be read again. `Agent.run` still keeps the whole journal, so the worker does not
+use it.
 
 **Long stalls are the box, not the harness.** Single calls took 5 to 7 minutes on `bl-gld` and
 `bl-b1a.1`. During one, disk and swap were silent, the CPU was about 90% idle, and the GPU sat
@@ -250,8 +250,10 @@ line; a `cost` field upstream would be better.
 A round writes `on_event` to its log, which is where tool calls and arguments live.
 
 **Recordings land by `BAML_HOME`.** A packed binary writes to `$BAML_HOME/btel`, and `baml
-query --local` reads `<project>/.baml/btel`. Setting `BAML_HOME=<project>/.baml` makes them
-the same place. `--from` does not help in 0.25.2, and open PR #5539 will change this layout.
+query --local` reads `<project>/.baml/btel`. A round sets `BAML_HOME` to that repo's
+`.baml` and `BAML_CONTEXT` to the bead, the kind and the round log, and the sandbox
+bind is only `.baml/btel`. `context_distinct_id` is the bead id. `--from` does not
+help in 0.25.2, and open PR #5539 will change this layout.
 | a bench that cannot run | `OfflineWorld`, below |
 
 **The bench is not a separate system.** `World` is an interface over `bd`, `git` and `gh`.
@@ -341,9 +343,9 @@ A walking skeleton, each step runnable.
    the log; `bead-loop bench` runs a case on `OfflineWorld` (no bd, no gh); research
    runs before work when the policy names a researcher; a park writes `park.md`;
    `compact_outputs` stubs the oldest tool results. Switch-over is not started.
-   Still in front of it: one real bead closed on this binary, compaction inside
-   the session (`Agent.run` still keeps the whole journal), the operating page,
-   and a unit with `KillMode=process`.
+   The worker compacts its own journal between calls. Still in front of the
+   switch: one real bead closed on this binary, the operating page, and a unit
+   with `KillMode=process`.
 8. **The evals, then GEPA.**
 
 Work on a long-lived branch. A merge to `main` deploys to the box, so deleting `src/` on

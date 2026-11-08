@@ -1,7 +1,7 @@
 // Compaction for a session whose tool outputs have grown past the model's context.
-// Agent.run always starts a fresh Journal, so this cannot yet drop messages the
-// runner already sent; it is the function a runner of our own will call, and the
-// tests pin the rule: keep the latest outputs, stub the oldest.
+// run_compacted calls this before each model call and rewrites the journal, so the
+// next prefill does not carry every tool result the session has seen. The tests
+// pin the rule: keep the latest outputs, stub the oldest.
 
 const KEEP_LAST: int = 2;
 

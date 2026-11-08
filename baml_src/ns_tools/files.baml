@@ -27,6 +27,14 @@ function already_read(path: string, offset: int) -> bool throws never {
     text.split("\n").includes(`${path}\t${offset}`)
 }
 
+/// Drop the session's read memory. Compaction has removed those tool results from
+/// the prompt, so a later read must return the file again.
+function forget_reads() -> void throws never {
+    let _ = baml.fs.write(seen_path(), "") catch_all (e) {
+        _ => 0,
+    };
+}
+
 function mark_read(path: string, offset: int) -> void throws never {
     let out = baml.fs.open(seen_path(), "a") catch_all (e) {
         _ => {

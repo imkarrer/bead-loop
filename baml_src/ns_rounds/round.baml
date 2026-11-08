@@ -123,12 +123,12 @@ function run_worker(spec: RoundSpec, task: string) -> root.agents.Report {
     if (root.agents.uses_claude(spec.model)) {
         return root.agents.WorkOnClaude(task);
     }
-    let agent = ai.Agent.new(
-        client = root.agents.client_for(spec.model),
-        max_steps = MAX_STEPS,
-        on_event = event_log(spec.log_file),
-    );
-    agent.run(root.agents.Work@spec(task)).value
+    root.runner.run_compacted(
+        root.agents.client_for(spec.model),
+        root.agents.Work@spec(task),
+        MAX_STEPS,
+        event_log(spec.log_file),
+    )
 }
 
 function failed_session(e: unknown) -> root.machine.Event throws never {

@@ -393,6 +393,9 @@ class LiveWorld {
     function launch(self, id: string, spec: root.rounds.RoundSpec) -> void {
         let spec_file = `${self.rounds()}/${id}.spec.json`;
         let _ = baml.fs.write(spec_file, baml.json.stringify(spec));
+        let _ = baml.sys.run("mkdir", args = ["-p", `${self.repo}/.baml/btel`]) catch_all (e) {
+            _ => null,
+        };
         let argv = round_argv(bwrap_path(), self.agent_bin, spec_file, spec.dir, self.repo, self.state);
         let program = argv.at(0) ?? self.agent_bin;
         let args: string[] = [];
@@ -405,6 +408,10 @@ class LiveWorld {
             program,
             args = args,
             cwd = spec.dir,
+            env = {
+                "BAML_HOME": `${self.repo}/.baml`,
+                "BAML_CONTEXT": trace_context(spec.id, kind_name(spec.kind), spec.log_file),
+            },
             stdin = "ignore",
             stdout = "ignore",
             stderr = "ignore",
@@ -579,6 +586,34 @@ function next_watch(
     }
 }
 
+function kind_name(kind: RoundKind) -> string throws never {
+    match (kind) {
+        RoundKind.Work => "work",
+        RoundKind.Review => "review",
+        RoundKind.Research => "research",
+    }
+}
+
+function json_escape(s: string) -> string throws never {
+    s.split("\\").join("\\\\").split("\"").join("\\\"")
+}
+
+/// What `baml query` reads as context_distinct_id and context_metadata. The
+/// distinct id is the bead, so one bead's calls are one set.
+function trace_context(id: string, kind: string, log: string) -> string throws never {
+    let bead = json_escape(id);
+    let k = json_escape(kind);
+    let l = json_escape(log);
+    `{"distinct_id":"${bead}","metadata":{"bead":"${bead}","kind":"${k}","log":"${l}"}}`
+}
+
+test "a round's trace names the bead" {
+    let ctx = trace_context("bl-b1a.1", "work", "/state/beads/bl-b1a.1/log");
+    assert.contains(ctx, "\"distinct_id\":\"bl-b1a.1\"");
+    assert.contains(ctx, "\"kind\":\"work\"");
+    assert.contains(ctx, "\"log\":\"/state/beads/bl-b1a.1/log\"")
+}
+
 function bwrap_path() -> string throws never {
     let out = baml.sys.run("which", args = ["bwrap"], capture_output = true) catch_all (e) {
         _ => {
@@ -592,9 +627,11 @@ function bwrap_path() -> string throws never {
     }
 }
 
-/// The round process. With bwrap the worktree, the git dir and the state dir are
-/// writable and the rest of the filesystem is not, so a model cannot write the
-/// checkout it was not given. The network stays, because the model server is on it.
+/// The round process. With bwrap the worktree, the git dir, the state dir and the
+/// trace directory are writable and the rest of the filesystem is not, so a model
+/// cannot write the checkout it was not given. The network stays, because the
+/// model server is on it. Traces go to `<repo>/.baml/btel`, which is where
+/// `baml query --local` reads them.
 function round_argv(
     bwrap: string,
     bin: string,
@@ -617,6 +654,9 @@ function round_argv(
         "--bind",
         `${repo}/.git`,
         `${repo}/.git`,
+        "--bind",
+        `${repo}/.baml/btel`,
+        `${repo}/.baml/btel`,
         "--bind",
         state,
         state,
@@ -643,6 +683,7 @@ test "a round is sandboxed when bwrap is there" {
     assert.contains(args.join(" "), "--ro-bind");
     assert.contains(args.join(" "), "--bind /state/wt/t-1 /state/wt/t-1");
     assert.contains(args.join(" "), "--bind /repo/.git /repo/.git");
+    assert.contains(args.join(" "), "--bind /repo/.baml/btel /repo/.baml/btel");
     assert.equal(args.at(args.length() - 1), "/state/rounds/t-1.spec.json")
 }
 
