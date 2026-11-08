@@ -102,7 +102,9 @@ class FakeWorld {
         ) -> void throws root.machine.Infra {
             self.record(`start_round ${kind} ${model}`);
             self.notes_given.push(note);
-            self.running_now.push(RoundRunning { id: id, kind: kind, model: model });
+            self.running_now.push(
+                RoundRunning { id: id, kind: kind, model: model, since: 0, log: "" },
+            );
         }
         function running(self) -> RoundRunning[] throws never {
             self.running_now
@@ -150,6 +152,20 @@ class FakeWorld {
         }
         function note(self, id: string, text: string) -> void throws never {
             self.calls.push(`note ${text}`);
+        }
+        function abort(self, id: string) -> void throws never {
+            self.calls.push(`abort ${id}`);
+        }
+        function title_of(self, id: string) -> string throws never {
+            (
+                self.tickets_now
+                    .filter((t) -> {
+                        t.id == id
+                    })
+                    .at(0)
+                    ?.title
+            )
+                ?? ""
         }
         function mark(
             self,

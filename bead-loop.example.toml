@@ -27,7 +27,8 @@ on_exhaust = "park"                    # park: leave it for you (default) | repe
 # open_pr = "ask"                      # push and stop at a compare link for you to open (default "auto")
 # pr_style = "plain"                   # loop: "ID: title" · plain: the bead's title and description
 # worker_timeout = 3600                # seconds a work or review round may run, gate included
-# sandbox = false                      # true: each round under bwrap, only its worktree, git dir, state and /tmp writable
+# sandbox = false                      # true: each round under bwrap: its own places writable, the rest read-only, credentials hidden
+# sandbox_writable = ["~/src/other/.flox"]   # more a sandboxed round may write: an env its gate activates
 
 # Escalation, in order. Every send-back (the gate failing twice, the pre-check's SEND BACK,
 # a REJECT, CI red) is one failure; a stage takes the bead for its `attempts`, then the

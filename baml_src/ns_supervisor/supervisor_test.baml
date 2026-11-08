@@ -634,3 +634,50 @@ test "a parked bead with its work done is pushed, then opened as the PR you aske
     assert.is_type<root.machine.Merging>(place_of(s));
     assert.is_true(w.calls.includes("push_and_open_pr"))
 }
+
+test "each tick the supervisor writes what the page shows: its beads, from its own state" {
+    let w = one_bead([no_commit(), no_commit(), no_commit()], [], []);
+    let log = MemoryLog.new();
+    let s = Supervisor.new(w, log, policy());
+    tick(s);
+    let running = baml.json.decode<View>(log.view);
+    assert.equal(running.beads.at(0)?.place, "running");
+    assert.equal(running.beads.at(0)?.step, "work");
+    assert.equal(running.beads.at(0)?.title, "t");
+    w.finish();
+    turns(s, w, 6);
+    let parked = baml.json.decode<View>(log.view);
+    assert.equal(parked.beads.at(0)?.place, "parked");
+    assert.equal(parked.tallies.length(), 1)
+}
+
+test "a bead that left bd ready is not shown waiting in a queue" {
+    let w = one_bead([no_commit(), committed()], [approved()], [green(), merged()]);
+    let log = MemoryLog.new();
+    let s = Supervisor.new(w, log, policy());
+    turn(s, w);
+    w.tickets_now = [];
+    tick(s);
+    assert.equal(baml.json.decode<View>(log.view).beads.length(), 0)
+}
+
+test "an abort or a note in the inbox is the supervisor's to carry out" {
+    let w = one_bead([committed()], [approved()], [merged()]);
+    let s = Supervisor.new(w, MemoryLog.new(), policy());
+    w.inbox_now
+        = [
+            root.world.Mail {
+                id: "t-1",
+                event: null,
+                order: root.world.AbortOrder { kind: "abort" },
+            },
+            root.world.Mail {
+                id: "t-1",
+                event: null,
+                order: root.world.NoteOrder { kind: "note", text: "use b.ts" },
+            },
+        ];
+    tick(s);
+    assert.is_true(w.calls.includes("abort t-1"));
+    assert.is_true(w.calls.includes("note operator: use b.ts"))
+}

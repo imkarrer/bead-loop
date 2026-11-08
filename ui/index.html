@@ -367,6 +367,8 @@ function morphChildren(a, b) {
 // answer or press Escape. While a lever is pulling, its label gives way to a spinner and
 // the others wait. What it said comes back as a toast; an error stays until dismissed.
 // `text` is not part of a lever's identity: the note and the box it came from are one.
+// This run's token, which the server writes into the page: every lever carries it.
+const TOKEN = (document.querySelector && (document.querySelector('meta[name="bead-loop-token"]') || {}).content) || '';
 let last = null, busy = null, pending = null;
 const key = (name, body) => { const { text, ...rest } = body || {}; return `${name} ${JSON.stringify(rest)}`; };
 window.act = async function act(name, body, ask) {
@@ -375,7 +377,7 @@ window.act = async function act(name, body, ask) {
   pending = null; busy = k; render();
   let ok = false;
   try {
-    const r = await fetch(`/api/${name}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body || {}) });
+    const r = await fetch(`/api/${name}`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-bead-loop-token': TOKEN }, body: JSON.stringify(body || {}) });
     const j = await r.json().catch(() => ({}));
     if (!r.ok) toast(j.error || r.statusText, 'bad');
     else {

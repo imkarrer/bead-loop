@@ -34,12 +34,16 @@ fails when they differ). It reads `/api/status` every five seconds. Top to botto
   each held bead with its reason.
 - **Supervisor log**: the loop's journal.
 
-The page folds each repo's event log afresh on every request, and reads the beads'
-titles from `bd list` once a minute; a bead waiting in a queue that bd no longer lists
-for the loop is not shown there. It never takes a round's result or starts one. Its
-levers leave mail in the repo's inbox for the loop's next tick (answer, reopen,
-escalate, ready, publish), note or close a bead in bd, signal a round's process group,
-or call `systemctl --user` for the loop's units.
+Each supervisor writes what the page shows to `STATE/view.json` every tick: its beads
+from its own state (their places, holds, titles, rounds in flight and their last tool
+calls) and the scoreboard's tallies. The page reads those files and adds only the
+config, the lane slots, systemd and the journal: it folds no log and asks neither bd,
+git nor gh, so what it shows is what the loop holds, as of its last tick. Its levers are
+mail in the repo's inbox, which the supervisor carries out on its next tick (answer,
+reopen, escalate, ready, publish; abort a round; note a bead), and `systemctl --user` for
+the loop's own units. Every POST carries a token the page is served with, made afresh
+each run, and must come from the page's own origin, so another site open in the same
+browser cannot pull a lever.
 
 ## The terminal
 
@@ -69,11 +73,15 @@ in `logs/<id>.<pid>.<kind>.jsonl`.
 
 A Claude round is one Claude Code turn, so it has no BAML tool calls of its own. It runs
 the CLI through `logs/<id>.<pid>.<kind>.jsonl.sh`, a wrapper the round writes, which adds
-what Claude may run without asking (the worker: Read, Edit, Write, Glob, Grep and Bash; a
-reviewer: reading tools and git's reading commands) and tees Claude Code's own
+what Claude may run without asking (the worker: Read, Edit and Write under its worktree,
+Glob, Grep and Bash; a reviewer: Read under its worktree, Glob and Grep, and no shell,
+since the diff is in its prompt) and tees Claude Code's own
 `stream-json` into the same log, its stderr beside it in `.err`. The page shows those tool
 calls like any other round's. When the CLI fails, the round reads what it said there: a
 usage limit holds every claude round, anything else is held with the CLI's own words.
+
+A local round's file tools refuse a path outside its worktree (`BEAD_LOOP_WORKTREE`, which
+the launch sets); its `run` tool is a shell, which only `sandbox` confines.
 
 ## Stop, restart, recover
 
@@ -99,6 +107,7 @@ it is held; a researcher past it lets the worker go without a brief.
   left.
 - `wt/<id>` — the bead's worktree, on branch `bead/<id>`.
 - `logs/` — each round's tool calls; `inbox/` — mail from the page and `tell`.
+- `view.json` — what the page shows, written each tick.
 - `gh-login` — the account the loop acts as, asked once.
 
 The Rust loop's state is beside it, in `~/.local/state/bead-loop/<repo>/`, and nothing

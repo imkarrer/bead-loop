@@ -27,6 +27,9 @@ class RoundRunning {
     kind: RoundKind,
     /// The model the round runs on: its provider is the lane it holds.
     model: string,
+    /// When it started (0: not known), and the file its tool calls go to.
+    since: int,
+    log: string,
 }
 
 /// An open `bead/ID` PR, whoever opened it.
@@ -37,11 +40,25 @@ class Adoptable {
     own: bool,
 }
 
-/// Something you told the loop about one bead: an answer, a reopen, an escalation.
+/// Something you told the loop about one bead: an event for its machine (an answer, a
+/// reopen, ready for PR), or an order the supervisor carries out on it (abort its round,
+/// note it in bd). The page and `tell` only ever write mail; the supervisor acts.
 class Mail {
     id: string,
-    event: root.machine.Event,
+    event: root.machine.Event?,
+    order: Order?,
 }
+
+class AbortOrder {
+    kind: "abort",
+}
+
+class NoteOrder {
+    kind: "note",
+    text: string,
+}
+
+type Order = AbortOrder | NoteOrder;
 
 interface World {
     /// Beads with the loop's label it may work: those with no open blocker, and those it
@@ -80,6 +97,11 @@ interface World {
     function relabel(self, id: string) -> void throws root.machine.Infra;
     function delete_remote_branch(self, id: string) -> void throws root.machine.Infra;
     function note(self, id: string, text: string) -> void throws root.machine.Infra;
+    /// Stop the bead's round and everything it started; the loop finds it lost and starts
+    /// it again, uncharged.
+    function abort(self, id: string) -> void throws never;
+    /// The bead's title, for one `bd ready` no longer lists (parked, in the merge queue).
+    function title_of(self, id: string) -> string throws never;
     /// The bead in bd says where it is: its status (empty: as it is), and its place as a
     /// `loop:*` label, `drop` taken off and `label` put on (either empty: none).
     function mark(

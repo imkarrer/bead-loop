@@ -68,6 +68,44 @@ class FileLog {
             }
             events
         }
+
+        function timed(self, id: string) -> TimedEvent[] throws never {
+            timed_events(self.state, id)
+        }
+
+        function side(self, id: string, name: string) -> string throws never {
+            if (name.includes("/") || id.includes("/")) {
+                return "";
+            }
+            baml.fs.read(`${self.state}/beads/${id}/${name}`) catch_all (e) {
+                _ => "",
+            }
+        }
+
+        function round_logs(self, id: string) -> string[] throws never {
+            let out = baml.sys.run("ls", args = ["-1t", `${self.state}/logs`], capture_output = true) catch_all (e) {
+                _ => {
+                    let none: string[] = [];
+                    return none;
+                },
+            };
+            out.stdout.to_string().split("\n").filter((f) -> {
+                f.starts_with(`${id}.`) && f.ends_with(".jsonl")
+            })
+        }
+
+        function put_view(self, text: string) -> void throws never {
+            // Written whole, then moved: the page never reads half a view.
+            let tmp = `${self.state}/view.json.tmp`;
+            let _ = baml.fs.write(tmp, text) catch_all (e) {
+                _ => {
+                    return;
+                },
+            };
+            let _ = baml.sys.run("mv", args = ["-f", tmp, `${self.state}/view.json`]) catch_all (e) {
+                _ => null,
+            };
+        }
     }
 }
 

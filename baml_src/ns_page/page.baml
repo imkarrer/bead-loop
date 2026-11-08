@@ -1,8 +1,9 @@
 // The page: ui/index.html (PAGE_HTML, written into page_html.baml by
-// scripts/page-html.mjs), the state it reads (flow.baml), and its levers. It reads the
-// logs, bd's titles and systemd; a lever leaves mail in a repo's inbox for the loop's next
-// tick, notes or closes a bead in bd, signals a round, or calls `systemctl --user`. It
-// never takes a round's result or starts one.
+// scripts/page-html.mjs), and the state it reads (flow.baml: each supervisor's
+// STATE/view.json, the config, systemd). It acts on a bead only by leaving mail in the
+// repo's inbox, which the supervisor carries out on its next tick; its one power of its
+// own is the loop's systemd units. Every POST carries this run's token and comes from the
+// page's own origin, so another site open in the same browser cannot pull a lever.
 
 class BeadView {
     id: string,
@@ -194,7 +195,8 @@ function unit_command(lever: string, on: bool) -> string? throws never {
     null
 }
 
-/// One lever: POST /api/NAME with a JSON body, for the repos this page shows.
+/// One lever: POST /api/NAME with a JSON body, for the repos this page shows. Each is mail
+/// for the supervisor, or one of the loop's units.
 function pull(
     lever: string,
     body: string,
@@ -217,10 +219,29 @@ function pull(
         return json_error(403, "not a repo this page shows");
     }
     let state = found.at(0)?.state ?? "";
-    let beads = found.at(0)?.beads ?? "";
     let id = l.id ?? "";
     if (id.length() == 0 || id.includes("/") || id.includes(" ")) {
         return json_error(400, "which bead?");
+    }
+    let order: root.world.Order? = if (lever == "abort") {
+        root.world.AbortOrder { kind: "abort" }
+    } else if (lever == "note") {
+        root.world.NoteOrder { kind: "note", text: (l.text ?? "").trim() }
+    } else {
+        null
+    };
+    if let o: root.world.Order = order {
+        if let n: root.world.NoteOrder = o {
+            if (n.text.length() == 0) {
+                return json_error(400, "write the note first");
+            }
+        }
+        let _ = root.supervisor.order_to(state, id, o) catch_all (x) {
+            _ => {
+                return json_error(500, `${x}`);
+            },
+        };
+        return json_ok("told: the loop does it on its next tick");
     }
     let word = word_of(lever);
     if let w: string = word {
@@ -241,32 +262,24 @@ function pull(
             };
             return json_ok("told: the loop takes it on its next tick");
         }
-        return json_error(400, "unknown word");
-    }
-    if (lever == "abort") {
-        return json_ok(abort_round(state, id));
-    }
-    if (lever == "note" || lever == "decide") {
-        let text = (l.text ?? "").trim();
-        if (text.length() == 0) {
-            return json_error(400, "write it first");
-        }
-        let args = if (lever == "note") {
-            ["note", id, `operator: ${text}`]
-        } else {
-            ["close", id, "--reason", text]
-        };
-        let ran = baml.sys.run("bd", args = args, cwd = beads, capture_output = true) catch_all (e) {
-            _ => {
-                return json_error(500, `bd: ${e}`);
-            },
-        };
-        if (ran.exit_code != 0) {
-            return json_error(500, root.tools.tail(ran.stderr.to_string()));
-        }
-        return json_ok(`bd ${args.at(0) ?? ""} ${id}`);
     }
     json_error(404, `no lever ${lever} in the BAML loop`)
+}
+
+/// A POST comes from the page itself: this run's token, and no Origin but the page's own
+/// (a browser sends Origin on every cross-site POST, and another site cannot read the
+/// token out of the page).
+function trusted(headers: map<string, string>, token: string, addr: string) -> bool throws never {
+    let given = headers.get("x-bead-loop-token") ?? headers.get("X-Bead-Loop-Token") ?? "";
+    if (token.length() == 0 || given != token) {
+        return false;
+    }
+    let origin = headers.get("origin") ?? headers.get("Origin") ?? "";
+    let port = addr.split(":").at(1) ?? "";
+    origin.length() == 0
+        || origin == `http://${addr}`
+        || origin == `http://127.0.0.1:${port}`
+        || origin == `http://localhost:${port}`
 }
 
 /// GET /api/log?repo=STATE&file=NAME: one round's log as it is on disk.
@@ -294,21 +307,24 @@ function log_text(url: string, configs: root.supervisor.LoopConfig[]) -> PageRep
 
 /// Every request: the page, the state, a log, or a lever.
 function route(
-    method: string,
+    req_method: string,
     url: string,
     body: string,
+    headers: map<string, string>,
     configs: root.supervisor.LoopConfig[],
-    titles: map<string, string>,
+    token: string,
+    addr: string,
 ) -> PageReply throws never {
     let path = path_of(url);
     if (path == "/" || path == "/index.html") {
-        return PageReply { status: 200, content_type: "text/html; charset=utf-8", body: PAGE_HTML };
+        let html = PAGE_HTML.replace("</head>", `<meta name="bead-loop-token" content="${token}">\n</head>`);
+        return PageReply { status: 200, content_type: "text/html; charset=utf-8", body: html };
     }
     if (path == "/favicon.svg") {
         return PageReply { status: 200, content_type: "image/svg+xml", body: FAVICON_SVG };
     }
     if (path == "/api/status") {
-        let s = baml.json.stringify(flow_status(configs, titles)) catch_all (e) {
+        let s = baml.json.stringify(flow_status(configs)) catch_all (e) {
             _ => {
                 return json_error(500, `${e}`);
             },
@@ -319,8 +335,11 @@ function route(
         return log_text(url, configs);
     }
     if (path.starts_with("/api/")) {
-        if (method != "POST") {
+        if (req_method != "POST") {
             return json_error(405, "POST");
+        }
+        if (!trusted(headers, token, addr)) {
+            return json_error(403, "not from this page");
         }
         return pull(path.slice(5, path.length()), body, configs);
     }
@@ -336,26 +355,13 @@ function response_of(reply: PageReply) -> baml.http.Response throws never {
 }
 
 /// `bead-supervisor page --config_file ~/.config/bead-loop/config.toml --addr 127.0.0.1:4097`.
-/// Reads the configs once; every request folds the logs afresh. Titles come from bd at
-/// most once a minute.
+/// Reads the configs once, and makes a token for this run that the page it serves carries.
 function page(config_file: string, addr: string = "127.0.0.1:4097") -> never {
     let configs = configs_of(config_file);
-    let titles: map<string, string> = {};
-    let fetched: int[] = [0];
+    let token = read_or_empty("/proc/sys/kernel/random/uuid").trim();
     let server = baml.http.Server.bind(addr);
     server.serve((req) -> {
-        if (path_of(req.url) == "/api/status") {
-            let now = root.supervisor.unix_seconds();
-            if (now - (fetched.at(0) ?? 0) > 60) {
-                let fresh = titles_of(configs);
-                for (let k in fresh.keys()) {
-                    let _ = titles.set(k, fresh.get(k) ?? "");
-                }
-                let _ = fetched.pop();
-                fetched.push(now);
-            }
-        }
-        response_of(route(req.method, req.url, req.body, configs, titles))
+        response_of(route(req.method, req.url, req.body, req.headers, configs, token, addr))
     })
 }
 
@@ -371,14 +377,26 @@ test "a snapshot names a bead's place" {
     assert.equal(snap.beads.at(0)?.place, "working")
 }
 
-test "the page is ui/index.html, served whole" {
+test "the page is ui/index.html, served whole, with this run's token" {
     let none: root.supervisor.LoopConfig[] = [];
-    let titles: map<string, string> = {};
-    let r = route("GET", "/", "", none, titles);
+    let h: map<string, string> = {};
+    let r = route("GET", "/", "", h, none, "tok", "127.0.0.1:4097");
     assert.contains(r.body, "function flowGraph(");
-    assert.contains(r.body, "${");
-    assert.equal(route("GET", "/nope", "", none, titles).status, 404);
-    assert.equal(route("GET", "/api/answer", "", none, titles).status, 405)
+    assert.contains(r.body, "content=\"tok\"");
+    assert.equal(route("GET", "/nope", "", h, none, "tok", "127.0.0.1:4097").status, 404);
+    assert.equal(route("GET", "/api/answer", "", h, none, "tok", "127.0.0.1:4097").status, 405)
+}
+
+test "a lever from anywhere but the page is refused" {
+    let none: root.supervisor.LoopConfig[] = [];
+    let no: map<string, string> = {};
+    assert.equal(route("POST", "/api/stop", "{}", no, none, "tok", "127.0.0.1:4097").status, 403);
+    let other: map<string, string> = { "x-bead-loop-token": "tok", "origin": "https://evil.example" };
+    assert.equal(trusted(other, "tok", "127.0.0.1:4097"), false);
+    let own: map<string, string> = { "x-bead-loop-token": "tok", "origin": "http://127.0.0.1:4097" };
+    assert.equal(trusted(own, "tok", "127.0.0.1:4097"), true);
+    let wrong: map<string, string> = { "x-bead-loop-token": "nope" };
+    assert.equal(trusted(wrong, "tok", "127.0.0.1:4097"), false)
 }
 
 test "the page's script parses as served" {
@@ -395,10 +413,10 @@ test "the page's script parses as served" {
     let _ = baml.fs.remove(path);
 }
 
-test "a lever is a word to the loop, bd, a signal or systemd; nothing else" {
+test "a lever is mail for the supervisor or one of the loop's units; nothing else" {
     assert.equal(word_of("ready"), "publish");
     assert.equal(word_of("publish"), "open_pr");
-    assert.equal(word_of("gpu") == null, true);
+    assert.equal(word_of("decide") == null, true);
     assert.contains(unit_command("loop", false) ?? "", "stop bead-supervisor.timer");
     assert.equal(unit_command("rm", true) == null, true);
     let none: root.supervisor.LoopConfig[] = [];

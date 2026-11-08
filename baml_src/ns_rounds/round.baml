@@ -27,6 +27,8 @@ class RoundSpec {
     brief_file: string,
     log_file: string,
     result_file: string,
+    /// When the round was launched, in unix seconds; 0 when not known.
+    started: int?,
 }
 
 const MAX_STEPS: int = 80;
@@ -453,6 +455,7 @@ function spec_of(brief: string, note: string) -> RoundSpec throws never {
         brief_file: "",
         log_file: "",
         result_file: "",
+        started: null,
     }
 }
 

@@ -146,6 +146,20 @@ function expand_home(path: string, home: string) -> string throws never {
 }
 
 /// `repos` in the global file, `~` expanded. Empty when the file is a repo toml.
+/// A list of paths, `~` expanded; empty when the key is not there.
+function paths_at(t: baml.toml.Table, key: string, home: string) -> string[] throws never {
+    let out: string[] = [];
+    let v = t.get(key);
+    if let rows: baml.toml.Item[] = v {
+        for (let item in rows) {
+            if let s: string = item {
+                out.push(expand_home(s, home));
+            }
+        }
+    }
+    out
+}
+
 function repos_in(global_text: string, home: string) -> string[] throws never {
     let global = baml.toml.Table.parse(global_text) catch_all (e) {
         _ => {
@@ -226,6 +240,7 @@ function config_from_toml(
         work_seconds: int_at(repo_table, "worker_timeout", int_at(global, "worker_timeout", 3600)),
         research_seconds: int_at(repo_table, "research_timeout", int_at(global, "research_timeout", 900)),
         sandbox: bool_at(repo_table, "sandbox", bool_at(global, "sandbox", false)),
+        sandbox_writable: paths_at(repo_table, "sandbox_writable", home_dir()),
         urls: urls_of(global),
         precheck: pick(repo_table, global, "precheck_model", ""),
         agent_bin: agent_bin,
@@ -465,7 +480,12 @@ function target_config(
         feedback: bool_at(t, "feedback", parent.feedback),
         work_seconds: parent.work_seconds,
         research_seconds: parent.research_seconds,
-        sandbox: parent.sandbox,
+        sandbox: bool_at(t, "sandbox", parent.sandbox),
+        sandbox_writable: if (paths_at(t, "sandbox_writable", home).length() > 0) {
+            paths_at(t, "sandbox_writable", home)
+        } else {
+            parent.sandbox_writable
+        },
         urls: parent.urls,
         precheck: parent.precheck,
         agent_bin: parent.agent_bin,
@@ -605,4 +625,20 @@ test "a named researcher runs unless research is off" {
         config_from_toml("", "research_model = \"acbox/coder\"\nresearch = \"off\"\n", "/r", "/s", "b").policy.research,
         "",
     )
+}
+
+test "sandbox_writable is read with ~ expanded, and a target inherits it" {
+    let c = config_from_toml(
+        "sandbox = true\nsandbox_writable = [\"~/src/env/.flox\"]\n[targets.t]\npath = \"~/src/t\"\n",
+        "",
+        "/r",
+        "/s",
+        "bin",
+    );
+    assert.equal(c.sandbox, true);
+    assert.equal(c.sandbox_writable.length(), 1);
+    assert.is_true((c.sandbox_writable.at(0) ?? "").ends_with("/src/env/.flox"));
+    assert.is_true(!(c.sandbox_writable.at(0) ?? "").starts_with("~"));
+    let t = targets_of("[targets.t]\npath = \"~/src/t\"\n", c, "/h").at(0);
+    assert.equal(t?.sandbox_writable.length(), 1)
 }

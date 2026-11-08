@@ -164,7 +164,15 @@ class OfflineWorld {
                         _ => false,
                     };
                     if (alive && pid.trim().length() > 0) {
-                        out.push(RoundRunning { id: name, kind: RoundKind.Work, model: "" });
+                        out.push(
+                            RoundRunning {
+                                id: name,
+                                kind: RoundKind.Work,
+                                model: "",
+                                since: 0,
+                                log: "",
+                            },
+                        );
                     }
                 }
             }
@@ -257,6 +265,22 @@ class OfflineWorld {
             }
         }
 
+        function abort(self, id: string) -> void throws never {
+            let _ = stop_round(`${self.state}/rounds`, id);
+        }
+
+        function title_of(self, id: string) -> string throws never {
+            (
+                self.tickets_now
+                    .filter((t) -> {
+                        t.id == id
+                    })
+                    .at(0)
+                    ?.title
+            )
+                ?? ""
+        }
+
         /// No bd offline: the bench's beads have no status to keep.
         function mark(
             self,
@@ -328,6 +352,7 @@ class OfflineWorld {
             brief_file: `${self.state}/beads/${id}/brief`,
             log_file: `${self.state}/logs/${id}.${stamp}.${kind}.jsonl`,
             result_file: `${dir}/${id}.result.json`,
+            started: root.supervisor.unix_seconds(),
         };
         let spec_file = `${dir}/${id}.spec.json`;
         let _ = baml.fs.write(spec_file, baml.json.stringify(spec));
