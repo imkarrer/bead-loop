@@ -226,7 +226,7 @@ function adopt_prs(s: Supervisor) -> void throws never {
             continue;
         }
         if (known.pr == null && known.place is root.machine.Ready) {
-            apply(s, a.id, root.machine.PrAdopted { kind: "pr_adopted", url: a.url });
+            apply(s, a.id, root.machine.PrAdopted { kind: "pr_adopted", url: a.url, own: a.own });
         }
     }
 }

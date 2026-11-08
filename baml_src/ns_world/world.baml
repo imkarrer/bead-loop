@@ -33,6 +33,8 @@ class RoundRunning {
 class Adoptable {
     id: string,
     url: string,
+    /// Opened by the account the loop acts as.
+    own: bool,
 }
 
 /// Something you told the loop about one bead: an answer, a reopen, an escalation.

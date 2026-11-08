@@ -146,7 +146,7 @@ function on_ready(b: Bead, e: Event, p: Policy) -> Step throws never {
             if (b.pr != null) {
                 return stay(b);
             }
-            let n = b.at(Merging { kind: "merging", pr: x.url, adopted: true });
+            let n = b.at(Merging { kind: "merging", pr: x.url, adopted: !(x.own ?? false) });
             n.pr = x.url;
             let effects: Effect[] = if (p.merge == MergeMode.Pipeline) {
                 [Relabel {}]

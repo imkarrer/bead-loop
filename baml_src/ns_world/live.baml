@@ -552,7 +552,16 @@ class LiveWorld {
                 root.machine.Trouble.Gh,
                 "gh",
                 self.gh_args(
-                    ["pr", "list", "--state", "open", "--limit", "200", "--json", "headRefName,url"],
+                    [
+                        "pr",
+                        "list",
+                        "--state",
+                        "open",
+                        "--limit",
+                        "200",
+                        "--json",
+                        "headRefName,url,author",
+                    ],
                 ),
                 self.repo,
             );
@@ -561,7 +570,7 @@ class LiveWorld {
                     self.refuse(root.machine.Trouble.Gh, `gh pr list: ${e}`)
                 },
             };
-            adoptable_of(rows)
+            adoptable_of(rows, self.login())
         }
 
         function inbox(self) -> Mail[] throws never {
@@ -952,14 +961,22 @@ test "a green PR's clock starts when it is first seen green" {
 class PrRow {
     headRefName: string,
     url: string,
+    author: Login?,
 }
 
 /// The open PRs whose branch is `bead/ID`, as the bead they deliver.
-function adoptable_of(rows: PrRow[]) -> Adoptable[] throws never {
+function adoptable_of(rows: PrRow[], me: string) -> Adoptable[] throws never {
     let out: Adoptable[] = [];
     for (let r in rows) {
         if (r.headRefName.starts_with("bead/")) {
-            out.push(Adoptable { id: r.headRefName.slice(5, r.headRefName.length()), url: r.url });
+            let own = me.length() > 0 && (r.author?.login ?? "") == me;
+            out.push(
+                Adoptable {
+                    id: r.headRefName.slice(5, r.headRefName.length()),
+                    url: r.url,
+                    own: own,
+                },
+            );
         }
     }
     out
@@ -967,12 +984,13 @@ function adoptable_of(rows: PrRow[]) -> Adoptable[] throws never {
 
 test "only bead branches are adoptable" {
     let rows = baml.json.decode<PrRow[]>(
-        `[{"headRefName":"bead/bl-1.2","url":"u1"},{"headRefName":"claude/x","url":"u2"}]`,
+        `[{"headRefName":"bead/bl-1.2","url":"u1","author":{"login":"me"}},{"headRefName":"claude/x","url":"u2"},{"headRefName":"bead/bl-9","url":"u3","author":{"login":"you"}}]`,
     );
-    let a = adoptable_of(rows);
-    assert.equal(a.length(), 1);
+    let a = adoptable_of(rows, "me");
+    assert.equal(a.length(), 2);
     assert.equal(a.at(0)?.id, "bl-1.2");
-    assert.equal(a.at(0)?.url, "u1")
+    assert.equal(a.at(0)?.own, true);
+    assert.equal(a.at(1)?.own, false)
 }
 
 /// `STATE/inbox/*.json`, each one Mail, removed once read. `bead-supervisor tell`

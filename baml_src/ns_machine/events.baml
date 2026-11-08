@@ -175,6 +175,9 @@ class WaitedTooLong {
 class PrAdopted {
     kind: "pr_adopted",
     url: string,
+    /// Opened by the loop's own account, by this loop before a restart or by the Rust
+    /// loop before the cutover: then it is the loop's own, counted and sent back like one.
+    own: bool?,
 }
 
 /// Review comments on the loop's own PR from someone else, newer than the last acted on.

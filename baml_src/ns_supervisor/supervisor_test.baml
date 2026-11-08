@@ -398,7 +398,7 @@ test "a round in one repo holds the server for the next repo in the same pass" {
 test "an open bead PR the loop did not open is adopted, merged and closed" {
     let w = one_bead([], [], [green(), merged()]);
     w.tickets_now = [];
-    w.adoptable_now = [root.world.Adoptable { id: "t-1", url: "pr/t-1" }];
+    w.adoptable_now = [root.world.Adoptable { id: "t-1", url: "pr/t-1", own: false }];
     let s = Supervisor.new(w, MemoryLog.new(), policy());
     turns(s, w, 3);
     assert.is_type<root.machine.Closed>(place_of(s));
@@ -412,7 +412,7 @@ test "the loop's own PR is not adopted a second time" {
     turns(s, w, 3);
     let url = s.bead("t-1")?.pr ?? "";
     assert.equal(url, "pr/t-1");
-    w.adoptable_now = [root.world.Adoptable { id: "t-1", url: url }];
+    w.adoptable_now = [root.world.Adoptable { id: "t-1", url: url, own: true }];
     tick(s);
     let m = s.bead("t-1")?.place;
     assert.is_type<root.machine.Merging>(m);
@@ -449,7 +449,7 @@ test "open_pr ask pushes, waits for you to open the PR, then watches it" {
     assert.is_type<root.machine.Publishable>(place_of(s));
     assert.is_true(w.calls.includes("push_branch"));
     assert.equal(w.calls.includes("push_and_open_pr"), false);
-    w.adoptable_now = [root.world.Adoptable { id: "t-1", url: "pr/t-1" }];
+    w.adoptable_now = [root.world.Adoptable { id: "t-1", url: "pr/t-1", own: false }];
     turns(s, w, 2);
     assert.is_type<root.machine.Closed>(place_of(s));
     assert.equal(w.calls.includes("merge_pr"), false)
@@ -532,4 +532,14 @@ test "update_behind is on under auto unless the files say otherwise" {
     assert.equal(pipe.policy.update_behind, false);
     let ext = config_from_toml("merge = \"external\"\nupdate_behind = true\n", "", "/r", "/s", "b");
     assert.equal(ext.policy.update_behind, true)
+}
+
+test "a PR the loop's own account opened before a cutover counts as its own" {
+    let w = two_beads();
+    let s = Supervisor.new(w, MemoryLog.new(), policy());
+    s.max_open_prs = 1;
+    w.adoptable_now = [root.world.Adoptable { id: "t-1", url: "pr/t-1", own: true }];
+    tick(s);
+    assert.equal(inflight(s), 1);
+    assert.equal(starts(w, "start_round Work devbox/coder"), 0)
 }
