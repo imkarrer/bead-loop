@@ -161,6 +161,7 @@ is **lost**: back to where it was picked from, uncharged.
 | Review comments from someone else on the loop's PR | **no failure**; ready with the comments as the note, for `conflict_worker` | kept |
 | An adopted PR conflicts | left alone | whoever opened it rebases |
 | An open `bead/ID` PR the loop is not carrying | merging; the loop's own if its account opened it (a PR left by the Rust loop), else adopted | labelled under `pipeline` |
+| A parked bead's `bead/ID` PR, opened or merged by hand | open: merging, as above; merged: closed, the bead closed in bd with the url | deleted |
 | PR merged | closed, the bead closed in bd with the url | deleted |
 | PR closed unmerged | parked, the url in the question | gone |
 | Stages exhausted (`on_exhaust = "park"`) | parked | removed |
@@ -182,8 +183,6 @@ is **lost**: back to where it was picked from, uncharged.
 
 ## Not built
 
-- A bead merged outside the loop while ready or parked (`MergedOutside`) is in the
-  machine but nothing observes it yet; close the bead by hand.
 - A server that is down is found one round at a time (each is held) rather than once by
   a probe.
 - `diff_checks`, and `research = "every"`.

@@ -310,7 +310,8 @@ function carry_out(s: Supervisor, id: string, o: root.world.Order) -> void throw
 }
 
 /// An open `bead/ID` PR this loop is not already carrying joins the merge queue. The
-/// step decides: only a ready bead with no PR of its own takes it.
+/// step decides: only a ready or parked bead with no PR of its own takes it. A merged one
+/// closes a parked bead: it was landed by hand.
 function adopt_prs(s: Supervisor) -> void throws never {
     if (!s.adopt) {
         return;
@@ -322,13 +323,24 @@ function adopt_prs(s: Supervisor) -> void throws never {
         },
     };
     for (let a in open) {
+        if (a.merged ?? false) {
+            // Only a bead the loop parked: the merged branch of a bead you reopened, or
+            // never gave the loop, is no reason to close it.
+            if let parked: root.machine.Bead = s.bead(a.id) {
+                if (parked.place is root.machine.Parked) {
+                    apply(s, a.id, root.machine.MergedOutside { kind: "merged_outside", url: a.url });
+                }
+            }
+            continue;
+        }
         let known = s.bead(a.id) ?? root.machine.Bead.new(a.id);
         // A branch pushed for you to open: the PR you opened is the one it waited for.
         if (known.place is root.machine.Publishable) {
             apply(s, a.id, root.machine.PrOpened { kind: "pr_opened", url: a.url, head: "" });
             continue;
         }
-        if (known.pr == null && known.place is root.machine.Ready) {
+        let waiting = known.place is root.machine.Ready || known.place is root.machine.Parked;
+        if (known.pr == null && waiting) {
             apply(s, a.id, root.machine.PrAdopted { kind: "pr_adopted", url: a.url, own: a.own });
         }
     }

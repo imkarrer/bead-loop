@@ -192,6 +192,31 @@ class LiveWorld {
             .trim()
     }
 
+    function pr_rows(self, state: string, limit: string) -> PrRow[] throws root.machine.Infra {
+        let text = self.tool(
+            root.machine.Trouble.Gh,
+            "gh",
+            self.gh_args(
+                [
+                    "pr",
+                    "list",
+                    "--state",
+                    state,
+                    "--limit",
+                    limit,
+                    "--json",
+                    "headRefName,url,author,state",
+                ],
+            ),
+            self.repo,
+        );
+        baml.json.decode<PrRow[]>(text) catch_all (e) {
+            _ => {
+                self.refuse(root.machine.Trouble.Gh, `gh pr list: ${e}`)
+            },
+        }
+    }
+
     function bd_rows(self, args: string[]) -> BdRow[] throws root.machine.Infra {
         let text = self.tool(root.machine.Trouble.Bd, "bd", args, self.beads);
         baml.json.decode<BdRow[]>(text) catch_all (e) {
@@ -629,29 +654,12 @@ class LiveWorld {
             self.note(id, `parked: ${because}`);
         }
 
+        /// The open PRs, and the last merged ones: a parked bead landed by hand is closed.
         function adoptable(self) -> Adoptable[] throws root.machine.Infra {
-            let text = self.tool(
-                root.machine.Trouble.Gh,
-                "gh",
-                self.gh_args(
-                    [
-                        "pr",
-                        "list",
-                        "--state",
-                        "open",
-                        "--limit",
-                        "200",
-                        "--json",
-                        "headRefName,url,author",
-                    ],
-                ),
-                self.repo,
-            );
-            let rows = baml.json.decode<PrRow[]>(text) catch_all (e) {
-                _ => {
-                    self.refuse(root.machine.Trouble.Gh, `gh pr list: ${e}`)
-                },
-            };
+            let rows = self.pr_rows("open", "200");
+            for (let r in self.pr_rows("merged", "30")) {
+                rows.push(r);
+            }
             adoptable_of(rows, self.login())
         }
 
@@ -1184,9 +1192,11 @@ class PrRow {
     headRefName: string,
     url: string,
     author: Login?,
+    /// OPEN, MERGED or CLOSED.
+    state: string?,
 }
 
-/// The open PRs whose branch is `bead/ID`, as the bead they deliver.
+/// The PRs whose branch is `bead/ID`, as the bead they deliver.
 function adoptable_of(rows: PrRow[], me: string) -> Adoptable[] throws never {
     let out: Adoptable[] = [];
     for (let r in rows) {
@@ -1197,6 +1207,7 @@ function adoptable_of(rows: PrRow[], me: string) -> Adoptable[] throws never {
                     id: r.headRefName.slice(5, r.headRefName.length()),
                     url: r.url,
                     own: own,
+                    merged: (r.state ?? "") == "MERGED",
                 },
             );
         }
@@ -1212,7 +1223,15 @@ test "only bead branches are adoptable" {
     assert.equal(a.length(), 2);
     assert.equal(a.at(0)?.id, "bl-1.2");
     assert.equal(a.at(0)?.own, true);
-    assert.equal(a.at(1)?.own, false)
+    assert.equal(a.at(1)?.own, false);
+    assert.equal(a.at(0)?.merged, false)
+}
+
+test "a merged bead PR is adoptable as merged" {
+    let rows = baml.json.decode<PrRow[]>(
+        `[{"headRefName":"bead/bl-dze.2","url":"u1","author":{"login":"me"},"state":"MERGED"}]`,
+    );
+    assert.equal(adoptable_of(rows, "me").at(0)?.merged, true)
 }
 
 /// `STATE/inbox/*.json`, each one Mail, removed once read. `bead-supervisor tell`

@@ -38,6 +38,8 @@ class Adoptable {
     url: string,
     /// Opened by the account the loop acts as.
     own: bool,
+    /// Already merged, not open: the bead was landed outside the loop.
+    merged: bool?,
 }
 
 /// Something you told the loop about one bead: an event for its machine (an answer, a
