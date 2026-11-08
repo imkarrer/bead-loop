@@ -29,6 +29,18 @@ class RoundRunning {
     model: string,
 }
 
+/// An open `bead/ID` PR, whoever opened it.
+class Adoptable {
+    id: string,
+    url: string,
+}
+
+/// Something you told the loop about one bead: an answer, a reopen, an escalation.
+class Mail {
+    id: string,
+    event: root.machine.Event,
+}
+
 interface World {
     /// Beads with the loop's label and no open blocker.
     function tickets(self) -> Ticket[] throws root.machine.Infra;
@@ -59,4 +71,8 @@ interface World {
     function note(self, id: string, text: string) -> void throws root.machine.Infra;
     function close_bead(self, id: string, url: string?) -> void throws root.machine.Infra;
     function write_park_brief(self, id: string, because: string) -> void throws root.machine.Infra;
+    /// Open PRs on `bead/*` branches, which the loop takes into its merge queue.
+    function adoptable(self) -> Adoptable[] throws root.machine.Infra;
+    /// What you told the loop since the last tick. Each is handed over once.
+    function inbox(self) -> Mail[] throws root.machine.Infra;
 }

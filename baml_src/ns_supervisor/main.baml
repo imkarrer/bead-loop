@@ -14,6 +14,7 @@ class LoopConfig {
     capacity: map<string, int>,
     max_inflight: int,
     max_open_prs: int,
+    adopt: bool,
     heartbeat_seconds: int,
 }
 
@@ -34,6 +35,7 @@ function start_of(config_file: string) -> Supervisor {
     s.capacity = c.capacity;
     s.max_inflight = c.max_inflight;
     s.max_open_prs = c.max_open_prs;
+    s.adopt = c.adopt;
     s.group = c.repo;
     s
 }
@@ -135,4 +137,60 @@ function run(config_file: string, ticks: int = 0) -> int {
     } else {
         run_one(config_file, ticks)
     }
+}
+
+/// What `tell` turns into an event: `answer` (with the text), `reopen`, or `escalate`.
+function told(what: string, text: string) -> root.machine.Event? throws never {
+    if (what == "answer") {
+        root.machine.Answered { kind: "answered", text: text }
+    } else {
+        if (what == "reopen") {
+            root.machine.Reopened { kind: "reopened" }
+        } else {
+            if (what == "escalate") {
+                root.machine.Escalated { kind: "escalated" }
+            } else {
+                null
+            }
+        }
+    }
+}
+
+/// `bead-supervisor tell --config_file REPO/.bead-loop.toml --id ID --what answer --text T`:
+/// leaves the event in the repo's inbox, which the running loop takes on its next tick.
+/// A parked bead takes all three; anything else is refused there, with a note.
+function tell(config_file: string, id: string, what: string, text: string = "") -> string {
+    let event = told(what, text);
+    if let e: root.machine.Event = event {
+        let c = load_config(config_file);
+        let dir = `${c.state}/inbox`;
+        let _ = baml.sys.run("mkdir", args = ["-p", dir]);
+        let path = `${dir}/${id}.${baml.sys.pid()}.json`;
+        baml.fs.write(path, baml.json.stringify(root.world.Mail { id: id, event: e }));
+        path
+    } else {
+        `unknown: ${what} (answer, reopen or escalate)`
+    }
+}
+
+test "tell knows its three words and nothing else" {
+    assert.is_type<root.machine.Answered>(told("answer", "x"));
+    assert.is_type<root.machine.Reopened>(told("reopen", ""));
+    assert.is_type<root.machine.Escalated>(told("escalate", ""));
+    assert.equal(told("merge", "") == null, true)
+}
+
+test "a mail written by tell reads back as its event" {
+    let state = "/tmp/bead-loop-tell-test";
+    let _ = baml.sys.run("rm", args = ["-rf", state]);
+    let _ = baml.sys.run("mkdir", args = ["-p", `${state}/inbox`]);
+    let e = told("answer", "use the \"other\" file") ?? root.machine.Reopened { kind: "reopened" };
+    baml.fs.write(
+        `${state}/inbox/t-1.1.json`,
+        baml.json.stringify(root.world.Mail { id: "t-1", event: e }),
+    );
+    let mail = root.world.read_inbox(state);
+    assert.equal(mail.length(), 1);
+    assert.is_type<root.machine.Answered>(mail.at(0)?.event);
+    assert.equal(root.world.read_inbox(state).length(), 0)
 }

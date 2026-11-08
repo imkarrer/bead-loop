@@ -19,6 +19,15 @@ function int_at(t: baml.toml.Table, key: string, fallback: int) -> int throws ne
     }
 }
 
+function bool_at(t: baml.toml.Table, key: string, fallback: bool) -> bool throws never {
+    let v = t.get(key);
+    if let b: bool = v {
+        b
+    } else {
+        fallback
+    }
+}
+
 function pick(
     repo: baml.toml.Table,
     global: baml.toml.Table,
@@ -206,6 +215,7 @@ function config_from_toml(
         capacity: capacity_of(global),
         max_inflight: int_at(repo_table, "max_inflight", int_at(global, "max_inflight", 0)),
         max_open_prs: int_at(global, "max_open_prs", 0),
+        adopt: bool_at(repo_table, "adopt", bool_at(global, "adopt", true)),
         heartbeat_seconds: int_at(global, "heartbeat_seconds", 30),
     }
 }

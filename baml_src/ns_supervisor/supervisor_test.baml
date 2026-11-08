@@ -391,3 +391,47 @@ test "a round in one repo holds the server for the next repo in the same pass" {
         1,
     )
 }
+
+test "an open bead PR the loop did not open is adopted, merged and closed" {
+    let w = one_bead([], [], [green(), merged()]);
+    w.tickets_now = [];
+    w.adoptable_now = [root.world.Adoptable { id: "t-1", url: "pr/t-1" }];
+    let s = Supervisor.new(w, MemoryLog.new(), policy());
+    turns(s, w, 3);
+    assert.is_type<root.machine.Closed>(place_of(s));
+    assert.is_true(w.calls.includes("merge_pr"));
+    assert.equal(starts(w, "start_round Work devbox/coder"), 0)
+}
+
+test "the loop's own PR is not adopted a second time" {
+    let w = one_bead([committed()], [approved()], [[], []]);
+    let s = Supervisor.new(w, MemoryLog.new(), policy());
+    turns(s, w, 3);
+    let url = s.bead("t-1")?.pr ?? "";
+    assert.equal(url, "pr/t-1");
+    w.adoptable_now = [root.world.Adoptable { id: "t-1", url: url }];
+    tick(s);
+    let m = s.bead("t-1")?.place;
+    assert.is_type<root.machine.Merging>(m);
+    if let merging: root.machine.Merging = m {
+        assert.equal(merging.adopted, false);
+    }
+}
+
+test "an answer in the inbox takes a parked bead back to ready" {
+    let w = one_bead([no_commit(), no_commit(), no_commit()], [], []);
+    let s = Supervisor.new(w, MemoryLog.new(), policy());
+    turns(s, w, 6);
+    assert.is_type<root.machine.Parked>(place_of(s));
+    w.inbox_now
+        = [
+            root.world.Mail {
+                id: "t-1",
+                event: root.machine.Answered { kind: "answered", text: "use the other file" },
+            },
+        ];
+    tick(s);
+    // Back to ready, one failure forgiven, and picked again in the same tick.
+    assert.is_type<root.machine.Working>(place_of(s));
+    assert.is_true(w.calls.includes("note use the other file"))
+}

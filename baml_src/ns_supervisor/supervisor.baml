@@ -22,6 +22,8 @@ class Supervisor {
     max_inflight: int,
     /// The dev lane pauses at this many PRs across the group; 0 is no cap.
     max_open_prs: int,
+    /// Open `bead/*` PRs from anyone join the merge queue.
+    adopt: bool,
     /// Ticks a hold lasts before the bead is tried again.
     hold_ticks: int,
     held_for: map<string, int>,
@@ -43,6 +45,7 @@ class Supervisor {
             group_inflight: 0,
             max_inflight: 0,
             max_open_prs: 0,
+            adopt: true,
             hold_ticks: 5,
             held_for: {},
         }
@@ -155,6 +158,8 @@ function perform(
 /// One pass. Reads the world, then decides; everything it does is safe to do again.
 function tick(s: Supervisor) -> void throws never {
     take_finished(s);
+    take_inbox(s);
+    adopt_prs(s);
     watch_prs(s);
     admit_tickets(s);
     expire_holds(s);
@@ -171,6 +176,39 @@ function take_finished(s: Supervisor) -> void throws never {
     for (let d in done) {
         for (let event in d.events) {
             apply(s, d.id, event);
+        }
+    }
+}
+
+/// What you told the loop: an answer, a reopen or an escalation, each on its bead.
+function take_inbox(s: Supervisor) -> void throws never {
+    let mail = s.world.inbox() catch (e) {
+        root.machine.Infra => {
+            let none: root.world.Mail[] = [];
+            none
+        },
+    };
+    for (let m in mail) {
+        apply(s, m.id, m.event);
+    }
+}
+
+/// An open `bead/ID` PR this loop is not already carrying joins the merge queue. The
+/// step decides: only a ready bead with no PR of its own takes it.
+function adopt_prs(s: Supervisor) -> void throws never {
+    if (!s.adopt) {
+        return;
+    }
+    let open = s.world.adoptable() catch (e) {
+        root.machine.Infra => {
+            let none: root.world.Adoptable[] = [];
+            none
+        },
+    };
+    for (let a in open) {
+        let known = s.bead(a.id) ?? root.machine.Bead.new(a.id);
+        if (known.pr == null && known.place is root.machine.Ready) {
+            apply(s, a.id, root.machine.PrAdopted { kind: "pr_adopted", url: a.url });
         }
     }
 }

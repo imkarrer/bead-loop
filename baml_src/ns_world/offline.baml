@@ -277,6 +277,12 @@ class OfflineWorld {
             };
             self.note(id, `parked: ${because}`);
         }
+        function adoptable(self) -> Adoptable[] throws never {
+            []
+        }
+        function inbox(self) -> Mail[] throws never {
+            read_inbox(self.state)
+        }
     }
 
     function launch(self, id: string, kind: RoundKind, model: string, note: string) -> void {

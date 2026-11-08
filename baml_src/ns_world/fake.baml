@@ -19,6 +19,8 @@ class FakeWorld {
     notes_given: string[],
     /// Calls that throw, by name, each used up once.
     failing: string[],
+    adoptable_now: Adoptable[],
+    inbox_now: Mail[],
 
     function new(tickets: Ticket[], scripts: Script[]) -> FakeWorld throws never {
         FakeWorld {
@@ -29,6 +31,8 @@ class FakeWorld {
             calls: [],
             notes_given: [],
             failing: [],
+            adoptable_now: [],
+            inbox_now: [],
         }
     }
 
@@ -147,6 +151,15 @@ class FakeWorld {
             because: string,
         ) -> void throws root.machine.Infra {
             self.record("write_park_brief");
+        }
+        function adoptable(self) -> Adoptable[] throws root.machine.Infra {
+            self.record("adoptable");
+            self.adoptable_now
+        }
+        function inbox(self) -> Mail[] throws never {
+            let mail = self.inbox_now;
+            self.inbox_now = [];
+            mail
         }
     }
 }

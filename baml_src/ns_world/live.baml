@@ -394,6 +394,25 @@ class LiveWorld {
             };
             self.note(id, `parked: ${because}`);
         }
+
+        function adoptable(self) -> Adoptable[] throws root.machine.Infra {
+            let text = self.tool(
+                root.machine.Trouble.Gh,
+                "gh",
+                ["pr", "list", "--state", "open", "--limit", "200", "--json", "headRefName,url"],
+                self.repo,
+            );
+            let rows = baml.json.decode<PrRow[]>(text) catch_all (e) {
+                _ => {
+                    self.refuse(root.machine.Trouble.Gh, `gh pr list: ${e}`)
+                },
+            };
+            adoptable_of(rows)
+        }
+
+        function inbox(self) -> Mail[] throws never {
+            read_inbox(self.state)
+        }
     }
 
     function launch(self, id: string, spec: root.rounds.RoundSpec) -> void {
@@ -715,4 +734,60 @@ test "a green PR's clock starts when it is first seen green" {
     let next = next_watch(prev, "green", 1000, view, []);
     assert.equal(next.green_since, 1000);
     assert.equal(age(next.green_since, true, 2800), 1800)
+}
+
+class PrRow {
+    headRefName: string,
+    url: string,
+}
+
+/// The open PRs whose branch is `bead/ID`, as the bead they deliver.
+function adoptable_of(rows: PrRow[]) -> Adoptable[] throws never {
+    let out: Adoptable[] = [];
+    for (let r in rows) {
+        if (r.headRefName.starts_with("bead/")) {
+            out.push(Adoptable { id: r.headRefName.slice(5, r.headRefName.length()), url: r.url });
+        }
+    }
+    out
+}
+
+test "only bead branches are adoptable" {
+    let rows = baml.json.decode<PrRow[]>(
+        `[{"headRefName":"bead/bl-1.2","url":"u1"},{"headRefName":"claude/x","url":"u2"}]`,
+    );
+    let a = adoptable_of(rows);
+    assert.equal(a.length(), 1);
+    assert.equal(a.at(0)?.id, "bl-1.2");
+    assert.equal(a.at(0)?.url, "u1")
+}
+
+/// `STATE/inbox/*.json`, each one Mail, removed once read. `bead-supervisor tell`
+/// writes them; a file that does not parse is left for you to look at.
+function read_inbox(state: string) -> Mail[] throws never {
+    let dir = `${state}/inbox`;
+    let out: Mail[] = [];
+    let listing = baml.sys.run("ls", args = [dir], capture_output = true) catch_all (e) {
+        _ => {
+            return out;
+        },
+    };
+    for (let f in listing.stdout.to_string().split("\n")) {
+        if (f.ends_with(".json")) {
+            let path = `${dir}/${f}`;
+            let text = baml.fs.read(path) catch_all (e) {
+                _ => "",
+            };
+            let mail = baml.json.decode<Mail>(text) catch_all (e) {
+                _ => null,
+            };
+            if let m: Mail = mail {
+                out.push(m);
+                let _ = baml.fs.remove(path) catch_all (e) {
+                    _ => null,
+                };
+            }
+        }
+    }
+    out
 }
