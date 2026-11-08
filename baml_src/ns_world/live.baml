@@ -694,7 +694,9 @@ test "without bwrap the round is the binary itself" {
 
 test "a green PR's clock starts when it is first seen green" {
     let prev = Watch { green_since: 0, quiet_since: 0, red_since: 0, rerun_head: "" };
-    let view = view_of(`{"url":"u","state":"OPEN","mergeStateStatus":"CLEAN","statusCheckRollup":[{"conclusion":"SUCCESS"}]}`);
+    let view = view_of(
+        `{"url":"u","state":"OPEN","mergeStateStatus":"CLEAN","statusCheckRollup":[{"conclusion":"SUCCESS"}]}`,
+    );
     let next = next_watch(prev, "green", 1000, view, []);
     assert.equal(next.green_since, 1000);
     assert.equal(age(next.green_since, true, 2800), 1800)

@@ -1,56 +1,59 @@
 #!/usr/bin/env bash
-# One CI step, with the cargo cache where the agent keeps it between builds.
+# One CI step. baml-cli is not in the flox env; scripts/ensure-baml.sh downloads the
+# pinned static binary into the agent's cache (or ~/.cache) and prints its directory.
 #
-#   scripts/ci.sh rust      fmt --check, clippy -D warnings, build, unit tests
+#   scripts/ci.sh baml      fmt --check, then the BAML tests (the state machine)
 #   scripts/ci.sh scripts   syntax, shellcheck, the skills/agents lint
-#   scripts/ci.sh suite     test/run.sh after cargo build (a no-op after the rust step)
+#   scripts/ci.sh suite     pack the binary and check the subcommands the unit execs
 #   scripts/ci.sh package   flox build bead-loop, and test/package.sh on what it built
-#   scripts/ci.sh release   main only: the release binary as the GitHub release main-<sha7>
+#   scripts/ci.sh release   main only: that binary as the GitHub release main-<sha7>
 #
-# The cache: the agent runs `git clean -ffxdq` in the checkout before every job, which
-# would take target/ with it, so the registry and the target directory live beside the
-# checkouts — <build-path>/.cache/bead-loop on a Buildkite agent (the one directory
-# every layout of the arcade-box agent persists), or CI_CACHE_DIR anywhere; with neither, a
-# cold build. Cargo's own fingerprints then do the rest: a crate whose inputs did not
-# change is not rebuilt, and a push that touches only docs costs a no-op build.
+# The cache: the agent runs `git clean -ffxdq` in the checkout before every job, so
+# the downloaded cli lives beside the checkouts — <build-path>/.cache/bead-loop on a
+# Buildkite agent, or CI_CACHE_DIR anywhere; with neither, a cold download.
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")/.." && pwd)
 cd "$HERE"
 
 cache=${CI_CACHE_DIR:-${BUILDKITE_BUILD_PATH:+$BUILDKITE_BUILD_PATH/.cache/bead-loop}}
 if [ -n "$cache" ]; then
-  mkdir -p "$cache/cargo" "$cache/target"
-  export CARGO_HOME=$cache/cargo CARGO_TARGET_DIR=$cache/target
-  echo "cargo cache: $cache"
+  mkdir -p "$cache"
+  echo "baml cache: $cache"
 fi
-export CARGO_TERM_COLOR=never
-target=${CARGO_TARGET_DIR:-$HERE/target}
+
+baml_env() {
+  baml_bin=$(scripts/ensure-baml.sh)
+  export PATH="$baml_bin:$PATH"
+  export DO_NOT_TRACK=1 BAML_CLI_ALLOW_DIRECT=1
+  export BOUNDARY_API_KEY=${BOUNDARY_API_KEY:-local}
+  export DEVBOX_URL=${DEVBOX_URL:-http://127.0.0.1:8100/v1}
+  export ACBOX_URL=${ACBOX_URL:-http://192.168.1.51:8100/v1}
+}
 
 case ${1:-} in
-  rust)
-    echo "--- :rust: fmt"; cargo fmt --check
-    echo "--- :rust: clippy"; cargo clippy --quiet -- -D warnings
-    echo "--- :rust: build"; cargo build --quiet
-    echo "--- :rust: unit tests"; cargo test --quiet
+  baml)
+    baml_env
+    echo "--- :hammer: fmt"; baml-cli --agent-skill-check off fmt --check
+    echo "--- :test_tube: tests"; baml-cli --agent-skill-check off test
     ;;
   scripts)
     echo "--- :bash: syntax"
-    bash -n install.sh scripts/*.sh test/run.sh test/lint-skills.sh test/package.sh test/bin/*
+    bash -n install.sh scripts/*.sh test/lint-skills.sh test/package.sh
     node --check bin/bead-loop-ui test/ui-onclicks.js
     echo "--- :bash: shellcheck"
-    shellcheck -S warning install.sh scripts/*.sh test/run.sh test/lint-skills.sh test/package.sh test/bin/*
+    shellcheck -S warning install.sh scripts/*.sh test/lint-skills.sh test/package.sh
     echo "--- :memo: skills and agents"
     test/lint-skills.sh
     ;;
   suite)
-    # Always build: a no-op after this build's own rust step, and the one thing that keeps
-    # the suite on this commit's binary when the job follows another build's rust step on
-    # the agent or is retried on its own (a retry does not rerun the rust step).
-    echo "--- :rust: build"; cargo build --quiet
-    echo "--- :repeat: the state machine, after cargo build (a no-op after the rust step)"
-    # SUP for the suite; BEAD_SUPERVISOR for the UI server the suite starts (the binary
-    # is in the cache dir here, not under the checkout's target/).
-    SUP=$target/debug/bead-supervisor BEAD_SUPERVISOR=$target/debug/bead-supervisor test/run.sh
+    # The tests ran in the baml step. This is the binary the unit will exec, which the
+    # tests never start: run, round and page, and --help, because deploy checks that.
+    echo "--- :package: pack"
+    scripts/pack.sh "$HERE/target/bead-supervisor"
+    "$HERE/target/bead-supervisor" --help >/dev/null
+    "$HERE/target/bead-supervisor" run --help >/dev/null
+    "$HERE/target/bead-supervisor" round --help >/dev/null
+    "$HERE/target/bead-supervisor" page --help >/dev/null
     ;;
   package)
     # What `flox install imkarrer/bead-loop` would install: the manifest's
@@ -58,21 +61,19 @@ case ${1:-} in
     echo "--- :package: flox build bead-loop"; test/package.sh
     ;;
   release)
-    # main only, after every check passed: the tested commit's release binary, published
+    # main only, after every check passed: the tested commit's packed binary, published
     # as the GitHub release `main-<sha7>` (the tag at that commit, the binary its one
-    # asset). scripts/deploy.sh on the loop's box downloads exactly the release named by
-    # origin/main — so what runs there is the build the pipeline proved, byte for byte,
-    # and the box needs no compiler. The binary links the flox env's glibc by store
-    # path; the box runs it inside the same pinned env (manifest.lock), so the path is
-    # there. A rerun replaces the release; the last ten stay, older ones go.
+    # asset). The asset name stays `bead-supervisor`: the deploy script already running
+    # on the box asks for that name, and only the next run uses the script from the
+    # commit it just installed. A rerun replaces the release; the last ten stay.
     sha=${BUILDKITE_COMMIT:-$(git rev-parse HEAD)}; tag=main-${sha:0:7}
     # shellcheck source=scripts/ci-github.sh
     . "$HERE/scripts/ci-github.sh"   # token, repo
     [ -n "$token" ] || { echo "release: no GitHub token on the agent" >&2; exit 1; }
     [ -n "$repo" ] || repo=$(git remote get-url origin | sed -nE 's|.*github\.com[:/]([^/]+/[^/]+)$|\1|p' | sed 's/\.git$//')
     export GH_TOKEN=$token
-    echo "--- :rust: release build"; cargo build --release --quiet
-    bin=$target/release/bead-supervisor
+    echo "--- :package: pack"; scripts/pack.sh "$HERE/target/bead-supervisor"
+    bin=$HERE/target/bead-supervisor
     "$bin" --help >/dev/null
     echo "--- :github: release $tag on $repo"
     if gh release view "$tag" -R "$repo" >/dev/null 2>&1; then
@@ -80,12 +81,12 @@ case ${1:-} in
     fi
     gh release create "$tag" -R "$repo" --target "$sha" --latest=false \
       --title "$(git log -1 --format=%s "$sha" | cut -c1-100)" \
-      --notes "bead-supervisor built from $sha by the pipeline (fmt, clippy, unit tests, scripts, the state-machine suite: green). scripts/deploy.sh on the loop's box installs this asset." \
+      --notes "bead-supervisor packed from $sha by the pipeline (baml fmt, baml test, scripts, the packed binary: green). scripts/deploy.sh on the loop's box installs this asset." \
       "$bin#bead-supervisor"
     echo "published $tag: $(gh release view "$tag" -R "$repo" --json url --jq .url)"
     echo "--- :wastebasket: prune"
     gh release list -R "$repo" --limit 100 --json tagName,createdAt --jq '[.[] | select(.tagName | startswith("main-"))] | sort_by(.createdAt) | reverse | .[10:] | .[].tagName' \
       | while read -r old; do [ -n "$old" ] && gh release delete "$old" -R "$repo" -y --cleanup-tag && echo "pruned $old"; done
     ;;
-  *) echo "usage: scripts/ci.sh rust|scripts|suite|release" >&2; exit 2 ;;
+  *) echo "usage: scripts/ci.sh baml|scripts|suite|package|release" >&2; exit 2 ;;
 esac

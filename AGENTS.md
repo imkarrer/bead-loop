@@ -1,16 +1,16 @@
 # bead-loop
 
-The supervisor is one Rust binary, `bead-supervisor` (`src/`), plus the page
-(`bin/bead-loop-ui`, `ui/`), the opencode agents the loop runs (`agents/*.md`), the skills a
-planner uses to write beads (`skills/`), and `install.sh`. What it does is the
-[README](README.md); one bead from start to finish is
+The supervisor is one packed BAML binary, `bead-supervisor` (`baml_src/`), plus the page
+(`bin/bead-loop-ui`, `ui/`), the skills a planner uses to write beads (`skills/`), and
+`install.sh`. What it does is the [README](README.md); one bead from start to finish is
 [docs/state-machine.md](docs/state-machine.md).
 
 ## The toolchain
 
-Everything comes from the flox env in this checkout: `flox activate` gives cargo, `bd`,
-`gh`, `opencode`, node and shellcheck. To work on the repo with the engineering skills
-loaded, run the dev stack inside it: `flox activate -- nix run .#dev`.
+`flox activate` gives `bd`, `gh`, `opencode`, node and shellcheck. `baml-cli` is not in
+that env: `scripts/ensure-baml.sh` downloads the pinned static binary and prints its
+directory. To work on the repo with the engineering skills loaded, run the dev stack
+inside it: `flox activate -- nix run .#dev`.
 
 ## The gate
 
@@ -18,23 +18,21 @@ The gate is `gate` in [.bead-loop.toml](.bead-loop.toml), and CI runs the same c
 (`scripts/ci.sh`). Before you commit:
 
 ```bash
-cargo fmt                 # the fixer: the gate runs cargo fmt --check
+export PATH="$(scripts/ensure-baml.sh):$PATH"
+baml-cli --agent-skill-check off fmt
 bash -c "$(sed -n 's/^gate = "\(.*\)"$/\1/p' .bead-loop.toml)"   # the whole gate
 ```
 
 Run the parts on their own while iterating:
-- `cargo clippy -- -D warnings` and `cargo test` for the Rust;
+- `baml-cli --agent-skill-check off test` for the loop;
 - `test/lint-skills.sh` for `skills/` and `agents/` (frontmatter, under 700 words);
-- `test/run.sh [case-name...]` for the integration suite (it needs `cargo build` first).
+- `scripts/pack.sh target/bead-supervisor` for the binary the unit execs.
 
 ## Where a test goes
 
-- **A unit test in `src/` (`cargo test`):** the shape of a prompt, a note, a queue
-  order or the status JSON.
-- **A case in `test/run.sh`:** a transition the state machine makes through its tools
-  (a round, a queue, a PR, a session) and what it leaves on the bead and on disk. It
-  runs against the stubs in `test/bin`. Every row of the outcome table in
-  `docs/state-machine.md` has a case.
+- **A test in `baml_src/`:** the shape of a prompt, a note, a queue order, a transition
+  the state machine makes. Every row of the outcome table in `docs/state-machine.md`
+  has one.
 
 Every change ships with its test.
 

@@ -8,7 +8,9 @@ class ResearchResult {
     shape: string @description("the change, step by step, naming functions and types as they are spelled"),
     check: string @description("the command that proves it, exactly as the worker should run it"),
     pitfalls: string @description("what will go wrong for a worker that follows the bead's text alone"),
-    line: string @description("when blocked: BLOCKED: the false claim, with file:line of what is actually there"),
+    line: string @description(
+        "when blocked: BLOCKED: the false claim, with file:line of what is actually there",
+    ),
 }
 
 const RESEARCH_CHARTER: string = `
@@ -42,10 +44,7 @@ function brief_text(r: ResearchResult) -> string throws never {
     `Files:\n${r.files}\n\nShape:\n${r.shape}\n\nCheck:\n${r.check}\n\nPitfalls:\n${r.pitfalls}`
 }
 
-function research_outcome(
-    r: ResearchResult,
-    second: bool,
-) -> root.machine.Event throws never {
+function research_outcome(r: ResearchResult, second: bool) -> root.machine.Event throws never {
     if (r.outcome == "blocked") {
         root.machine.ResearchBlocked {
             kind: "research_blocked",
@@ -53,18 +52,11 @@ function research_outcome(
             second_opinion: second,
         }
     } else {
-        root.machine.BriefWritten {
-            kind: "brief_written",
-            overruled: second,
-            text: brief_text(r),
-        }
+        root.machine.BriefWritten { kind: "brief_written", overruled: second, text: brief_text(r) }
     }
 }
 
-function result_of(
-    outcome: "brief" | "blocked",
-    line: string = "",
-) -> ResearchResult throws never {
+function result_of(outcome: "brief" | "blocked", line: string = "") -> ResearchResult throws never {
     ResearchResult {
         outcome: outcome,
         files: "f",

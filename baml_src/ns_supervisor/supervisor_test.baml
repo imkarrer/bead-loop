@@ -151,11 +151,7 @@ test "a held bead is tried again and lands" {
 }
 
 test "a no-commit after a reject keeps the branch the worker already landed" {
-    let w = one_bead(
-        [committed(), no_commit(), committed()],
-        [rejected(), approved()],
-        [green(), merged()],
-    );
+    let w = one_bead([committed(), no_commit(), committed()], [rejected(), approved()], [green(), merged()]);
     let s = Supervisor.new(w, MemoryLog.new(), policy());
     turns(s, w, 12);
     assert.is_type<root.machine.Closed>(place_of(s));
@@ -228,13 +224,7 @@ test "one lane runs one round, fewest failures first" {
 }
 
 function briefed() -> root.machine.Event[] throws never {
-    [
-        root.machine.BriefWritten {
-            kind: "brief_written",
-            overruled: false,
-            text: "Files:\ncalc.js",
-        },
-    ]
+    [root.machine.BriefWritten { kind: "brief_written", overruled: false, text: "Files:\ncalc.js" }]
 }
 
 test "research runs before work when the policy names a researcher" {

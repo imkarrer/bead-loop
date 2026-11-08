@@ -89,7 +89,7 @@
     },
     "services": {
       "loop": {
-        "command": "exec bead-supervisor run"
+        "command": "exec bead-supervisor run --config_file \"${BEAD_LOOP_CONFIG:-$HOME/.config/bead-loop}/config.toml\""
       },
       "opencode-web": {
         "command": "OPENCODE_DISABLE_CLAUDE_CODE_SKILLS=1 exec opencode serve --port 4096 --hostname 127.0.0.1"
@@ -100,7 +100,7 @@
     },
     "build": {
       "bead-loop": {
-        "command": "  if [ \"$(uname -s)\" = Darwin ]; then export MACOSX_DEPLOYMENT_TARGET=14.0 CARGO_TARGET_AARCH64_APPLE_DARWIN_LINKER=/usr/bin/cc; fi\n  cargo build --release --locked\n  mkdir -p \"$out/bin\"\n  cp \"${CARGO_TARGET_DIR:-target}/release/bead-supervisor\" bin/bead-loop-ui \"$out/bin/\"\n  cp install.sh \"$out/bin/bead-loop-install\"\n  cp -R agents ui skills launchd \"$out/\"\n",
+        "command": "  mkdir -p \"$out/bin\"\n  scripts/pack.sh \"$out/bin/bead-supervisor\"\n  cp bin/bead-loop-ui \"$out/bin/\"\n  cp install.sh \"$out/bin/bead-loop-install\"\n  cp -R agents ui skills launchd \"$out/\"\n",
         "runtime-packages": [
           "bd",
           "git",
@@ -112,7 +112,7 @@
           "bash"
         ],
         "version": {
-          "command": "sed -n 's/^version = \"\\(.*\\)\"$/\\1/p' Cargo.toml | head -n1"
+          "command": "echo 0.1.0"
         },
         "description": "Work beads with local and metered models in any repo: the supervisor, its page and its agents"
       }

@@ -95,12 +95,7 @@ function perform(
         },
         let x: root.machine.SecondOpinion => {
             let started: root.machine.Event[] = [];
-            let _ = s.world.start_round(
-                id,
-                root.world.RoundKind.Research,
-                s.policy.research,
-                x.first_reply,
-            ) catch (e) {
+            let _ = s.world.start_round(id, root.world.RoundKind.Research, s.policy.research, x.first_reply) catch (e) {
                 root.machine.Infra => {
                     started = [e];
                 },

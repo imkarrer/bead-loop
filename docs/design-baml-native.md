@@ -264,9 +264,10 @@ same supervisor as low-priority work, and `Limit` already keeps them out of prod
 
 ## What goes, what stays
 
-**Goes:** `src/` (13,792 lines), `test/run.sh` and `test/bin`, opencode, aider, `agents/`,
-`bin/bead-loop-ui`, most of `systemd/`, the `harness` and `provider` config, and all state
-under `$RS` except what carries over as events.
+**Gone on this branch:** `src/`, `test/run.sh` and `test/bin`. CI packs the BAML binary
+and tests `baml_src/`. Still here, and still in front of a real switch: opencode, aider,
+`agents/`, `bin/bead-loop-ui` (it still shells out to the old `status` / `stats` /
+`doctor` commands), most of `systemd/` beyond the supervisor unit.
 
 **Stays:** `bd` and the beads, `git`, `gh`, the Buildkite pipeline, `skills/`, `CONTEXT.md`'s
 vocabulary, `ui/index.html` served from `baml.http.Server`, and **`state-machine.md` as the
@@ -342,14 +343,19 @@ A walking skeleton, each step runnable.
    built on this branch: `bead-loop page` serves `/` and `/api/status` from a fold of
    the log; `bead-loop bench` runs a case on `OfflineWorld` (no bd, no gh); research
    runs before work when the policy names a researcher; a park writes `park.md`;
-   `compact_outputs` stubs the oldest tool results. Switch-over is not started.
-   The worker compacts its own journal between calls. Still in front of the
-   switch: one real bead closed on this binary, the operating page, and a unit
-   with `KillMode=process`.
+   `compact_outputs` stubs the oldest tool results.
+   The worker compacts its own journal between calls. CI on this branch is the BAML
+   tests and `baml pack`; `src/` is gone. The unit runs
+   `bead-supervisor run --config_file ~/.config/bead-loop/config.toml` with
+   `KillMode=process`, and that file's `repos` list is every checkout. Still in front
+   of a real switch: one real bead closed on this binary, the operating page, lanes
+   that overlap the GPU and the Z840 (the loader still forces `lanes: 1`), and the
+   pre-check.
 8. **The evals, then GEPA.**
 
-Work on a long-lived branch. A merge to `main` deploys to the box, so deleting `src/` on
-`main` stops the current loop. Leave it there until step 6.
+Work on a long-lived branch. A merge to `main` deploys to the box: the release step
+publishes the packed binary as `bead-supervisor`, and the timer installs it and restarts
+the unit. That merge is the switch. This branch is not `main`.
 
 ## The main risk
 

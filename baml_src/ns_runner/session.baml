@@ -93,21 +93,21 @@ function run_one_tool(
         let t: ai.tools.Tool => {
             let output = t.call(call.args) catch_all (e) {
                 _ => {
-                    j.append_all([
-                        ai.events.ToolFailed { id: call.id, message: e.to_string() },
-                    ]);
+                    j.append_all([ai.events.ToolFailed { id: call.id, message: e.to_string() }]);
                     return;
                 },
             };
             j.append_all([ai.events.ToolCompleted.new(call.id, output)]);
         },
         null => {
-            j.append_all([
-                ai.events.ToolFailed {
-                    id: call.id,
-                    message: `tool is not in the active toolbox: ${call.name}`,
-                },
-            ]);
+            j.append_all(
+                [
+                    ai.events.ToolFailed {
+                        id: call.id,
+                        message: `tool is not in the active toolbox: ${call.name}`,
+                    },
+                ],
+            );
         },
     }
 }

@@ -3,17 +3,17 @@ Description=bead-loop: the resident loop — work labelled beads, merge green PR
 After=network-online.target
 
 [Service]
-# The loop stays up: lanes block on the bell when their queues are empty, the merge
-# watcher polls GitHub while a PR is in flight. `systemctl stop` aborts the model
-# sessions the lanes are on (the TERM handler) and the next start recovers the rounds
-# it cut short, with no failure charged.
+# The loop stays up. A round is a detached child, and detached is a new session, not
+# a new cgroup: KillMode=process is what lets that child survive `systemctl stop`.
+# The next start recovers a round that has no process left.
 Type=simple
-# flox activate resolves bd, gh, opencode, git, curl from
-# @HERE@/.flox/env/manifest.toml, the same way on every box; only flox's own
-# path (a NixOS system fact, not a login profile) is hardcoded. The binary is the one
-# install.sh put in ~/.local/bin (the deploy's release download): a deploy clone has
-# no target/, so the flox hook's PATH does not find it by name.
-ExecStart=/run/current-system/sw/bin/flox activate -d @HERE@ -- %h/.local/bin/bead-supervisor run
+KillMode=process
+# flox activate resolves bd, gh, git, curl from @HERE@/.flox/env/manifest.toml, the
+# same way on every box; only flox's own path (a NixOS system fact, not a login
+# profile) is hardcoded. The binary is the one install.sh put in ~/.local/bin (the
+# deploy's release download). `--config_file` is the global file: `run` walks every
+# repo it lists.
+ExecStart=/run/current-system/sw/bin/flox activate -d @HERE@ -- %h/.local/bin/bead-supervisor run --config_file %h/.config/bead-loop/config.toml
 Restart=on-failure
 RestartSec=10
 

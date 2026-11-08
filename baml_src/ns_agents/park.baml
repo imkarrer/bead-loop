@@ -4,9 +4,7 @@
 
 class ParkBrief {
     happened: string @description("one line per round: what it tried, what stopped it"),
-    why: string @description(
-        "the cause: the bead is wrong, underspecified, the environment, or the model",
-    ),
+    why: string @description("the cause: the bead is wrong, underspecified, the environment, or the model"),
     question: string @description("one to three questions, each answerable in a sentence"),
 }
 

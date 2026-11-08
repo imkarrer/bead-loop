@@ -110,7 +110,16 @@ function without_skipped(view: PrView) -> PrView throws never {
         !is_skipped_build(c)
     });
     let rollup = if (all.length() > 0 && kept.length() == 0) {
-        [RollupItem { conclusion: null, state: null, status: "IN_PROGRESS", name: null, context: null, description: null }]
+        [
+            RollupItem {
+                conclusion: null,
+                state: null,
+                status: "IN_PROGRESS",
+                name: null,
+                context: null,
+                description: null,
+            },
+        ]
     } else {
         kept
     };
@@ -167,12 +176,20 @@ function watch_pr(view: PrView, clock: PrClock) -> root.machine.Event[] throws n
     let seen = without_skipped(view);
     let base = pr_events(seen);
     let first = base.at(0);
-    if (first is root.machine.PrMerged || first is root.machine.PrClosed || first is root.machine.Conflicting) {
+    if (
+        first is root.machine.PrMerged
+            || first is root.machine.PrClosed
+            || first is root.machine.Conflicting
+    ) {
         return base;
     }
     if (first is root.machine.ChecksGreen) {
         if (clock.merge == "pipeline" && clock.green_for >= PIPELINE_TIMEOUT) {
-            return [waited(`${seen.url} has been green for ${clock.green_for / 60} min and the pipeline has not merged it`)];
+            return [
+                waited(
+                    `${seen.url} has been green for ${clock.green_for / 60} min and the pipeline has not merged it`,
+                ),
+            ];
         }
         return base;
     }
@@ -183,7 +200,11 @@ function watch_pr(view: PrView, clock: PrClock) -> root.machine.Event[] throws n
         if (clock.required_known && clock.required_failing.length() == 0) {
             let quiet: root.machine.Event[] = [root.machine.RedNotRequired { kind: "red_not_required" }];
             if (clock.merge != "external" && clock.red_for >= CI_TIMEOUT) {
-                quiet.push(waited(`${seen.url} has been red for ${clock.red_for / 3600} h only in checks the base does not require`));
+                quiet.push(
+                    waited(
+                        `${seen.url} has been red for ${clock.red_for / 3600} h only in checks the base does not require`,
+                    ),
+                );
             }
             return quiet;
         }

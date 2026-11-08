@@ -227,14 +227,11 @@ class OfflineWorld {
             self.merged.push(id);
         }
 
-        function update_branch(self, id: string) -> void throws root.machine.Infra {
-        }
+        function update_branch(self, id: string) -> void throws root.machine.Infra {}
 
-        function relabel(self, id: string) -> void throws root.machine.Infra {
-        }
+        function relabel(self, id: string) -> void throws root.machine.Infra {}
 
-        function delete_remote_branch(self, id: string) -> void throws never {
-        }
+        function delete_remote_branch(self, id: string) -> void throws never {}
 
         function note(self, id: string, text: string) -> void throws root.machine.Infra {
             self.write_note(id, text) catch_all (e) {
@@ -337,11 +334,7 @@ function bench(config_file: string, case_file: string, ticks: int = 40) -> strin
     let cfg = baml.json.decode<root.supervisor.LoopConfig>(baml.fs.read(config_file));
     let c = case_of(baml.fs.read(case_file));
     let world = OfflineWorld.new(c, cfg.state, cfg.agent_bin);
-    let s = root.supervisor.recover(
-        world,
-        root.supervisor.FileLog { state: cfg.state },
-        cfg.policy,
-    );
+    let s = root.supervisor.recover(world, root.supervisor.FileLog { state: cfg.state }, cfg.policy);
     s.lanes = 1;
     let n = 0;
     while (n < ticks) {

@@ -15,7 +15,7 @@ and neither waits for the other — or for a clock.
 
 ```mermaid
 flowchart LR
-  subgraph run ["bead-supervisor run: one resident process, Rust; three loops on one bell"]
+  subgraph run ["bead-supervisor run: one resident process; three loops on one bell"]
     direction LR
 
     subgraph devlane ["dev lane: provider A, the worker model"]
@@ -80,7 +80,7 @@ flowchart LR
 
 | Role | What | Configured by |
 | --- | --- | --- |
-| Supervisor | `bead-supervisor`, one Rust binary (`src/`), resident | the global config and each repo's `.bead-loop.toml`; kept up by `bead-supervisor.timer` |
+| Supervisor | `bead-supervisor`, one packed BAML binary (`baml_src/`), resident | the global config and each repo's `.bead-loop.toml`; kept up by `bead-supervisor.timer` |
 | Implementor | opencode agent `bead-worker` — or Claude Code, aider, a `command` | `[[stages]].worker`, one provider per stage; `research_model` for the optional research round |
 | Reviewer | opencode agent `bead-reviewer`, read-only (or another harness, per seat) | `[[stages]].reviewer`, one or more seats, with `approvals`; `precheck_model` for the pre-check |
 | Pre-checker | opencode agent `bead-prechecker`, read-only | `precheck_model` — a small resident model beside the workers; ~20 s a call, evicts nothing |
@@ -169,16 +169,16 @@ warm env adds under 100ms.
 
 ## Install
 
-`./install.sh` builds the binary (`cargo build --release`, through `flox activate` when
-cargo is not on PATH), puts it in `~/.local/bin`, links `skills/` and `agents/` into
-opencode, installs the user units, seeds `~/.config/bead-loop/config.toml`, and enables
+`./install.sh` packs the binary (`scripts/pack.sh`), puts it in `~/.local/bin`, links
+`skills/` and `agents/` into opencode, installs the user units, seeds
+`~/.config/bead-loop/config.toml`, and enables
 + starts the loop (`opencode-web.service`, `bead-loop-ui.service`, `bead-supervisor.timer`
 — the timer is the keeper, see systemd/bead-supervisor.timer) so it is running when the
 script returns and comes back on its own after a crash or a reboot. Re-running it (every
 deploy) never interrupts a session in flight: `enable --now` only starts a unit that
 isn't already up. At run time it needs `bd`, `git`, `gh`, `opencode` and `curl`; the UI
-needs `node`. `flox activate` in this checkout provides all of them plus the Rust
-toolchain.
+needs `node`. `flox activate` in this checkout provides them. `baml-cli` is downloaded
+by `scripts/ensure-baml.sh`.
 
 The loop surviving a reboot with nobody logged in also needs **linger** for this user —
 `install.sh` tries `loginctl enable-linger` itself and tells you if it couldn't (it needs

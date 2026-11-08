@@ -19,7 +19,12 @@ function int_at(t: baml.toml.Table, key: string, fallback: int) -> int throws ne
     }
 }
 
-function pick(repo: baml.toml.Table, global: baml.toml.Table, key: string, fallback: string) -> string throws never {
+function pick(
+    repo: baml.toml.Table,
+    global: baml.toml.Table,
+    key: string,
+    fallback: string,
+) -> string throws never {
     let here = text_at(repo, key);
     if (here.length() > 0) {
         here
@@ -103,11 +108,12 @@ function parent_dir(path: string) -> string throws never {
     while (i < keep) {
         let p = parts.at(i) ?? "";
         if (p.length() > 0) {
-            out = if (out.length() == 0) {
-                p
-            } else {
-                `${out}/${p}`
-            };
+            out
+                = if (out.length() == 0) {
+                    p
+                } else {
+                    `${out}/${p}`
+                };
         }
         i = i + 1;
     }
@@ -116,6 +122,36 @@ function parent_dir(path: string) -> string throws never {
     } else {
         out
     }
+}
+
+/// `~/src/a` with home `/home/me` is `/home/me/src/a`. Anything else is left as written.
+function expand_home(path: string, home: string) -> string throws never {
+    if (path.starts_with("~/") && home.length() > 0) {
+        let rest = path.split("~/").at(1) ?? path;
+        `${home}/${rest}`
+    } else {
+        path
+    }
+}
+
+/// `repos` in the global file, `~` expanded. Empty when the file is a repo toml.
+function repos_in(global_text: string, home: string) -> string[] throws never {
+    let global = baml.toml.Table.parse(global_text) catch_all (e) {
+        _ => {
+            let none: string[] = [];
+            return none;
+        },
+    };
+    let v = global.get("repos");
+    let out: string[] = [];
+    if let rows: baml.toml.Item[] = v {
+        for (let item in rows) {
+            if let s: string = item {
+                out.push(expand_home(s, home));
+            }
+        }
+    }
+    out
 }
 
 function repo_name(path: string) -> string throws never {
@@ -219,22 +255,30 @@ function load_config(path: string) -> LoopConfig {
 }
 
 const GLOBAL_SAMPLE: string = `
-on_exhaust = "park"
-research = "first"
-research_model = "acbox/coder"
+    on_exhaust = "park"
+    research = "first"
+    research_model = "acbox/coder"
 
-[[stages]]
-name = "local"
-worker = "devbox/coder"
-reviewer = "acbox/reviewer"
-attempts = 2
+    [[stages]]
+    name = "local"
+    worker = "devbox/coder"
+    reviewer = "acbox/reviewer"
+    attempts = 2
 
-[[stages]]
-name = "frontier"
-worker = "claude/sonnet"
-reviewer = "claude/sonnet"
-attempts = 1
+    [[stages]]
+    name = "frontier"
+    worker = "claude/sonnet"
+    reviewer = "claude/sonnet"
+    attempts = 1
 `;
+
+test "a global file lists its repos, with home expanded" {
+    let listed = repos_in("repos = [\"~/src/a\", \"~/src/b\"]\n", "/home/me");
+    assert.equal(listed.length(), 2);
+    assert.equal(listed.at(0) ?? "", "/home/me/src/a");
+    assert.equal(listed.at(1) ?? "", "/home/me/src/b");
+    assert.equal(repos_in("label = \"delegate:local\"\n", "/home/me").length(), 0)
+}
 
 test "the parent of a config file is the repo" {
     assert.equal(parent_dir("/src/bead-loop/.bead-loop.toml"), "/src/bead-loop")
@@ -246,7 +290,7 @@ test "a repo toml keeps its merge mode and takes the global stages" {
     assert.equal(c.base, "main");
     assert.equal(c.label, "delegate:local");
     assert.equal(c.policy.merge, root.machine.MergeMode.Pipeline);
-    assert.contains(c.gate, "cargo test");
+    assert.contains(c.gate, "baml-cli");
     assert.equal(c.policy.stages.length(), 2);
     assert.equal(c.policy.stages.at(0)?.worker, "devbox/coder");
     assert.equal(c.policy.stages.at(1)?.worker, "claude/sonnet");
