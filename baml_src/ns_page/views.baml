@@ -61,6 +61,37 @@ function call_line(c: ToolCall) -> string throws never {
     `${c.name ?? "?"} ${short}`
 }
 
+/// The tool calls in one line of a Claude round's log: Claude Code's own stream, teed in by
+/// the wrapper (ns_agents/claude.baml). Any other line has none.
+function claude_calls(line: string) -> ToolCall[] throws never {
+    let none: ToolCall[] = [];
+    if (!line.starts_with("{\"type\":\"assistant\"")) {
+        return none;
+    }
+    let raw = baml.json.parse(line) catch_all (e) {
+        _ => {
+            return none;
+        },
+    };
+    let out: ToolCall[] = [];
+    for (let b in baml.json.path_or<json[]>(raw, ".message.content", [])) {
+        let name = baml.json.path_or<string>(b, ".name", "?");
+        // StructuredOutput is how Claude Code hands back the answer, not a tool it used.
+        if (baml.json.path_or<string>(b, ".type", "") == "tool_use" && name != "StructuredOutput") {
+            let input = baml.json.path_or<json>(b, ".input", {});
+            out.push(
+                ToolCall {
+                    name: name,
+                    args: baml.json.stringify(input) catch_all (e) {
+                        _ => "",
+                    },
+                },
+            );
+        }
+    }
+    out
+}
+
 /// The last `n` tool calls in a round's log.
 function last_calls(log_file: string, n: int) -> string[] throws never {
     let none: string[] = [];
@@ -76,6 +107,10 @@ function last_calls(log_file: string, n: int) -> string[] throws never {
                 _ => ToolCall { name: null, args: null },
             };
             if (c.name != null) {
+                calls.push(call_line(c));
+            }
+        } else {
+            for (let c in claude_calls(line)) {
                 calls.push(call_line(c));
             }
         }
@@ -312,6 +347,16 @@ function round_log(state: string, file: string) -> string[] throws never {
                 line.slice(11, line.length())
             };
             out.push(`  ${short}`);
+        } else {
+            for (let c in claude_calls(line)) {
+                let args = c.args ?? "";
+                let short = if (args.length() > 400) {
+                    args.slice(0, 400) + " ..."
+                } else {
+                    args
+                };
+                out.push(`> ${c.name ?? "?"} ${short}`);
+            }
         }
     }
     out
@@ -607,4 +652,16 @@ test "abort stops the round under timeout, not only its wrapper" {
     assert.contains(said, "aborted t-1");
     baml.sys.sleep(baml.time.Duration.from_seconds(1));
     assert.equal(shell_out(in_session).trim(), "0")
+}
+
+test "a Claude round's tool calls come from Claude Code's own stream" {
+    let line = "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"ok\"},{\"type\":\"tool_use\",\"id\":\"t1\",\"name\":\"Read\",\"input\":{\"file_path\":\"src/a.ts\"}}]}}";
+    let calls = claude_calls(line);
+    assert.equal(calls.length(), 1);
+    assert.equal(call_line(calls.at(0) ?? ToolCall { name: null, args: null }), "Read src/a.ts");
+    assert.equal(claude_calls("{\"type\":\"result\"}").length(), 0);
+    let log = root.tools.scratch("cc-page.jsonl");
+    let _ = baml.fs.write(log, `{"type":"system"}\n${line}\n`);
+    assert.equal(last_calls(log, 6).join("|"), "Read src/a.ts");
+    let _ = baml.fs.remove(log);
 }

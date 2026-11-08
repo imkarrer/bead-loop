@@ -35,20 +35,23 @@ function ParkBriefAgent(bead: string, notes: string, because: string) -> ParkBri
     `
 }
 
-/// The brief the supervisor can write without a model call: the reason it parked.
+/// The brief the supervisor can write without a model call: the reason it parked, said
+/// once (pw-xl2's, 8 Nov, said it three times), and the question it leaves you.
 function park_brief_text(because: string, last_note: string) -> string throws never {
-    let happened = if (last_note.length() > 0) {
-        last_note
+    let happened = if (last_note.length() > 0 && last_note != because) {
+        `${last_note}\n${because}`
     } else {
         because
     };
-    `WHAT HAPPENED:\n${happened}\nWHY:\n${because}\nQUESTION:\n${because}`
+    `WHAT HAPPENED:\n${happened}\nQUESTION:\nWhat should the next round know? Answer it on the page, or Reopen or Escalate it.`
 }
 
-test "a park brief is the three headings" {
-    let t = park_brief_text("the stages are exhausted", "worker made no commit");
-    assert.contains(t, "WHAT HAPPENED:");
-    assert.contains(t, "worker made no commit");
-    assert.contains(t, "QUESTION:");
-    assert.contains(t, "the stages are exhausted")
+test "a park brief says why once, and asks" {
+    let t = park_brief_text("BLOCKED: no such file", "");
+    assert.contains(t, "WHAT HAPPENED:\nBLOCKED: no such file\nQUESTION:");
+    assert.equal(t.split("no such file").length(), 2);
+    assert.contains(
+        park_brief_text("the stages are exhausted", "worker made no commit"),
+        "worker made no commit",
+    )
 }
