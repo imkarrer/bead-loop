@@ -13,6 +13,11 @@ crash. Top to bottom, refreshed every five seconds:
 
 - **The header**: the loop up or down and since when, with **Start**, **Stop** (the
   keeper timer too, so it stays down) and **Restart** (a config edit takes effect).
+- **Flow**: the stages as rows (each with its worker, reviewer and how many failures it
+  absorbs) against the queues as columns: Ready, Research, Working, Review queue,
+  Reviewing, Merge, and a row for parked beads. Every bead is a chip where it sits, its
+  failure count beside it, amber when held; click one for its panel. Under it, what
+  landed in the last day.
 - **Lanes**: one card per model server (devbox, acbox, claude), with how many of its
   slots are busy, and for each round on it the bead, its repo, research, work or review,
   the model, how long, and its last six tool calls. **Abort** stops the round and all it

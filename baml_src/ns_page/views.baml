@@ -497,7 +497,11 @@ function abort_round(state: string, id: string) -> string throws never {
             return "no such round";
         },
     };
-    let _ = shell_out(`kill -TERM -- -${n} 2>/dev/null || kill -TERM ${n} 2>/dev/null`);
+    // The wrapper's group, then each child's: `timeout` makes a process group of its own,
+    // so the wrapper's group alone leaves the round running.
+    let _ = shell_out(
+        `for c in $(pgrep -P ${n}); do kill -TERM -- -$c 2>/dev/null || kill -TERM $c; done; kill -TERM -- -${n} 2>/dev/null || kill -TERM ${n} 2>/dev/null`,
+    );
     `aborted ${id}: the loop starts it again on its next tick`
 }
 
@@ -580,4 +584,27 @@ test "the scoreboard counts landings, first tries, claude and send-backs by wind
 test "only start, stop and restart reach systemctl" {
     assert.contains(loop_command("stop") ?? "", "stop bead-supervisor.timer");
     assert.equal(loop_command("rm -rf") == null, true)
+}
+
+test "abort stops the round under timeout, not only its wrapper" {
+    let state = root.tools.scratch("abort");
+    let _ = baml.sys.run("rm", args = ["-rf", state]);
+    let _ = baml.sys.run("mkdir", args = ["-p", `${state}/rounds`]);
+    let mark = `${state}/rounds/t-1.timedout`;
+    let child = baml.sys.subprocess(
+        "/bin/sh",
+        args = root.world.timed_argv(["sleep", "30"], 60, mark),
+        stdin = "ignore",
+        stdout = "ignore",
+        stderr = "ignore",
+        detached = true,
+    );
+    baml.fs.write(`${state}/rounds/t-1.pid`, `${child.pid}`);
+    baml.sys.sleep(baml.time.Duration.from_seconds(1));
+    let in_session = `ps -o pid= -s ${child.pid} | wc -l`;
+    assert.equal(shell_out(in_session).trim() == "0", false);
+    let said = abort_round(state, "t-1");
+    assert.contains(said, "aborted t-1");
+    baml.sys.sleep(baml.time.Duration.from_seconds(1));
+    assert.equal(shell_out(in_session).trim(), "0")
 }
