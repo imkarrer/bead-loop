@@ -171,6 +171,7 @@ is **lost**: back to where it was picked from, uncharged.
 | --- | --- | --- | --- |
 | parked | answer TEXT | ready, the text as the next round's note | −1 |
 | parked | reopen | ready, count as is | — |
+| parked by research (both opinions BLOCKED) | answer, reopen or escalate | as above, but to the worker without a brief: research would not read your answer and could block again | as above |
 | parked | escalate | ready at the last stage | set |
 | parked, its branch holding work | publish (Ready for PR) | the branch pushed, publishable: a compare link and Open PR for you | — |
 | publishable | open_pr TITLE BODY (Open PR) | the PR opened with your title and body, then the merge queue | — |

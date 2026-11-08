@@ -869,3 +869,41 @@ test "a BLOCKED on the last stage parks, keeping a branch that holds gated work"
     );
     assert.is_true(removes(fresh))
 }
+
+/// Two BLOCKEDs from research: parked with the first block still on the bead.
+function research_parked() -> Bead throws never {
+    let first = step(
+        bead(researching()),
+        ResearchBlocked { kind: "research_blocked", line: "BLOCKED: x", second_opinion: false },
+        policy(),
+    ).bead;
+    step(
+        first.at(Researching { kind: "researching" }),
+        ResearchBlocked { kind: "research_blocked", line: "BLOCKED: x", second_opinion: true },
+        policy(),
+    ).bead
+}
+
+test "an answer is the next round's note" {
+    let s = step(
+        bead(Parked { kind: "parked", question: "q" }, failures = 2),
+        Answered { kind: "answered", text: "use b.ts" },
+        policy(),
+    );
+    assert.equal(s.bead.last_note, "use b.ts");
+    assert.equal(s.bead.failures, 1)
+}
+
+test "a bead research parked goes to the worker once you overrule it, not to research again" {
+    let p = research_parked();
+    assert.is_type<Parked>(p.place);
+    let answered = step(p, Answered { kind: "answered", text: "the block is at lines 4-10" }, policy()).bead;
+    assert.equal(answered.brief, "");
+    assert.equal(answered.first_block == null, true);
+    assert.equal(answered.last_note, "the block is at lines 4-10");
+    let reopened = step(p, Reopened { kind: "reopened" }, policy()).bead;
+    assert.equal(reopened.brief, "");
+    assert.equal(reopened.last_note == null, true);
+    let other = step(bead(Parked { kind: "parked", question: "q" }), Reopened { kind: "reopened" }, policy()).bead;
+    assert.equal(other.brief == null, true)
+}
