@@ -1,7 +1,7 @@
 # bead-loop
 
 The supervisor is one packed BAML binary, `bead-supervisor` (`baml_src/`), plus the page
-(`bin/bead-loop-ui`, `ui/`), the skills a planner uses to write beads (`skills/`), and
+(`bead-supervisor page`; `bin/bead-loop-ui` wraps it), the skills a planner uses to write beads (`skills/`), and
 `install.sh`. What it does is the [README](README.md); one bead from start to finish is
 [docs/state-machine.md](docs/state-machine.md).
 
