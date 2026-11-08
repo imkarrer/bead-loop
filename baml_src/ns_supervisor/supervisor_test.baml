@@ -681,3 +681,29 @@ test "an abort or a note in the inbox is the supervisor's to carry out" {
     assert.is_true(w.calls.includes("abort t-1"));
     assert.is_true(w.calls.includes("note operator: use b.ts"))
 }
+
+test "mail cuts the rest between ticks short" {
+    let w = one_bead([committed()], [approved()], [merged()]);
+    let s = Supervisor.new(w, MemoryLog.new(), policy());
+    w.inbox_now = [root.world.Mail { id: "t-1", event: root.machine.Reopened { kind: "reopened" } }];
+    let before = unix_seconds();
+    rest([s], 20);
+    assert.is_true(unix_seconds() - before < 3)
+}
+
+test "a bead's view carries its newest event, and a proposal the bead's description" {
+    let w = one_bead([committed()], [approved()], []);
+    let log = MemoryLog.new();
+    let s = Supervisor.new(w, log, policy());
+    tick(s);
+    let v = baml.json.decode<View>(log.view);
+    assert.equal(v.beads.at(0)?.last, "picked");
+    s.put(
+        root.machine.Bead.new("t-1").at(
+            root.machine.Publishable { kind: "publishable", compare_url: "u" },
+        ),
+    );
+    write_view(s, []);
+    let p = baml.json.decode<View>(log.view);
+    assert.equal(p.beads.at(0)?.proposal?.body, "d")
+}

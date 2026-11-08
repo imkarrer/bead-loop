@@ -39,9 +39,10 @@ from its own state (their places, holds, titles, rounds in flight and their last
 calls) and the scoreboard's tallies. The page reads those files and adds only the
 config, the lane slots, systemd and the journal: it folds no log and asks neither bd,
 git nor gh, so what it shows is what the loop holds, as of its last tick. Its levers are
-mail in the repo's inbox, which the supervisor carries out on its next tick (answer,
-reopen, escalate, ready, publish; abort a round; note a bead), and `systemctl --user` for
-the loop's own units. Every POST carries a token the page is served with, made afresh
+mail in the repo's inbox (answer, reopen, escalate, ready, publish; abort a round; note a
+bead), and `systemctl --user` for the loop's own units. Mail wakes the loop within a
+second, and a lever waits for the supervisor to carry it out and comes back with what
+became of the bead, as its newest event: `pw-xl2: pr_opened: https://...`. Every POST carries a token the page is served with, made afresh
 each run, and must come from the page's own origin, so another site open in the same
 browser cannot pull a lever.
 

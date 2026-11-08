@@ -100,8 +100,9 @@ interface World {
     /// Stop the bead's round and everything it started; the loop finds it lost and starts
     /// it again, uncharged.
     function abort(self, id: string) -> void throws never;
-    /// The bead's title, for one `bd ready` no longer lists (parked, in the merge queue).
-    function title_of(self, id: string) -> string throws never;
+    /// The bead as bd has it, for one `bd ready` no longer lists (parked, in the merge
+    /// queue); empty fields when bd does not know it.
+    function ticket_of(self, id: string) -> Ticket throws never;
     /// The bead in bd says where it is: its status (empty: as it is), and its place as a
     /// `loop:*` label, `drop` taken off and `label` put on (either empty: none).
     function mark(
@@ -115,6 +116,8 @@ interface World {
     function write_park_brief(self, id: string, because: string) -> void throws root.machine.Infra;
     /// Open PRs on `bead/*` branches, which the loop takes into its merge queue.
     function adoptable(self) -> Adoptable[] throws root.machine.Infra;
+    /// Whether mail is waiting, without taking it: the loop wakes for it.
+    function mail_waiting(self) -> bool throws never;
     /// What you told the loop since the last tick. Each is handed over once.
     function inbox(self) -> Mail[] throws root.machine.Infra;
 }

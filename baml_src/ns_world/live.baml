@@ -469,8 +469,9 @@ class LiveWorld {
                 } else {
                     `${id}: ${row.title}`
                 };
-                let body = if (asked.length() > 0) {
-                    body ?? ""
+                let given = (body ?? "").trim();
+                let body = if (given.length() > 0) {
+                    given
                 } else if (self.pr_style == "plain") {
                     row.description ?? ""
                 } else {
@@ -576,11 +577,16 @@ class LiveWorld {
             let _ = stop_round(self.rounds(), id);
         }
 
-        function title_of(self, id: string) -> string throws never {
+        function ticket_of(self, id: string) -> Ticket throws never {
             let row = self.bead_row(id) catch_all (e) {
                 _ => null,
             };
-            row?.title ?? ""
+            Ticket {
+                id: id,
+                title: row?.title ?? "",
+                description: row?.description ?? "",
+                acceptance: row?.acceptance_criteria ?? "",
+            }
         }
 
         function mark(
@@ -645,6 +651,10 @@ class LiveWorld {
                 },
             };
             adoptable_of(rows, self.login())
+        }
+
+        function mail_waiting(self) -> bool throws never {
+            read_inbox_waiting(self.state)
         }
 
         function inbox(self) -> Mail[] throws never {
@@ -1205,6 +1215,17 @@ test "only bead branches are adoptable" {
 
 /// `STATE/inbox/*.json`, each one Mail, removed once read. `bead-supervisor tell`
 /// writes them; a file that does not parse is left for you to look at.
+function read_inbox_waiting(state: string) -> bool throws never {
+    let out = baml.sys.run("ls", args = [`${state}/inbox`], capture_output = true) catch_all (e) {
+        _ => {
+            return false;
+        },
+    };
+    out.stdout.to_string().split("\n").some((f) -> {
+        f.ends_with(".json")
+    })
+}
+
 function read_inbox(state: string) -> Mail[] throws never {
     let dir = `${state}/inbox`;
     let out: Mail[] = [];

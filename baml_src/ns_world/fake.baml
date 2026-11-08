@@ -156,16 +156,13 @@ class FakeWorld {
         function abort(self, id: string) -> void throws never {
             self.calls.push(`abort ${id}`);
         }
-        function title_of(self, id: string) -> string throws never {
-            (
-                self.tickets_now
-                    .filter((t) -> {
-                        t.id == id
-                    })
-                    .at(0)
-                    ?.title
-            )
-                ?? ""
+        function ticket_of(self, id: string) -> Ticket throws never {
+            self.tickets_now
+                .filter((t) -> {
+                    t.id == id
+                })
+                .at(0)
+                ?? Ticket { id: id, title: "", description: "", acceptance: "" }
         }
         function mark(
             self,
@@ -194,6 +191,9 @@ class FakeWorld {
         function adoptable(self) -> Adoptable[] throws root.machine.Infra {
             self.record("adoptable");
             self.adoptable_now
+        }
+        function mail_waiting(self) -> bool throws never {
+            self.inbox_now.length() > 0
         }
         function inbox(self) -> Mail[] throws never {
             let mail = self.inbox_now;

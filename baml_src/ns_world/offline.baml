@@ -269,16 +269,13 @@ class OfflineWorld {
             let _ = stop_round(`${self.state}/rounds`, id);
         }
 
-        function title_of(self, id: string) -> string throws never {
-            (
-                self.tickets_now
-                    .filter((t) -> {
-                        t.id == id
-                    })
-                    .at(0)
-                    ?.title
-            )
-                ?? ""
+        function ticket_of(self, id: string) -> Ticket throws never {
+            self.tickets_now
+                .filter((t) -> {
+                    t.id == id
+                })
+                .at(0)
+                ?? Ticket { id: id, title: "", description: "", acceptance: "" }
         }
 
         /// No bd offline: the bench's beads have no status to keep.
@@ -324,6 +321,9 @@ class OfflineWorld {
         }
         function adoptable(self) -> Adoptable[] throws never {
             []
+        }
+        function mail_waiting(self) -> bool throws never {
+            read_inbox_waiting(self.state)
         }
         function inbox(self) -> Mail[] throws never {
             read_inbox(self.state)

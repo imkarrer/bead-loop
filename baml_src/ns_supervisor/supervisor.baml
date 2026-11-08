@@ -31,7 +31,7 @@ class Supervisor {
     hold_ticks: int,
     held_for: map<string, int>,
     /// Each bead's title, from the tickets or asked once; and the closed beads' tallies.
-    titles: map<string, string>,
+    known: map<string, root.world.Ticket>,
     tallies: map<string, FTally>,
 
     function new(
@@ -55,7 +55,7 @@ class Supervisor {
             ready: [],
             hold_ticks: 5,
             held_for: {},
-            titles: {},
+            known: {},
             tallies: {},
         }
     }
@@ -375,7 +375,7 @@ function admit_tickets(s: Supervisor) -> void throws never {
             t.id
         });
     for (let t in tickets) {
-        let _ = s.titles.set(t.id, t.title);
+        let _ = s.known.set(t.id, t);
         if (s.bead(t.id) == null) {
             s.put(root.machine.Bead.new(t.id));
         }

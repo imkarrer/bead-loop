@@ -144,13 +144,32 @@ function share(s: Supervisor, others: Supervisor[]) -> void throws never {
     s.group_inflight = group;
 }
 
+/// The pause between ticks, cut short by mail: a lever on the page or a `tell` is
+/// carried out within a second, not at the next heartbeat.
+function rest(worlds: Supervisor[], seconds: int) -> void throws never {
+    let waited = 0;
+    while (waited < seconds) {
+        if (mail_waiting(worlds)) {
+            return;
+        }
+        baml.sys.sleep(baml.time.Duration.from_seconds(1));
+        waited = waited + 1;
+    }
+}
+
+function mail_waiting(worlds: Supervisor[]) -> bool throws never {
+    worlds.some((s) -> {
+        s.world.mail_waiting()
+    })
+}
+
 function run_one(config_file: string, ticks: int) -> int {
     let c = load_config(config_file);
     let worlds = start_all(config_file);
     let n = 0;
     while (ticks == 0 || n < ticks) {
         worlds = tick_all(worlds);
-        baml.sys.sleep(baml.time.Duration.from_seconds(c.heartbeat_seconds));
+        rest(worlds, c.heartbeat_seconds);
         n = n + 1;
     }
     n
@@ -168,7 +187,7 @@ function run_listed(repos: string[], wait: int, ticks: int) -> int {
     let n = 0;
     while (ticks == 0 || n < ticks) {
         worlds = tick_all(worlds);
-        baml.sys.sleep(baml.time.Duration.from_seconds(wait));
+        rest(worlds, wait);
         n = n + 1;
     }
     n
@@ -279,7 +298,7 @@ test "a mail written by tell reads back as its event" {
 function mail_to(state: string, id: string, event: root.machine.Event) -> string {
     let dir = `${state}/inbox`;
     let _ = baml.sys.run("mkdir", args = ["-p", dir]);
-    let path = `${dir}/${id}.${baml.sys.pid()}.${unix_seconds()}.json`;
+    let path = `${dir}/${id}.${unix_seconds()}.${mail_nonce()}.json`;
     baml.fs.write(path, baml.json.stringify(root.world.Mail { id: id, event: event }));
     path
 }
@@ -288,9 +307,17 @@ function mail_to(state: string, id: string, event: root.machine.Event) -> string
 function order_to(state: string, id: string, order: root.world.Order) -> string {
     let dir = `${state}/inbox`;
     let _ = baml.sys.run("mkdir", args = ["-p", dir]);
-    let path = `${dir}/${id}.${baml.sys.pid()}.${unix_seconds()}.json`;
+    let path = `${dir}/${id}.${unix_seconds()}.${mail_nonce()}.json`;
     baml.fs.write(path, baml.json.stringify(root.world.Mail { id: id, event: null, order: order }));
     path
+}
+
+/// A name no other mail shares: two levers in one second must not overwrite each other.
+function mail_nonce() -> string throws never {
+    let u = baml.fs.read("/proc/sys/kernel/random/uuid") catch_all (e) {
+        _ => `${baml.sys.pid()}`,
+    };
+    u.trim()
 }
 
 function unix_seconds() -> int throws never {
