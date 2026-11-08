@@ -772,3 +772,28 @@ test "a merged bead PR closes no bead the loop has not parked" {
     assert.equal(s.bead("t-1"), null);
     assert.equal(w.calls.includes("close_bead"), false)
 }
+
+test "ftally records each round" {
+    let timed: TimedEvent[] = [
+        TimedEvent { at: 100, event: root.machine.Picked { kind: "picked" } },
+        TimedEvent { at: 160, event: root.machine.Committed { kind: "committed", sha: "s" } },
+        TimedEvent { at: 170, event: root.machine.GatePassed { kind: "gate_passed" } },
+        TimedEvent { at: 400, event: root.machine.ReviewPicked { kind: "review_picked" } },
+        TimedEvent {
+            at: 500,
+            event: root.machine.Rejected { kind: "rejected", line: "REJECT: x", text: "REJECT: x" },
+        },
+    ];
+    let t = ftally("t-1", "t-1", timed, policy());
+    assert.equal(t.round_log.length(), 2);
+    let r1 = t.round_log.at(0);
+    assert.equal(r1?.kind, "work");
+    assert.equal(r1?.model, "devbox/coder");
+    assert.equal(r1?.outcome, "gate_passed");
+    let r2 = t.round_log.at(1);
+    assert.equal(r2?.kind, "review");
+    assert.equal(r2?.model, "acbox/reviewer");
+    assert.equal(r2?.waited_s, 230);
+    assert.equal(r2?.outcome, "rejected");
+    assert.equal(r2?.words, "REJECT: x")
+}

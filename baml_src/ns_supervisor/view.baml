@@ -352,10 +352,57 @@ function ftally(
         round_log: [],
     };
     let b = root.machine.Bead.new(id);
+    let open: FRoundRec? = null;
+    let prev_at: int? = null;
     for (let e in timed) {
         let v = said_of(e.event);
         let st = fstage(p, b.failures);
         let ev = e.event;
+        let waited = e.at - (prev_at ?? e.at);
+        if (
+            ev is root.machine.Picked
+                || ev is root.machine.ReviewPicked
+                || ev is root.machine.ResearchPicked
+        ) {
+            let kind = if (ev is root.machine.ReviewPicked) {
+                "review"
+            } else if (ev is root.machine.ResearchPicked) {
+                "research"
+            } else {
+                "work"
+            };
+            let model = if (ev is root.machine.ReviewPicked) {
+                st?.reviewer ?? ""
+            } else if (ev is root.machine.ResearchPicked) {
+                p.research
+            } else {
+                st?.worker ?? ""
+            };
+            open
+                = FRoundRec {
+                    kind: kind,
+                    model: model,
+                    picked_at: e.at,
+                    ended_at: 0,
+                    outcome: "",
+                    words: "",
+                    waited_s: waited,
+                };
+        } else if (!(ev is root.machine.Committed)) {
+            if let o: FRoundRec = open {
+                o.ended_at = e.at;
+                o.outcome = v.kind;
+                o.words
+                    = if (v.text.length() > 200) {
+                        v.text.slice(0, 200)
+                    } else {
+                        v.text
+                    };
+                t.round_log.push(o);
+                open = null;
+            }
+        }
+        prev_at = e.at;
         if (t.first_at == 0 && (ev is root.machine.Picked || ev is root.machine.ResearchPicked)) {
             t.first_at = e.at;
         }
