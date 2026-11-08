@@ -72,7 +72,8 @@ stateDiagram-v2
   researching --> parked: blocked, upheld by the second opinion
   ready --> working: picked (fewest failures first)
   working --> in_review: committed, gate passed, pre-check passed
-  working --> ready: blocked · no commit · gate x2 · timeout · crash · SEND BACK   (+1)
+  working --> ready: blocked · no commit · gate x2 · timeout · out of steps · crash · SEND BACK   (+1)
+  working --> in_review: rebutted (done, nothing new, the gate passes)   (no failure)
   in_review --> reviewing: picked
   reviewing --> merging: approved, pushed, PR opened
   reviewing --> publishable: approved, pushed, open_pr = ask
@@ -130,7 +131,8 @@ is **lost**: back to where it was picked from, uncharged.
 | … the second opinion is blocked too | parked before any edit | removed |
 | No brief yet, and the worker's server has a slot | worked without one: the GPU never waits on the CPU | as any work round |
 | Worker blocked | +1 failure; ready, or parked at the last stage | removed |
-| No commit, timed out, worker crashed | +1 failure; ready | removed |
+| No commit, timed out, ran out of steps, worker crashed | +1 failure; ready | removed |
+| Done with no new commit, on a branch that already holds work, and the gate still passes | **rebutted**: back to review, **no failure**, the report as the rebuttal, reviewed by the last stage's reviewer | kept |
 | Worker reports done with its change uncommitted | the round commits it, and the gate decides | — |
 | Setup fails, git refuses the worktree, a session returns nothing | **held**, no failure | removed unless a round had committed |
 | A Claude usage limit | **held**, no failure; no claude round starts until it clears | as it was |
@@ -138,7 +140,7 @@ is **lost**: back to where it was picked from, uncharged.
 | Gate fails twice (one fix round with its output) | +1 failure; ready | removed |
 | Gate passes, pre-check passes (or cannot answer) | in review | kept |
 | Pre-check SEND BACK | +1 failure; ready, the block as the note | kept |
-| Reviewer rejects | +1 failure; ready, the work order as the note | kept |
+| Reviewer rejects | +1 failure; ready, the work order as the note. The reviewer reads the gate's command and output, and a claim that something breaks must quote the output that shows it | kept |
 | The same rejection twice running | +1, and the count jumps to the next stage with another worker; parked if there is none | kept |
 | Reviewer returns no verdict | **held** in review, no failure | kept |
 | Reviewer approves | merging | pushed; PR opened (`ID: title`), or the open one updated |

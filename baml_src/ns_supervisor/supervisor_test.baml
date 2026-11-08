@@ -727,3 +727,12 @@ test "a BLOCKED from research gets its second opinion as a queued round, never l
     assert.equal(s.bead("t-1")?.first_block == null, true);
     assert.equal(starts(w, "round_lost"), 0)
 }
+
+test "a rebuttal is reviewed by the last stage's reviewer" {
+    let w = one_bead([committed()], [approved()], [merged()]);
+    let s = Supervisor.new(w, MemoryLog.new(), policy());
+    let b = root.machine.Bead.new("t-1").at(root.machine.InReview { kind: "in_review" });
+    assert.equal(reviewer_of(s, b), "acbox/reviewer");
+    b.rebutted = true;
+    assert.equal(reviewer_of(s, b), "claude/sonnet")
+}

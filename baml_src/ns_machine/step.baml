@@ -250,6 +250,15 @@ function on_working(b: Bead, w: Working, e: Event, p: Policy) -> Step throws nev
             n.kept = true;
             stay(n)
         },
+        let x: Rebutted => {
+            let n = b.at(InReview { kind: "in_review" });
+            n.kept = true;
+            n.rebutted = true;
+            Step {
+                bead: n,
+                effects: [Note { text: `the worker disputes the last REJECT: ${x.text}` }],
+            }
+        },
         let x: WorkerBlocked => {
             let sent = charge(b, x);
             if (on_last_stage(p, b.failures)) {
@@ -311,6 +320,7 @@ function rejected(b: Bead, r: Rejected, p: Policy) -> Step throws never {
     let twice = b.last_reject != null && squash(b.last_reject ?? "") == squash(r.line);
     let sent = charge(b, r);
     sent.bead.last_reject = r.line;
+    sent.bead.rebutted = false;
     if (!twice) {
         return sent;
     }
@@ -336,7 +346,9 @@ function on_reviewing(b: Bead, e: Event, p: Policy) -> Step throws never {
             } else {
                 [PushAndOpenPr { title: null, body: null }]
             };
-            Step { bead: b, effects: effects }
+            let n = b.copy();
+            n.rebutted = false;
+            Step { bead: n, effects: effects }
         },
         let x: PrOpened => opened(b, x, p),
         let x: BranchPushed => {

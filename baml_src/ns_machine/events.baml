@@ -220,6 +220,16 @@ class PrRequested {
     body: string,
 }
 
+/// The worker found nothing to change: the branch's commit already does what the bead asks,
+/// the rejection was wrong, and the gate still passes. Its report is the rebuttal. Back to
+/// review, uncharged, with the last stage's reviewer as the tiebreak (web-2ad.3, 8 Nov:
+/// Claude reverted a regression the false REJECT had caused, found its work already
+/// committed, and was charged "no commit").
+class Rebutted {
+    kind: "rebutted",
+    text: string,
+}
+
 // The loop.
 class RoundLost {
     kind: "round_lost",
@@ -256,6 +266,7 @@ type Event = ModelOutcome
     | Reopened
     | Escalated
     | Published
+    | Rebutted
     | PrRequested
     | RoundLost
     | HoldCleared;

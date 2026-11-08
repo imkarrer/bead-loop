@@ -96,6 +96,8 @@ class Bead {
     /// queue. It goes through the queue like any research round: started from a step's
     /// effect, mid-tick, it was found "lost" a second later (web-2ad.3, 8 Nov).
     first_block: string?,
+    /// The next review is a rebuttal's: the last stage's reviewer takes it.
+    rebutted: bool,
     /// Harness holds in a row with nothing else between: a broken harness is retried, not
     /// forever (pw-xl2, 8 Nov: the same CLI error, picked again every three minutes all night).
     harness_streak: int,
@@ -116,6 +118,7 @@ class Bead {
             last_note: null,
             brief: null,
             first_block: null,
+            rebutted: false,
             harness_streak: 0,
         }
     }
@@ -136,6 +139,7 @@ class Bead {
             last_note: self.last_note,
             brief: self.brief,
             first_block: self.first_block,
+            rebutted: self.rebutted,
             harness_streak: self.harness_streak,
         }
     }

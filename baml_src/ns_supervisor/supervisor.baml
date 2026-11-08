@@ -478,8 +478,17 @@ function worker_of(s: Supervisor, b: root.machine.Bead) -> string throws never {
     root.machine.stage_for(s.policy, b.failures)?.worker ?? ""
 }
 
+/// The stage's reviewer; for a worker's rebuttal of a REJECT, the last stage's, as the
+/// tiebreak between the first reviewer and the worker.
 function reviewer_of(s: Supervisor, b: root.machine.Bead) -> string throws never {
-    root.machine.stage_for(s.policy, b.failures)?.reviewer ?? ""
+    let own = root.machine.stage_for(s.policy, b.failures)?.reviewer ?? "";
+    if (b.rebutted) {
+        let last = s.policy.stages.at(s.policy.stages.length() - 1)?.reviewer ?? "";
+        if (last.length() > 0) {
+            return last;
+        }
+    }
+    own
 }
 
 /// Reviews first, then research, then work, each on its own server's lane. A worker

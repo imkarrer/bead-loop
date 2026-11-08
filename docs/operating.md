@@ -81,7 +81,7 @@ since the diff is in its prompt) and tees Claude Code's own
 calls like any other round's. When the CLI fails, the round reads what it said there: a
 usage limit holds every claude round, anything else is held with the CLI's own words.
 
-A local round's file tools refuse a path outside its worktree (`BEAD_LOOP_WORKTREE`, which
+A local round's tools count reads and commands since its last edit: from 20 each answer says to finish, past 30 they are refused, so a model that is lost reports instead of spending its steps. A local round's file tools refuse a path outside its worktree (`BEAD_LOOP_WORKTREE`, which
 the launch sets); its `run` tool is a shell, which only `sandbox` confines.
 
 ## Stop, restart, recover

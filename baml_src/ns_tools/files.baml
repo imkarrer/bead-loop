@@ -55,6 +55,70 @@ function mark_read(path: string, offset: int) -> void throws never {
     };
 }
 
+// A round that probes and never edits is lost, not working: web-2ad.3's second round ran
+// some seventy find, ls and grep calls over a built site after its last edit, until its
+// 80 steps were gone. Reading, searching, listing and running are counted since the last
+// edit; at PROBE_WARN each run's answer carries a nudge, and past PROBE_STOP they are
+// refused, so the model gives its report while it still has steps.
+const PROBE_WARN: int = 20;
+const PROBE_STOP: int = 30;
+
+function probes_path() -> string throws never {
+    `/tmp/bead-loop-probes-${baml.sys.pid()}`
+}
+
+function probes() -> int throws never {
+    let text = baml.fs.read(probes_path()) catch_all (e) {
+        _ => "0",
+    };
+    baml.json.decode<int>(text.trim()) catch_all (e) {
+        _ => 0,
+    }
+}
+
+function set_probes(n: int) -> void throws never {
+    let _ = baml.fs.write(probes_path(), `${n}`) catch_all (e) {
+        _ => 0,
+    };
+}
+
+/// An edit: the count starts again.
+function edited() -> void throws never {
+    set_probes(0);
+}
+
+/// One more probe: null to go ahead, or why not.
+function probe() -> string? throws never {
+    // Only a round is held to it (a hand run or a test has no worktree to stay in).
+    if (confined_to().length() == 0) {
+        return null;
+    }
+    let n = probes() + 1;
+    set_probes(n);
+    refusal_at(n)
+}
+
+/// The answer to the `n`th probe since the last edit: null to go ahead, or the refusal.
+function refusal_at(n: int) -> string? throws never {
+    if (n > PROBE_STOP) {
+        return `refused: ${n - 1} reads and commands since your last edit. Stop exploring. If the work is done, commit it and give your report; if it is not, give your report as blocked, saying what you found.`;
+    }
+    null
+}
+
+/// What a probe's answer ends with once the count is high.
+function probe_nudge() -> string throws never {
+    nudge_at(probes())
+}
+
+function nudge_at(n: int) -> string throws never {
+    if (n >= PROBE_WARN) {
+        `\n[${n} reads and commands since your last edit. Finish: commit and report, or report blocked with what you found. Past ${PROBE_STOP} they are refused.]`
+    } else {
+        ""
+    }
+}
+
 /// The worktree a round confines its file tools to: BEAD_LOOP_WORKTREE, which the
 /// round's launch sets. Unset (a test, a hand run), nothing is confined.
 function confined_to() -> string throws never {
@@ -87,6 +151,10 @@ function outside(path: string, tree: string) -> string? throws never {
 /// 1-based line to start from, for the next one. A second read of the same lines in this
 /// process returns a stub, so whole-file reads do not pile up (bl-b1a.1, 7 Nov).
 function read_file(path: string, offset: int = 1) -> string throws never {
+    let stop = probe();
+    if let why: string = stop {
+        return why;
+    }
     let refused = outside(path, confined_to());
     if let why: string = refused {
         return `cannot read ${why}`;
@@ -121,6 +189,7 @@ function read_file(path: string, offset: int = 1) -> string throws never {
 
 /// Create a file, or replace all of one.
 function write_file(path: string, content: string) -> string throws never {
+    edited();
     let refused = outside(path, confined_to());
     if let why: string = refused {
         return `cannot write ${why}`;
@@ -136,6 +205,7 @@ function write_file(path: string, content: string) -> string throws never {
 /// Replace `old_text` with `new_text` in a file. `old_text` must match exactly, whitespace
 /// included, and appear exactly once.
 function edit_file(path: string, old_text: string, new_text: string) -> string throws never {
+    edited();
     let refused = outside(path, confined_to());
     if let why: string = refused {
         return `cannot edit ${why}`;
@@ -211,6 +281,10 @@ function not_found(path: string, text: string, old_text: string) -> string throw
 
 /// Search the repository's tracked files for a regular expression.
 function search(pattern: string) -> string throws never {
+    let stop = probe();
+    if let why: string = stop {
+        return why;
+    }
     let out = baml.sys.run("git", args = ["grep", "-n", "-E", "-e", pattern], capture_output = true) catch_all (e) {
         _ => {
             return `search failed: ${e}`;
@@ -226,6 +300,10 @@ function search(pattern: string) -> string throws never {
 
 /// List the repository's tracked files whose path contains `part`; an empty `part` lists all.
 function list_files(part: string = "") -> string throws never {
+    let stop = probe();
+    if let why: string = stop {
+        return why;
+    }
     let out = baml.sys.run("git", args = ["ls-files"], capture_output = true) catch_all (e) {
         _ => {
             return `list failed: ${e}`;
@@ -253,7 +331,11 @@ function bounded(command: string, seconds: int) -> string throws never {
 
 /// Run a shell command in the worktree and see its exit code and output.
 function run(command: string) -> string throws never {
-    run_for(command, RUN_SECONDS)
+    let stop = probe();
+    if let why: string = stop {
+        return why;
+    }
+    run_for(command, RUN_SECONDS) + probe_nudge()
 }
 
 function run_for(command: string, seconds: int) -> string throws never {
@@ -358,4 +440,11 @@ test "a round's file tools stay in its worktree" {
     assert.contains(outside("../../etc/passwd", "/w/t-1") ?? "", "climbs out");
     assert.contains(outside("/w/t-10/x", "/w/t-1") ?? "", "outside");
     assert.equal(outside("/anywhere", "") == null, true)
+}
+
+test "a round that only probes is told to finish, then refused" {
+    assert.equal(refusal_at(PROBE_STOP) == null, true);
+    assert.contains(refusal_at(PROBE_STOP + 1) ?? "", "refused: 30 reads and commands");
+    assert.equal(nudge_at(PROBE_WARN - 1), "");
+    assert.contains(nudge_at(PROBE_WARN), "since your last edit")
 }
