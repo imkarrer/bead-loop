@@ -276,10 +276,6 @@ class RemoveBranch {
 class DeleteRemoteBranch {
 }
 
-class SecondOpinion {
-    first_reply: string,
-}
-
 class WriteParkBrief {
     because: string,
 }
@@ -315,7 +311,6 @@ type Effect = Note
     | PrepareWorktree
     | RemoveBranch
     | DeleteRemoteBranch
-    | SecondOpinion
     | WriteParkBrief
     | PushAndOpenPr
     | PushBranch

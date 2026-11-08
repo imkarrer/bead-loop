@@ -8,7 +8,7 @@ class ResearchResult {
     shape: string @description("the change, step by step, naming functions and types as they are spelled"),
     check: string @description("the command that proves it, exactly as the worker should run it"),
     pitfalls: string @description("what will go wrong for a worker that follows the bead's text alone"),
-    line: string @description(
+    line: string? @description(
         "when blocked: BLOCKED: the false claim, with file:line of what is actually there",
     ),
 }
@@ -48,7 +48,7 @@ function research_outcome(r: ResearchResult, second: bool) -> root.machine.Event
     if (r.outcome == "blocked") {
         root.machine.ResearchBlocked {
             kind: "research_blocked",
-            line: r.line,
+            line: r.line ?? "BLOCKED: (the researcher gave no line)",
             second_opinion: second,
         }
     } else {
@@ -86,4 +86,11 @@ test "a blocked research is the line, and a second opinion is marked" {
     } else {
         assert.is_true(false);
     }
+}
+
+test "a brief need not carry the BLOCKED line" {
+    let r = baml.json.decode<ResearchResult>(
+        "{\"outcome\":\"brief\",\"files\":\"layouts/_default/sponsors.html\",\"shape\":\"1. ...\",\"check\":\"hugo\",\"pitfalls\":\"p\"}",
+    );
+    assert.is_type<root.machine.BriefWritten>(research_outcome(r, false));
 }

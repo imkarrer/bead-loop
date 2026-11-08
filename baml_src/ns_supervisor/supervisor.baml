@@ -189,20 +189,6 @@ function perform(
             s.world.delete_remote_branch(id);
             none
         },
-        let x: root.machine.SecondOpinion => {
-            let started: root.machine.Event[] = [];
-            let second = if (s.policy.brief_model.length() > 0) {
-                s.policy.brief_model
-            } else {
-                s.policy.research
-            };
-            let _ = s.world.start_round(id, root.world.RoundKind.Research, second, x.first_reply) catch (e) {
-                root.machine.Infra => {
-                    started = [e];
-                },
-            };
-            started
-        },
         let x: root.machine.WriteParkBrief => {
             s.world.write_park_brief(id, x.because);
             none
@@ -527,8 +513,9 @@ function start_rounds(s: Supervisor) -> void throws never {
             pickable(s, x) && needs_research(s, x)
         })
     ) {
-        if (lane_free(s, busy, s.policy.research) && start_research(s, b) > 0) {
-            busy.push(s.policy.research);
+        let model = researcher_of(s, b);
+        if (lane_free(s, busy, model) && start_research(s, b) > 0) {
+            busy.push(model);
         }
     }
     if (dev_paused(s)) {
@@ -562,7 +549,17 @@ function start_research(s: Supervisor, b: root.machine.Bead) -> int throws never
     if (!(now.place is root.machine.Researching) || now.hold != null) {
         return 0;
     }
-    start(s, b.id, root.world.RoundKind.Research, s.policy.research)
+    start(s, b.id, root.world.RoundKind.Research, researcher_of(s, now))
+}
+
+/// Who researches a bead: the researcher, or for a second opinion on its BLOCKED the brief
+/// model when one is set.
+function researcher_of(s: Supervisor, b: root.machine.Bead) -> string throws never {
+    if (b.first_block != null && s.policy.brief_model.length() > 0) {
+        s.policy.brief_model
+    } else {
+        s.policy.research
+    }
 }
 
 function start_work(s: Supervisor, b: root.machine.Bead) -> int throws never {

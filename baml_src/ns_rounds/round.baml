@@ -374,10 +374,30 @@ function run_researcher(spec: RoundSpec) -> root.agents.ResearchResult {
     agent.run(root.agents.Research@spec(spec.bead)).value
 }
 
+/// A researcher that answers nothing usable is no brief: the worker goes without one, as
+/// after a timeout. Holding it researched the bead again and again, and each answer was a
+/// good brief that only failed to parse (web-2ad.2 and .3, 8 Nov: `line` was required).
+/// A usage limit still holds, and anything else is the harness's.
+function research_failed(e: unknown) -> root.machine.Event throws never {
+    let limit = limit_hit(`${e}`);
+    if let held: root.machine.Event = limit {
+        return held;
+    }
+    match (e) {
+        let x: ai.errors.ParseFailed => {
+            root.machine.BriefWritten { kind: "brief_written", overruled: false, text: "" }
+        },
+        let x: ai.errors.StepBudgetExceeded => {
+            root.machine.BriefWritten { kind: "brief_written", overruled: false, text: "" }
+        },
+        _ => infra_harness(`${e}`),
+    }
+}
+
 function research_round(spec: RoundSpec) -> root.machine.Event[] throws never {
     let result = run_researcher(spec) catch_all (e) {
         _ => {
-            let out: root.machine.Event[] = [limit_hit(`${e}`) ?? infra_harness(`${e}`)];
+            let out: root.machine.Event[] = [research_failed(e)];
             return out;
         },
     };
@@ -579,4 +599,13 @@ test "a done report's uncommitted change is committed for it" {
     assert.equal(git_head(dir) != before, true);
     let msg = baml.sys.run("git", args = ["log", "-1", "--format=%s"], cwd = dir, capture_output = true);
     assert.equal(msg.stdout.to_string().trim(), "t-1: wrote a.txt")
+}
+
+test "a researcher's answer that will not parse is no brief, not a hold" {
+    let e = research_failed(ai.errors.ParseFailed { provider: "openai-generic", raw_output: "{" });
+    if let b: root.machine.BriefWritten = e {
+        assert.equal(b.text, "");
+    } else {
+        assert.is_true(false);
+    }
 }
