@@ -489,7 +489,38 @@ function research_round(spec: RoundSpec) -> root.machine.Event[] throws never {
         };
     }
     let second = spec.note.starts_with("BLOCKED:");
-    [root.agents.research_outcome(result, second)]
+    [unread_block(root.agents.research_outcome(result, second), root.tools.probes())]
+}
+
+/// A BLOCK from a researcher that read nothing is no brief: the worker goes, and a
+/// worker's own BLOCKED needs the file and line. bl-dze.6's researcher (8 Nov) answered
+/// "insights.baml: no `lane_wait` function found" on its first call, with no read, of a
+/// file that defines it; its second opinion did the same, and the bead parked.
+/// `read` is the round's reads, searches and listings: a researcher never edits, so the
+/// probe count is all of them.
+function unread_block(e: root.machine.Event, read: int) -> root.machine.Event throws never {
+    if (e is root.machine.ResearchBlocked && read == 0) {
+        root.machine.BriefWritten { kind: "brief_written", overruled: false, text: "" }
+    } else {
+        e
+    }
+}
+
+test "a research BLOCK with nothing read is no brief, and one after reading stands" {
+    let blocked = root.machine.ResearchBlocked {
+        kind: "research_blocked",
+        line: "BLOCKED: no lane_wait",
+        second_opinion: false,
+    };
+    let unread = unread_block(blocked, 0);
+    if let b: root.machine.BriefWritten = unread {
+        assert.equal(b.text, "");
+    } else {
+        assert.is_true(false);
+    }
+    assert.is_type<root.machine.ResearchBlocked>(unread_block(blocked, 3));
+    let brief = root.machine.BriefWritten { kind: "brief_written", overruled: false, text: "x" };
+    assert.is_type<root.machine.BriefWritten>(unread_block(brief, 0));
 }
 
 /// The process entry: `bead-agent round --spec_file PATH`, started in the worktree, since

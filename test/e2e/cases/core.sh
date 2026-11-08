@@ -160,3 +160,26 @@ case_pipeline_labels_its_pr() {
   assert_eq "$(bd_field status)" closed "bd status"
   assert_nomatch "$(cat "$E2E_CTRL/gh/calls")" "pr merge" "the loop merging a pipeline PR itself"
 }
+
+# A researcher's BLOCK about code it never read is no brief: the worker goes, and lands
+# it (bl-dze.6 parked on "no `lane_wait` function" from a researcher that read nothing).
+case_unread_research_block_is_no_brief() {
+  GLOBAL_EXTRA=$'research = "first"\nresearch_model = "fake/researcher"' setup 'test -e work.txt'
+  reply researcher '{"content":"{\"outcome\":\"blocked\",\"files\":\"\",\"shape\":\"\",\"check\":\"\",\"pitfalls\":\"\",\"line\":\"BLOCKED: work.txt has no such thing\"}"}'
+  reply coder "$(write_work)" "$(commit)" "$(done_report)"
+  reply reviewer "$(approve)"
+  until_event committed 90 || bad "the worker never ran: $(events)"
+  assert_match "$(events)" "research_picked brief_written picked" "research, then the worker"
+  assert_nomatch "$(events)" "research_blocked" "a BLOCK from nothing read"
+}
+
+# A researcher that read the code and found a false claim still blocks, and its second
+# opinion is asked.
+case_read_research_block_stands() {
+  GLOBAL_EXTRA=$'research = "first"\nresearch_model = "fake/researcher"' setup 'test -e work.txt'
+  local blocked='{"content":"{\"outcome\":\"blocked\",\"files\":\"\",\"shape\":\"\",\"check\":\"\",\"pitfalls\":\"\",\"line\":\"BLOCKED: README:1 says base, not work\"}"}'
+  reply researcher '{"tool":"read_file","args":{"path":"README"}}' "$blocked" \
+    '{"tool":"read_file","args":{"path":"README"}}' "$blocked"
+  until_place parked 90 || bad "not parked: $(events)"
+  assert_match "$(events)" "research_blocked research_picked research_blocked" "the BLOCK and its second opinion"
+}
