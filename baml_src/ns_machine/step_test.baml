@@ -389,6 +389,15 @@ test "Push or gh pr create refused" {
     assert.equal(s.bead.failures, 0)
 }
 
+test "a PR opened under pipeline gets its merge label, and under auto does not" {
+    let s = step(bead(reviewing()), PrOpened { kind: "pr_opened", url: "pr/1", head: "h" }, policy());
+    assert.is_true(relabels(s));
+    let auto = policy();
+    auto.merge = MergeMode.Auto;
+    let a = step(bead(reviewing()), PrOpened { kind: "pr_opened", url: "pr/1", head: "h" }, auto);
+    assert.is_true(!relabels(a))
+}
+
 test "APPROVE on the commit CI was red on asks CI again" {
     let b = bead(reviewing());
     b.charged_head = "h";

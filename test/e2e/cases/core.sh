@@ -142,3 +142,21 @@ case_ready_for_pr_then_open_pr() {
   assert_eq "$(jq -r '.[0].body' "$E2E_CTRL/gh/prs.json")" "The body you wrote" "the PR's body"
 }
 
+
+# Under pipeline the loop puts the merge label on the PR it opens, and CI's merge step
+# merges it; a green PR waiting for that is not an event a tick (#242 sat unlabelled,
+# logging checks_green 55 times).
+case_pipeline_labels_its_pr() {
+  MERGE=pipeline setup 'test -e work.txt'
+  reply coder "$(write_work)" "$(commit)" "$(done_report)"
+  reply reviewer "$(approve)"
+  until_event pr_opened 60 || bad "no PR: $(events)"
+  assert_eq "$(jq -r '[.[0].labels[].name] | join(",")' "$E2E_CTRL/gh/prs.json")" automerge "the PR's labels"
+  tick 3
+  assert_eq "$(events | tr ' ' '\n' | grep -c checks_green)" 0 "green looks logged"
+  # CI's merge step merges it; the loop sees the merge and closes the bead.
+  jq '.[0].state = "MERGED"' "$E2E_CTRL/gh/prs.json" >"$E2E_CTRL/gh/prs.tmp" && mv "$E2E_CTRL/gh/prs.tmp" "$E2E_CTRL/gh/prs.json"
+  until_event pr_merged 30 || bad "the merge was not seen: $(events)"
+  assert_eq "$(bd_field status)" closed "bd status"
+  assert_nomatch "$(cat "$E2E_CTRL/gh/calls")" "pr merge" "the loop merging a pipeline PR itself"
+}
