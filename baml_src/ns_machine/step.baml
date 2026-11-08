@@ -141,7 +141,13 @@ function on_ready(b: Bead, e: Event, p: Policy) -> Step throws never {
             n.rounds = b.rounds + 1;
             Step { bead: n, effects: [PrepareWorktree { resume: b.kept }] }
         },
-        let x: ResearchPicked => stay(b.at(Researching { kind: "researching" })),
+        // The researcher reads the bead's worktree, so the pick makes one.
+        let x: ResearchPicked => {
+            Step {
+                bead: b.at(Researching { kind: "researching" }),
+                effects: [PrepareWorktree { resume: b.kept }],
+            }
+        },
         let x: PrAdopted => {
             if (b.pr != null) {
                 return stay(b);

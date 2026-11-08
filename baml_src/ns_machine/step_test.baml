@@ -775,3 +775,13 @@ test "review comments send the loop's own PR back to act on them, uncharged" {
     assert.equal(s.bead.order, Order.Feedback);
     assert.contains(s.bead.last_note ?? "", "rename x")
 }
+
+test "a research pick prepares the worktree the researcher reads" {
+    let s = step(bead(ready()), ResearchPicked { kind: "research_picked" }, policy());
+    assert.is_type<Researching>(s.bead.place);
+    assert.is_true(
+        s.effects.some((e) -> {
+            e is PrepareWorktree
+        }),
+    )
+}

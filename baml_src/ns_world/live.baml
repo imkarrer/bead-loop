@@ -226,6 +226,17 @@ class LiveWorld {
             if (resume && there) {
                 return;
             }
+            // A fresh round starts from the base: a worktree left by research goes first.
+            if (!resume && there) {
+                let _ = baml.sys.run(
+                    "git",
+                    args = ["worktree", "remove", "--force", dir],
+                    cwd = self.repo,
+                    capture_output = true,
+                ) catch_all (e) {
+                    _ => null,
+                };
+            }
             let _ = self.tool(
                 root.machine.Trouble.Git,
                 "git",
@@ -609,8 +620,9 @@ class LiveWorld {
         } else {
             self.work_seconds
         };
+        // subprocess does not search PATH, so the shell is named by its path.
         let child = baml.sys.subprocess(
-            "sh",
+            "/bin/sh",
             args = timed_argv(argv, seconds, `${self.rounds()}/${id}.timedout`),
             cwd = spec.dir,
             env = {
