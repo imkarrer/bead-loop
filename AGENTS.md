@@ -27,6 +27,8 @@ Run the parts on their own while iterating:
 - `baml-cli --agent-skill-check off test` for the loop;
 - `test/lint-skills.sh` for `skills/` and `agents/` (frontmatter, under 700 words);
 - `scripts/pack.sh target/bead-supervisor` for the binary the unit execs.
+- `node scripts/page-html.mjs` after editing `ui/index.html`: the binary serves the page from
+  the BAML constant it writes; `node test/ui-onclicks.js test/ui-state.json` checks its levers.
 
 ## Where a test goes
 

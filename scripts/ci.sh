@@ -44,6 +44,9 @@ case ${1:-} in
     shellcheck -S warning install.sh scripts/*.sh test/lint-skills.sh test/package.sh bin/bead-loop-ui
     echo "--- :memo: skills and agents"
     test/lint-skills.sh
+    echo "--- :spider_web: the page"
+    node scripts/page-html.mjs --check
+    node test/ui-onclicks.js test/ui-state.json
     ;;
   suite)
     # The tests ran in the baml step. This is the binary the unit will exec, which the

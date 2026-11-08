@@ -9,35 +9,37 @@ The loop is one packed BAML binary, `~/.local/bin/bead-supervisor`
 
 **<http://127.0.0.1:4097>**: `bead-loop-ui.service`, which runs `bead-supervisor page`
 (`bin/bead-loop-ui` is the two-line wrapper). It starts at boot and comes back after a
-crash. Top to bottom, refreshed every five seconds:
+crash. It is the Rust loop's page, kept as it was: `ui/index.html`, which
+`scripts/page-html.mjs` writes into the binary (`baml_src/ns_page/page_html.baml`; the gate
+fails when they differ). It reads `/api/status` every five seconds. Top to bottom:
 
-- **The header**: the loop up or down and since when, with **Start**, **Stop** (the
-  keeper timer too, so it stays down) and **Restart** (a config edit takes effect).
-- **Flow**: the stages as rows (each with its worker, reviewer and how many failures it
-  absorbs) against the queues as columns: Ready, Research, Working, Review queue,
-  Reviewing, Merge, and a row for parked beads. Every bead is a chip where it sits, its
-  failure count beside it, amber when held; click one for its panel. Under it, what
-  landed in the last day.
-- **Lanes**: one card per model server (devbox, acbox, claude), with how many of its
-  slots are busy, and for each round on it the bead, its repo, research, work or review,
-  the model, how long, and its last six tool calls. **Abort** stops the round and all it
-  started; the loop starts it again with no failure.
-- **Needs you**: each parked bead with its question and **Answer** (your text becomes
-  the next round's note, one failure forgiven), **Reopen** and **Escalate** (straight to
-  the last stage); each pushed branch waiting for you to open its PR; each held bead with
-  its reason.
-- **Scoreboard**, over 24h, 7d, 30d and all: landed, first try (no send-back), without
-  Claude (no round on a `claude/*` stage), parked, and the send-backs by kind.
-- **Each repo and target**: every bead that is not closed, its place, failures and
-  rounds, its PR, its hold. **Click a bead** for its panel: every event with its whole
-  text (the work order, the gate's output, the pre-check's block, CI's checks), the
-  brief, the last report, the park question, and each round's tool calls.
-- **Supervisor log**: the loop's journal, one line per event.
+- **The header**: the loop up or down and since when, with **Stop** (the keeper brings it
+  back in a minute), **Off** (the keeper too) and **Start**.
+- **Flow**: the workflow as one graph. A band per stage, its worker and reviewer, local
+  or metered; in each band Ready, Work (then the gate and the pre-check), Review queue
+  and Review, left to right; CI · merge and Landed after every band; Research above;
+  Parked below. The edges are the moves: gate ✓, PR, merge, the send-back rail (+1
+  failure), down a band after a stage's failures, to parked when the last is spent. Each
+  bead sits at its node; press one to open it under the graph: where it is, its rounds
+  and their logs, a note to it, and on a lane its last tool calls and **Abort**.
+- **Lanes**: one per model server slot, the round on it or why it is idle, and **Abort**.
+- **Scoreboard**, over 24h, 7d, 30d and all: landed, first try, without metered models,
+  rounds per landing, time to land, needed you; where rounds go back, by model, and what
+  finished.
+- **Each repo and target**, under **Needs you**: each parked bead with its question,
+  **Answer & resume** (your text becomes the next round's note, one failure forgiven),
+  **Work with Claude** (the last stage), **Reopen**, and, when its branch holds work that
+  passed the gate, **Ready for PR** (the branch pushed, the bead ready for PR); each bead
+  ready for PR with its compare link, the PR's title and body to edit, and **Open PR**;
+  each held bead with its reason.
+- **Supervisor log**: the loop's journal.
 
-The page folds each repo's event log afresh on every refresh and never asks bd, git or
-gh, so it cannot take a round's result or start anything. Its levers leave mail in the
-repo's inbox (taken on the next tick), signal a round's process group, or call
-`systemctl --user` for the loop's units.
+The page folds each repo's event log afresh on every request, and reads the beads'
+titles from `bd list` once a minute; a bead waiting in a queue that bd no longer lists
+for the loop is not shown there. It never takes a round's result or starts one. Its
+levers leave mail in the repo's inbox for the loop's next tick (answer, reopen,
+escalate, ready, publish), note or close a bead in bd, signal a round's process group,
+or call `systemctl --user` for the loop's units.
 
 ## The terminal
 
