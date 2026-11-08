@@ -123,6 +123,8 @@ class FakeWorld {
         function push_and_open_pr(
             self,
             id: string,
+            title: string?,
+            body: string?,
         ) -> root.machine.PrOpened throws root.machine.Infra {
             self.record("push_and_open_pr");
             root.machine.PrOpened { kind: "pr_opened", url: `pr/${id}`, head: "head" }
@@ -149,8 +151,19 @@ class FakeWorld {
         function note(self, id: string, text: string) -> void throws never {
             self.calls.push(`note ${text}`);
         }
-        function set_status(self, id: string, status: string) -> void throws never {
-            self.calls.push(`status ${id} ${status}`);
+        function mark(
+            self,
+            id: string,
+            status: string,
+            drop: string,
+            label: string,
+        ) -> void throws never {
+            if (status.length() > 0) {
+                self.calls.push(`status ${id} ${status}`);
+            }
+            if (label.length() > 0) {
+                self.calls.push(`label ${id} ${label}`);
+            }
         }
         function close_bead(self, id: string, url: string?) -> void throws root.machine.Infra {
             self.record("close_bead");

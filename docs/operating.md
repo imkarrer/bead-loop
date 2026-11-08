@@ -48,7 +48,7 @@ bead-supervisor lint --config_file ~/src/repo/.bead-loop.toml --ids "ID ID" --ru
 cat ~/.local/state/bead-loop/<repo>/baml/beads/<id>/events.jsonl   # one bead's history, each event with its time
 ```
 
-`tell` is the page's levers: `--what` is `answer`, `reopen` or `escalate`. A bead
+`tell` is the page's levers: `--what` is `answer`, `reopen`, `escalate`, `publish` (a parked bead whose branch holds work: push it and wait for your PR) or `open_pr` (`--title` and `--text` the body). A bead
 labelled `work:NAME` goes to that target's inbox.
 
 `lint` checks a bead's claims before a label lands (the delegate skill runs it): every

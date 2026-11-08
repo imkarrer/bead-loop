@@ -445,6 +445,8 @@ class LiveWorld {
         function push_and_open_pr(
             self,
             id: string,
+            title: string?,
+            body: string?,
         ) -> root.machine.PrOpened throws root.machine.Infra {
             let head = self.push(id);
             let existing = self.open_pr_url(id);
@@ -452,12 +454,17 @@ class LiveWorld {
                 existing
             } else {
                 let row = self.bead_row(id);
-                let title = if (self.pr_style == "plain") {
+                let asked = (title ?? "").trim();
+                let title = if (asked.length() > 0) {
+                    asked
+                } else if (self.pr_style == "plain") {
                     row.title
                 } else {
                     `${id}: ${row.title}`
                 };
-                let body = if (self.pr_style == "plain") {
+                let body = if (asked.length() > 0) {
+                    body ?? ""
+                } else if (self.pr_style == "plain") {
                     row.description ?? ""
                 } else {
                     `${self.bead_text(id)}\n\nOpened by bead-loop.`
@@ -558,8 +565,17 @@ class LiveWorld {
             let _ = self.tool(root.machine.Trouble.Bd, "bd", ["note", id, `bead-loop: ${text}`], self.beads);
         }
 
-        function set_status(self, id: string, status: string) -> void throws root.machine.Infra {
-            let _ = self.tool(root.machine.Trouble.Bd, "bd", ["update", id, "--status", status], self.beads);
+        function mark(
+            self,
+            id: string,
+            status: string,
+            drop: string,
+            label: string,
+        ) -> void throws root.machine.Infra {
+            let args = mark_args(id, status, drop, label);
+            if (args.length() > 2) {
+                let _ = self.tool(root.machine.Trouble.Bd, "bd", args, self.beads);
+            }
         }
 
         function close_bead(self, id: string, url: string?) -> void throws root.machine.Infra {
@@ -1300,4 +1316,35 @@ test "the queue is the ready beads and the ones the loop carries, each once" {
             .join(","),
         "t-1,t-2",
     )
+}
+
+/// `bd update` for one move: only the parts that change.
+function mark_args(
+    id: string,
+    status: string,
+    drop: string,
+    label: string,
+) -> string[] throws never {
+    let args = ["update", id];
+    if (status.length() > 0) {
+        args.push("--status");
+        args.push(status);
+    }
+    if (drop.length() > 0 && drop != label) {
+        args.push("--remove-label");
+        args.push(drop);
+    }
+    if (label.length() > 0 && drop != label) {
+        args.push("--add-label");
+        args.push(label);
+    }
+    args
+}
+
+test "a move is one bd update with only what changed" {
+    assert.equal(
+        mark_args("t-1", "in_progress", "loop:ready", "loop:work").join(" "),
+        "update t-1 --status in_progress --remove-label loop:ready --add-label loop:work",
+    );
+    assert.equal(mark_args("t-1", "", "loop:work", "loop:work").join(" "), "update t-1")
 }

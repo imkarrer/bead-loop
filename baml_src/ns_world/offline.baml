@@ -218,6 +218,8 @@ class OfflineWorld {
         function push_and_open_pr(
             self,
             id: string,
+            title: string?,
+            body: string?,
         ) -> root.machine.PrOpened throws root.machine.Infra {
             let head = self.run_git(["rev-parse", "HEAD"], self.worktree(id)).trim();
             root.machine.PrOpened { kind: "pr_opened", url: `bench://${id}`, head: head }
@@ -256,7 +258,13 @@ class OfflineWorld {
         }
 
         /// No bd offline: the bench's beads have no status to keep.
-        function set_status(self, id: string, status: string) -> void throws never {}
+        function mark(
+            self,
+            id: string,
+            status: string,
+            drop: string,
+            label: string,
+        ) -> void throws never {}
 
         function close_bead(self, id: string, url: string?) -> void throws root.machine.Infra {
             let _ = baml.fs.write(`${self.state}/beads/${id}/closed`, url ?? "bench") catch_all (e) {
@@ -385,7 +393,7 @@ test "a bench PR is local, not github" {
         `{"id":"t-1","title":"t","description":"d","acceptance":"a","repo":"/tmp/x","base":"HEAD","gate":"true"}`,
     );
     let w = OfflineWorld.new(c, root.tools.scratch("offline"), "/bin/false");
-    let opened = w.push_and_open_pr("t-1");
+    let opened = w.push_and_open_pr("t-1", null, null);
     assert.equal(opened.url, "bench://t-1");
     assert.is_type<root.machine.ChecksGreen>(w.observe_pr("t-1", opened.url).at(0));
 }

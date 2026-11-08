@@ -56,7 +56,7 @@ The loop's state is its event log. A bead's place is a fold of its events:
 | `STATE/rounds/ID.{spec.json,pid,result.json,timedout}` | a round in flight: what it was given, its process, what it found, and whether its time ran out |
 | `STATE/wt/ID`, branch `bead/ID` | the work |
 | `STATE/inbox/` | your answers, reopens and escalations, taken on the next tick |
-| bd | the bead's text, its label, blockers, and its status, which the loop keeps: `in_progress` once it picks the bead, `blocked` when it parks, `open` when you answer, reopen or escalate, closed on merge. Only a bead `bd ready` lists, or one the loop carries (`in_progress`), is picked or reviewed. The loop notes each event on the bead |
+| bd | the bead's text, its label, blockers, and its status, which the loop keeps: `in_progress` once it picks the bead, `blocked` when it parks, `open` when you answer, reopen or escalate, closed on merge. Its place is a label too, one at a time: `loop:ready`, `loop:research`, `loop:work`, `loop:review-queue`, `loop:review`, `loop:ready-for-pr`, `loop:merging`, `loop:parked`; `bd list -l loop:ready-for-pr` is what waits for your Open PR. Only a bead `bd ready` lists, or one the loop carries (`in_progress`), is picked or reviewed. The loop notes each event on the bead |
 | GitHub | the PR: open (checks pending, green, red, none; conflicting; behind), merged, closed |
 
 `STATE` is `~/.local/state/bead-loop/<repo>/baml/`; a target's is under it, in
@@ -162,6 +162,7 @@ is **lost**: back to where it was picked from, uncharged.
 | PR merged | closed, the bead closed in bd with the url | deleted |
 | PR closed unmerged | parked, the url in the question | gone |
 | Stages exhausted (`on_exhaust = "park"`) | parked | removed |
+| The last stage says BLOCKED after an earlier round's work passed the gate | parked | kept, for a publish |
 | A round's process gone with no result | lost: back where it was picked from, **no failure** | as it was |
 
 ## Transitions you make
@@ -171,6 +172,8 @@ is **lost**: back to where it was picked from, uncharged.
 | parked | answer TEXT | ready, the text as the next round's note | −1 |
 | parked | reopen | ready, count as is | — |
 | parked | escalate | ready at the last stage | set |
+| parked, its branch holding work | publish (Ready for PR) | the branch pushed, publishable: a compare link and Open PR for you | — |
+| publishable | open_pr TITLE BODY (Open PR) | the PR opened with your title and body, then the merge queue | — |
 | anything else | answer, reopen or escalate | refused, with a note saying why | — |
 | a bead in bd | close it, block it, defer it, or take its label off | not picked or reviewed again: only what `bd ready` lists, and the loop's own `in_progress`, are. A round already running finishes | — |
 
