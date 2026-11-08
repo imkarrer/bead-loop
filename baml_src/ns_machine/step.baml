@@ -460,6 +460,17 @@ function red(b: Bead, m: Merging, r: ChecksRed, p: Policy) -> Step throws never 
 
 function on_parked(b: Bead, e: Event, p: Policy) -> Step throws never {
     let back = b.at(Ready { kind: "ready" });
+    // Parked by research (both opinions said BLOCKED): you have overruled it, so the bead
+    // goes to the worker without a brief instead of to research again, which never reads
+    // your answer and can block a third time (web-2ad.3, 8 Nov: the researcher misread the
+    // line twice; the block it said was missing is at sponsors.html:4-10, as quoted).
+    if (b.first_block != null) {
+        back.first_block = null;
+        back.last_note = null;
+        if (back.brief == null) {
+            back.brief = "";
+        }
+    }
     match (e) {
         let x: Answered => {
             back.failures
@@ -468,6 +479,9 @@ function on_parked(b: Bead, e: Event, p: Policy) -> Step throws never {
                 } else {
                     0
                 };
+            // Your answer is the next round's note: what it reads as "the last round was
+            // sent back".
+            back.last_note = x.text;
             Step { bead: back, effects: [Note { text: x.text }] }
         },
         let x: Reopened => stay(back),
