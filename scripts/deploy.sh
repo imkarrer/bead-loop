@@ -50,7 +50,18 @@ fi
 git -C "$SRC" fetch -q origin main
 head=$(git -C "$SRC" rev-parse origin/main)
 have=$(cat "$DEPLOY/deployed" 2>/dev/null || true)
-if [ "$head" = "$have" ] && [ "$FORCE" = 0 ] && [ "$DRY" = 0 ]; then exit 0; fi   # nothing new: the timer's usual outcome
+# Nothing new by commit alone is not enough: a crash can leave the installed binary
+# missing or 0 bytes (bash runs a 0-byte file as an empty script, exit 0, so the
+# service looks healthy) with $DEPLOY/deployed already at head. HEAL says this is that
+# case, so the release search below re-wants $have's own release instead of stopping at it.
+HEAL=0
+if [ "$head" = "$have" ] && [ "$FORCE" = 0 ] && [ "$DRY" = 0 ]; then
+  if [ -s "$HOME/.local/bin/bead-supervisor" ]; then
+    exit 0; # nothing new: the timer's usual outcome
+  fi
+  echo "installed binary is missing or empty at ${have:0:7}: redeploying to heal"
+  HEAL=1
+fi
 
 # The newest commit on main that has its release, newer than what runs. While merges
 # land faster than the pipeline releases them, origin/main itself rarely has one yet
@@ -58,7 +69,7 @@ if [ "$head" = "$have" ] && [ "$FORCE" = 0 ] && [ "$DRY" = 0 ]; then exit 0; fi 
 released=$(gh release list -R "$repo" -L 50 --json tagName -q '.[].tagName' 2>/dev/null || true)
 want=''
 for c in $(git -C "$SRC" rev-list --first-parent -n 50 origin/main); do
-  if [ "$c" = "$have" ] && [ "$FORCE" = 0 ]; then break; fi   # nothing newer is released yet
+  if [ "$c" = "$have" ] && [ "$FORCE" = 0 ] && [ "$HEAL" = 0 ]; then break; fi   # nothing newer is released yet
   if grep -qx "main-${c:0:7}" <<<"$released"; then want=$c; break; fi
 done
 if [ -z "$want" ]; then
@@ -73,6 +84,12 @@ if ! gh release download "$tag" -R "$repo" -p bead-supervisor -D "$dl" 2>"$dl/er
   echo "gh release download $tag failed:" >&2; cat "$dl/err" >&2; exit 1
 fi
 chmod 755 "$dl/bead-supervisor"
+
+# Check that the downloaded binary is not empty (0 bytes)
+if [ ! -s "$dl/bead-supervisor" ]; then
+  echo "downloaded binary is empty (0 bytes) - this would be a broken deploy" >&2
+  exit 1
+fi
 
 echo "--- :git: $SRC to $want"
 git -C "$SRC" reset -q --hard "$want"   # nothing else writes here: always safe
@@ -104,6 +121,16 @@ rm -f "$aider_wait"
 
 echo "--- :package: install"
 BEAD_SUPERVISOR_BIN=$dl/bead-supervisor "$SRC/install.sh"
+
+# Compare the downloaded and installed binaries to ensure they match
+if ! cmp -s "$dl/bead-supervisor" "$HOME/.local/bin/bead-supervisor"; then
+  echo "downloaded and installed binaries do not match - this would be a broken deploy" >&2
+  exit 1
+fi
+
+# Flush before recording: on 30 Oct a hard stop zeroed the binary, the clone's objects and a
+# doc after deployed was written. A bare sync, since the clone is at stake too, not one file.
+sync
 echo "$want" >"$DEPLOY/deployed"
 echo "at $tag: $(git -C "$SRC" log -1 --format='%h %s')"
 
