@@ -1,205 +1,126 @@
 # Config
 
-Two TOML files, every key optional but a worker (`model`, or each stage's `worker`): the global `~/.config/bead-loop/config.toml`
-(`install.sh` seeds it) and the repo's `.bead-loop.toml` (`bead-loop.example.toml` has
-every key annotated). A key in the repo file wins over the same key in the global one;
-the global one wins over the default. A file that does not parse stops the run with its
-name. Both are read afresh on every round, so an edit takes effect on the next round. Replace a file atomically: write the new one beside it, then `mv` it over the old one. A round that reads the global file missing or empty sees none of its keys. A repo whose worker only that file names then stops the run (`stage 1 names no worker`), and the next start finds no `repos`. A half-written file stops on the parse.
+Two TOML files, every key optional but the stages: the global
+`~/.config/bead-loop/config.toml` (`install.sh` seeds it) and each repo's `.bead-loop.toml`
+(`bead-loop.example.toml` has every key annotated). A key in the repo file wins over the
+same key in the global one; the global one wins over the default. `[[stages]]` come from
+the repo file when it has any, else the global one.
 
-With neither, the run stops (`stage 1 names no worker`): no agent has a model of its own.
+The loop reads both when it starts (`baml_src/ns_supervisor/config.baml`), so an edit
+takes effect at the next start: `systemctl --user restart bead-supervisor.service`, or
+Restart on the page. Rounds in flight keep running through it.
 
-**The BAML loop.** Since the cutover the loop is the packed BAML binary, and it reads the
-keys below except these, which belonged to the opencode and aider harnesses or are not
-ported yet: `[[lanes]]` (a lane is now a provider: `[providers.NAME] parallel`), `model` and
-`review_model` (name `[[stages]]`), `research = "every"` (research runs once per bead),
-`research_aider`, `diff_checks`, `stall_compactions`, `stall_steps`, `attach`, the
-`harness`, `cost`, `via`, `command` and `model_flag` provider keys, `[reference_rate]`,
-and the `stage:NAME` and `harness:*` labels. A target's `base_remote` defaults to
-`origin`. Each round runs under `worker_timeout` (work and review) or `research_timeout`.
-A model `PROVIDER/MODEL` runs on that provider's server: `[providers.NAME] url`, or the
-OpenAI root its `probe` implies (`http://host:8100/health` is `http://host:8100/v1`).
-`claude/*` is one Claude Code turn.
+A model is named `PROVIDER/MODEL`. `claude/*` is one Claude Code turn with Claude's own
+tools; any other runs `MODEL` on that provider's OpenAI-compatible server
+(`[providers.NAME] url`), with the loop's own tools.
 
 | Key | Default | What |
 | --- | --- | --- |
-| `repos` | `[]` | global only: the repos the lanes walk, `~` allowed |
-| `max_open_prs` | none | global only: a cap on **open PRs across every repo and target at once**, where `max_inflight` caps one target alone. Each target keeps its own merge queue, so a per-target cap of 1 still permits one PR per target. Set this to `1` when the PRs land on someone else's repository and a queue of them would be a queue of review for them rather than throughput for you. Adopted PRs are excluded, as they are from `max_inflight` |
-| `[[lanes]]` | one lane per provider named in the stages | global only: the lanes, one per model server — `name`, `models` (globs: `devbox/*`, `acbox/*`, `claude/*`, `*`), `roles` (`worker`, `reviewer`; both by default), `exclude`, `parallel` (rounds at once, default 1). Each takes the rounds whose model it matches. Unset: one lane per provider (the part before the `/`) that a stage, `conflict_worker`, `brief_model` or `research_model` names, in the order first named, each with both roles and as wide as its `[providers.NAME]` `parallel` |
-| `label` | `"delegate:local"` | `bd ready -l LABEL` picks the work; the loop claims, notes and closes beads as this actor, not as you (`BEADS_ACTOR` in its environment overrides) |
-| `base` | origin's HEAD | branch to fork from and PR into |
-| `setup` | none | runs in a fresh worktree before the worker (`npm ci`); not again on a branch sent back. It failing holds the bead, no failure: setup runs on the base, so it cannot be the bead's fault |
-| `gate` | none (CI is the gate) | runs after the worker, before the review queue; one fix round on failure |
-| `precheck_model` | none | runs after the gate, before the review queue; SEND BACK is a failure, anything else is not |
-| `model` | none | the worker when no `[[stages]]` table applies. The name picks the harness: `provider/model` runs in opencode, `claude/<alias>` in Claude Code, `aider:provider/model` in aider on that opencode provider's server ([design.md](design.md#harnesses)). With neither, the run stops (`stage 1 names no worker`): no agent has a model of its own. |
-| `review_model` | none (no review) | the reviewer when no `[[stages]]` table applies; none: straight to PR |
-| `[[stages]]` | one stage of `model`/`review_model`, `failures = 3` | `worker` (required), `reviewer`, `failures` (how many send-backs this stage absorbs before the next takes over; `attempts` still reads), `timeout` (`worker_timeout`), `name` (default: its 1-based index as a string), in order. A stage without one stops the run, naming the stage. |
+| `repos` | `[]` | global only: the checkouts the loop works, `~` allowed. Each has `.beads/` and a `.bead-loop.toml` |
+| `label` | `"delegate:local"` | `bd ready -l LABEL` is the queue. Only a bead `bd ready` lists now is picked |
+| `base` | `"main"` | the branch to fork from and open PRs into |
+| `remote` | `"origin"` | where the base is fetched from and `bead/*` branches are pushed |
+| `setup` | none | runs in a fresh worktree before its first round (`npm ci`); not again on a branch sent back. Failing holds the bead, no failure |
+| `gate` | none (CI is the gate) | runs after the worker in its worktree, whatever the worker reported; one fix round with its output on failure |
+| `precheck_model` | none | after the gate passes, reads the diff, the bead and the worker's report; SEND BACK is a failure, a pass or no answer goes on to review |
+| `[[stages]]` | **required** | the workers and reviewers, in order (below) |
 | `on_exhaust` | `"park"` | after the last stage: `park` for you, or `repeat` the stages |
-| `conflict_worker` | the last stage's worker | who rebases a PR that conflicts with the base; a rebase is judgement, so the strong model by default |
-| `brief_model` | the last stage's worker | who writes the **brief** when a bead is parked for you — what each round tried, why it was sent back, the question you have to answer; `none` for no brief, the loop's own question then. Also the **second opinion** on a researcher's `BLOCKED:` (see `research_model`) |
-| `research_model` | none (off) | who reads the repo for a bead before its first worker round and writes the **brief** — Files / Shape / Check / Pitfalls, at most sixty lines — that every worker prompt then carries (agent `bead-researcher`, read-only). Its round runs on the lane whose models match it, reviews first, so on this box the 80B on `acbox` researches while the GPU implements. A worker lane with nothing briefed to take takes a bead without a brief rather than wait. `BLOCKED:` from the researcher gets a second opinion first: `brief_model` researches the bead again with that reply in its prompt. Its brief goes to the worker; its own `BLOCKED:` (or no `brief_model`) parks the bead before any edit, with both replies in the park's brief. Research never counts a failure |
-| `research` | `"first"` | `first`: one brief per bead · `every`: a send-back sets the brief aside and the next research round refines it with the round's note |
-| `research_timeout` | `900` | seconds a research round may run, capped by the stage's `timeout`; past it the worker goes without a brief. A bead labelled `harness:aider` gets no research round at all: whoever filed it already named its files |
-| `research_aider` | `true` | a brief whose Files all exist puts the worker under aider (default true); `false` never switches |
-| `diff_checks` | `false` | before the pre-check and the review, a deterministic look at the diff: a test file the bead names that the diff never touches, or an added assertion that checks nothing, sends the round back |
-| `merge` | `"auto"` | `auto`: the watcher merges on green · `pipeline`: the loop labels, CI merges · `manual`: PR only, the bead held for you once green |
-| `update_behind` | `merge == "auto"` | when GitHub reports an open PR **BEHIND** the base, bring its branch up before anything else — its green is a green against an old base, and on someone else's repo the maintainer is the one looking at "out-of-date". On under `auto`, which is where the loop already did this; turn it on for `external` or `pipeline`, off to leave a behind branch alone |
+| `research_model` | none (off) | reads the repo for a bead before its first work round and writes a brief (Files / Shape / Check / Pitfalls) that every worker prompt carries. Runs on its own server's slot, so the CPU box researches while the GPU works. A worker with a free slot and nothing briefed takes a bead without a brief rather than wait. Research never counts a failure |
+| `research` | `"first"` | `off` turns research off; anything else runs it once per bead |
+| `research_timeout` | `900` | seconds a research round may run; past it the worker goes without a brief |
+| `brief_model` | the researcher | the **second opinion** on a researcher's BLOCKED: it researches the bead again with that reply in its prompt. Its brief goes to the worker; its own BLOCKED parks the bead before any edit |
+| `conflict_worker` | the last stage's worker | who works a rebase round (a PR that conflicts with the base) and a feedback round (review comments on the PR): judgement, so the strong model by default |
+| `worker_timeout` | `3600` | seconds a work or review round may run, the gate included |
+| `merge` | `"auto"` | `auto`: the loop merges on green · `pipeline`: the loop labels, CI merges · `manual`: PR only, held for you once green · `external`: a maintainer merges; the loop watches and never holds on green |
 | `merge_label` | `"automerge"` | the label `pipeline` puts on each PR |
-| `feedback` | `true` | a review (`CHANGES_REQUESTED` or a comment) or an issue/inline comment on an open PR of the loop's own, from someone other than the loop's own account and newer than the last one acted on, sends the bead back to dev on the same branch with the comments as the work order (`conflict_worker` does the round, the same judgement call as a rebase); `false` is yesterday's behaviour, CI colour only — common under `merge = "manual"` where a human already reads the thread |
-| `adopt` | `true` | open `bead/*` PRs from anyone join the loop: merged on green under `auto`, labelled under `pipeline`, the bead the branch names closed; red or conflicting, held with a note for whoever opened them. They do not count toward `max_inflight` |
-| `max_inflight` | none | a cap on PRs in the merge queue before the dev lane pauses. Unset, there is no cap: bd's dependencies are the only gate on the dev lane, and the queues absorb the rest. Set it for a repo whose CI is the scarce thing |
-| `worker_timeout` | `3600` | seconds per model session |
-| `stall_compactions` | `10` | opencode sessions only: past this many compactions in one session, the watchdog aborts it as stalled — a read/compaction loop, not the model at work. `0` disables the check |
-| `stall_steps` | `60` | opencode sessions only: past this many tool calls since the last edit/write/patch call, the watchdog aborts the session as stalled. `0` disables the check |
-| `attach` | none | an opencode server url; sessions run there and stream in its web UI |
+| `update_behind` | `merge == "auto"` | when GitHub reports an open PR behind the base, bring its branch up (`gh pr update-branch`) |
+| `feedback` | `true` | a review or comment on the loop's own PR from someone other than its gh account, newer than the last seen, sends the bead back on its branch with the comments as its note, no failure. The first look at a PR marks what is already there as seen. Bots are ignored |
+| `adopt` | `true` | an open `bead/ID` PR the loop is not carrying joins the merge queue. One opened by the loop's own account (a PR left by a restart, or by the Rust loop) is the loop's own; one from anyone else is adopted: merged or labelled on green, held when red, never sent back, and not counted toward the caps |
+| `max_inflight` | none | the dev lane pauses while this many of this repo's (or target's) own PRs are open |
+| `max_open_prs` | none | global only: the dev lane pauses while this many own PRs are open across a repo and all its targets |
+| `open_pr` | `"auto"` | `ask`: push the branch and stop at a compare link for you to open; the loop picks the PR up once it exists |
+| `pr_style` | `plain` under `ask`, else `loop` | `loop`: the title is `ID: title` and the body the bead · `plain`: the bead's title and description |
 | `sandbox` | `false` | run each round under bwrap: only its worktree, the git dir, the state dir and `/tmp` writable. A gate that writes a cache outside them (`flox activate`, `npm ci`) fails under it, and the network is not cut yet |
-| `target_label` | `"work"` | the label prefix that names a target: a bead's `work:NAME` label sends its round to `[targets.NAME]` (see Targets below) |
-
-## Lanes per model server
-
-Without `[[lanes]]` there is one lane per provider the stages name — `devbox`, `acbox`,
-`claude` — each taking both roles on its own server's rounds, so a round on the CPU box never
-holds the GPU's queue. `[[lanes]]` in the global config replaces them, to group or rename:
-
-```toml
-[[lanes]]
-name = "gpu"
-models = ["devbox/*"]
-[[lanes]]
-name = "cpu"
-models = ["acbox/*"]
-[[lanes]]
-name = "claude"
-models = ["claude/*"]
-```
-
-Each lane takes every round — worker or reviewer, and a rebase round when
-`conflict_worker` is its — whose model matches one of its globs. So a stage-2 worker
-round on acbox runs in the `cpu` lane while the `gpu` lane goes on with stage-1 beads,
-and a bead escalated to Claude runs at once, on Anthropic, never behind either. A lane
-keeps a bead's rounds together (worker, then its reviewer round when that is the same
-lane's, or straight to PR with no reviewer), pauses on its own (`pause cpu`), and is its
-own panel on the page. The first lane also parks beads whose stages are exhausted; the
-first reviewing lane also takes rounds with no reviewer. With Claude
-signed out its lane waits, saying so, and takes the beads the moment Sign in completes.
-
-`parallel = N` on a lane runs N rounds of its models at once, one bead each, in slots
-named `NAME`, `NAME.2` … `NAME.N`: a marker (`lane.NAME.K`) and a lock each, a row
-each in `status` and a panel each on the page, one `pause NAME` for all of them. Every
-bead has its own worktree, so the slots never share a checkout. It is for a server that
-takes several sessions at once — `claude/*`, say — not for a GPU that serves one.
+| `target_label` | `"work"` | the label prefix that names a target: `work:NAME` sends a bead to `[targets.NAME]` |
+| `heartbeat_seconds` | `30` | global only: the pause between ticks |
 
 ## Providers
 
+A provider is a model server, and a **lane**: each runs `parallel` rounds at once, shared
+by every repo the loop works. So a review on acbox never waits behind a work round on the
+GPU, and a round in one repo holds its server for all the others.
+
 | Key | Default | What |
 | --- | --- | --- |
-| `harness` | opencode | `opencode` · `claude-code` · `aider` · `command` (default `opencode`; `claude` for the provider named `claude`) |
-| `parallel` | 1 | number of parallel sessions |
-| `cost` | local | `local` (for opencode) or `metered` (for claude) |
-| `probe` | none | `none` (for opencode) or `claude auth status` (for claude-code) |
-| `via` | none | for `aider`: the opencode provider whose baseURL and key it uses |
-| `attach` | none | for opencode: an opencode server url; sessions run there and stream in its web UI |
-| `command` | none | for `command` harness: a command to run |
-| `model_flag` | none | for `command` harness: a flag to pass to the command to specify the model |
-| `url` | what `probe` implies | the OpenAI-compatible root the BAML loop sends this provider's models to (`http://127.0.0.1:8100/v1`) |
-| Implicit provider rule | - | a model `NAME/model` whose NAME has no table gets one (claude: Claude Code, metered; any other: opencode, local, one slot)
+| `url` | what `probe` implies | the OpenAI-compatible root the rounds call (`http://127.0.0.1:8100/v1`) |
+| `probe` | none | a health URL; `http://host:8100/health` implies `url = "http://host:8100/v1"` |
+| `parallel` | 1 | rounds on this server at once |
 
-## Reference rate
-
-The scoreboard's **Model cost** shows what the metered models charged. A local model charges nothing, so beside it the scoreboard shows an *avoided cost*: the tokens the local models handled, priced at a reference rate you set, which is what a metered model would have charged for the same work. It is an **estimate**, labelled as one, and kept apart from the spend; the page and `bead-supervisor stats` say so.
-
-```toml
-# ~/.config/bead-loop/config.toml (global only)
-[reference_rate]          # USD per million tokens
-input = 2.00              # tokens the model reads fresh
-output = 10.00            # tokens it writes (reasoning included)
-cache_read = 0.20         # tokens the server already held; default: the input price
-```
-
-`input` and `output` are required, `cache_read` is optional, and a price that is not a non-negative number stops the run naming the key. Price it as the stage the local models stand in for, usually the last stage's worker; the loop does not know current prices, so keep the table in step with the provider's list. Unset, the scoreboard still counts the local tokens and prices nothing.
-
-What is counted: every opencode step the harness priced at $0, in every local session: workers, reviewers, gate fixes, and the rounds that were sent back, since a metered model would have billed those too. A step with a cost, and Claude Code's sessions, are metered and left out. Aider writes no token counts, so its rounds add nothing and the figure is a floor in that respect. Set `cache_read` below `input` when the metered model would cache: local servers report the prompt they already held as cache reads, which are most of the tokens, and without the setting they are priced as fresh input and the estimate runs high.
+`claude` needs no table but `parallel`. A Claude usage limit met by any round holds every
+claude round until it resets; the other servers go on.
 
 ## Stages
 
-The failure count chooses the stage, the `[[stages]]` tables in order:
-
-Seats
-:   A `reviewer` may be a list of seats. The `approvals` key controls how many must approve:
-    - `approvals = "all"` (default): all seats must approve
-    - `approvals = "any"`: any one seat may approve
-    - `approvals = N` (number): at least N seats must approve
+The failure count chooses the stage, the `[[stages]]` tables in order. Each has `worker`
+(required), `reviewer` (none: straight to PR), `attempts` (how many failures it absorbs
+before the next takes over; `failures` also reads) and `name`.
 
 ```toml
-on_exhaust = "repeat"
+on_exhaust = "park"
 
 [[stages]]
+name = "local"
 worker = "devbox/coder"
 reviewer = "acbox/reviewer"
-failures = 3
+attempts = 2
 
 [[stages]]
-worker = "acbox/coder"
-reviewer = "acbox/reviewer"
-failures = 1
-timeout = 14400
-
-[[stages]]
+name = "frontier"
 worker = "claude/sonnet"
 reviewer = "claude/sonnet"
-failures = 1
+attempts = 1
 ```
 
-Read: a bead starts on the fast GPU worker, reviewed by gpt-oss-120b, and stays there for
-its first three failures; the fourth sends it to the 80B implementing, the same reviewer
-(four-hour timeout); the fifth to Claude; then, with `repeat`, around again until it
-lands. So "when does something get evicted to Claude" is one number: the sum of
-`failures` above the Claude stage. A stage may name `claude/<alias>` (`claude/sonnet`,
-`claude/opus`): that round runs in Claude Code instead of opencode — the frontier model
-gets only what the local ones could not land.
-
-A bead labelled `stage:NAME` starts on the stage of that `name` (default its 1-based
-index), its failure count floored to that stage's first count the first time it is
-claimed — the planner's escalate for a bead already known to be beyond the first stage.
+A bead starts on the GPU worker, reviewed by gpt-oss-120b on acbox, and stays there for its
+first two failures; the third sends it to Claude; then it parks. The same REJECT twice in a
+row skips ahead to the next stage with a different worker.
 
 ## Targets
 
-Vocabulary: a beads repo is an entry in `repos` and has `.beads/` and `.bead-loop.toml`. A
-target is a git checkout the round works in and the GitHub repo its PR goes to. Every beads
-repo has a *default target*: itself, exactly today's behaviour. More come from
-`[targets.NAME]` tables in the beads repo's `.bead-loop.toml`.
-
-A bead picks its target by label: `work:NAME` (the prefix is `target_label`, default
-`"work"`). No such label: the default target. A label naming no configured target, or two
-`work:` labels: the bead is **held** with the reason, no failure — a config mistake is the
-world's, not the bead's.
-
-The keys of a `[targets.NAME]` table, with their defaults as implemented:
+A target is another checkout a repo plans beads for, and the GitHub repo its PRs go to:
+`[targets.NAME]` in the planning repo's `.bead-loop.toml`. A bead labelled `work:NAME` is
+worked there: git in the target's checkout, bd in the planning repo, its state under the
+planning repo's. The repo itself leaves `work:*` beads to its targets.
 
 | Key | Default | What |
 | --- | --- | --- |
-| `path` | **required** | the checkout; the target's path |
-| `base` | `base_remote`'s HEAD | branch to fork from and PR into |
-| `base_remote` | `upstream` when that remote exists in the checkout, else `origin` | the base is fetched from this remote |
-| `push_remote` | `origin` | where `bead/*` branches are pushed |
-| `pr_repo` | `base_remote`'s GitHub repo | the repo the PR is opened against |
-| `setup` | none | runs in a fresh worktree before the worker (`npm ci`); not again on a branch sent back |
-| `gate` | none (CI is the gate) | runs after the worker, before the review queue; one fix round on failure |
-| `merge` | `"auto"` | `auto`: the watcher merges on green · `pipeline`: the loop labels, CI merges · `manual`: PR only, the bead held for you once green |
-| `merge_label` | `"automerge"` | the label `pipeline` puts on each PR |
-| `adopt` | `true` | open `bead/*` PRs from anyone join the loop: merged on green under `auto`, labelled under `pipeline`, the bead the branch names closed; red or conflicting, held with a note for whoever opened them. They do not count toward `max_inflight` |
-| `max_inflight` | none | a cap on PRs in the merge queue before the dev lane pauses. Unset, there is no cap: bd's dependencies are the only gate on the dev lane, and the queues absorb the rest. Set it for a repo whose CI is the scarce thing |
-| `open_pr` | `auto` when `pr_repo`'s owner is the `gh` login, else `ask` | `auto`: the loop opens the PR · `ask`: the operator opens it |
-| `pr_style` | `plain` when `open_pr` is `ask`, else `loop` | `loop`: the title is `ID: …` and the body ends "Opened by bead-loop" · `plain`: the title is the bead's title, the body is the bead's description and the worker's evidence |
+| `path` | **required** | the checkout |
+| `base` | `"main"` | the branch to fork from and PR into |
+| `base_remote` | `"origin"` | where the base is fetched from |
+| `push_remote` | `"origin"` | where `bead/*` branches are pushed: your fork |
+| `pr_repo` | the checkout's own | `owner/name` the PR is opened against; the head is `FORK_OWNER:bead/ID` |
+| `setup`, `gate` | none | as above; the planning repo's are not inherited |
+| `merge` | the repo's | as above |
+| `open_pr` | `ask` when `pr_repo` is set, else `auto` | as above |
+| `pr_style` | `plain` under `ask` | as above |
+| `max_inflight` | none | as above, for this target alone |
+| `adopt`, `feedback`, `update_behind`, `merge_label` | the repo's | as above |
 
 ## The merge, per repo
 
-- `merge = "auto"` (the default): the watcher squash-merges once every reported check
-  is green, and holds the bead for you while none is reported. Branch protection, where
-  the plan allows it, is a second lock. GitHub's own auto-merge is not used: private
-  repos need a paid plan for it.
-- `merge = "pipeline"`: the loop puts `merge_label` on each PR it opens or adopts and
-  merging is the pipeline's job — it merges the moment its own run is green, and the
-  loop never calls `gh pr merge`. The watcher sees `MERGED` and closes the bead. The
-  label must exist in the repo; if GitHub refuses it, that is noted on the bead and the
-  bead is held for you. ([pipeline.md](pipeline.md) is how this repo's pipeline does it.)
+- `merge = "auto"`: the loop squash-merges once every reported check is green, and holds
+  the bead for you while none is reported.
+- `merge = "pipeline"`: the loop puts `merge_label` on each PR and merging is the
+  pipeline's job; the watcher sees it merged and closes the bead. A green PR the pipeline
+  has not merged in 30 minutes is held. ([pipeline.md](pipeline.md) is how this repo does it.)
 - `merge = "manual"`: PR only; the bead is held for you once green.
+- `merge = "external"`: the maintainer merges; the loop waits without holding, and still
+  sends red, conflicts and review comments back.
+
+## Not read
+
+Keys from the Rust loop that the BAML loop ignores: `model` and `review_model` (name
+`[[stages]]`), `[[lanes]]` (a lane is a provider), a stage's `timeout` and seat lists
+(`approvals`), `diff_checks`, `research = "every"`, `research_aider`, `stall_compactions`,
+`stall_steps`, `attach`, `[reference_rate]`, and the provider keys `harness`, `cost`,
+`via`, `command` and `model_flag`. The labels `stage:NAME` and `harness:*` are ignored too.

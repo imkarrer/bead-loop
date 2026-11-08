@@ -77,7 +77,8 @@ function stage_of(item: baml.toml.Item) -> root.machine.Stage? throws never {
             name: text_at(t, "name"),
             worker: text_at(t, "worker"),
             reviewer: text_at(t, "reviewer"),
-            attempts: int_at(t, "attempts", 1),
+            // `failures` is the Rust loop's name for the same count, and still reads.
+            attempts: int_at(t, "attempts", int_at(t, "failures", 1)),
         }
     } else {
         null
@@ -100,8 +101,9 @@ function stages_of(t: baml.toml.Table) -> root.machine.Stage[] throws never {
 }
 
 function research_model(global: baml.toml.Table) -> string throws never {
+    // Research is on whenever a researcher is named, unless `research = "off"`.
     let mode = text_at(global, "research");
-    if (mode == "off" || mode.length() == 0) {
+    if (mode == "off") {
         ""
     } else {
         text_at(global, "research_model")
@@ -580,4 +582,27 @@ test "the binary a round runs is this process's own, not readlink's" {
     assert.equal(exe.includes("coreutils") || exe.ends_with("/readlink"), false);
     let theirs = baml.sys.run("readlink", args = ["-f", "/proc/self/exe"], capture_output = true);
     assert.equal(exe == theirs.stdout.to_string().trim(), false)
+}
+
+test "a stage's count reads as attempts or failures" {
+    let c = config_from_toml(
+        "[[stages]]\nworker = \"a/x\"\nfailures = 3\n\n[[stages]]\nworker = \"b/y\"\nattempts = 2\n",
+        "",
+        "/r",
+        "/s",
+        "b",
+    );
+    assert.equal(c.policy.stages.at(0)?.attempts, 3);
+    assert.equal(c.policy.stages.at(1)?.attempts, 2)
+}
+
+test "a named researcher runs unless research is off" {
+    assert.equal(
+        config_from_toml("", "research_model = \"acbox/coder\"\n", "/r", "/s", "b").policy.research,
+        "acbox/coder",
+    );
+    assert.equal(
+        config_from_toml("", "research_model = \"acbox/coder\"\nresearch = \"off\"\n", "/r", "/s", "b").policy.research,
+        "",
+    )
 }

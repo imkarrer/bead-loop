@@ -1,5 +1,7 @@
 # Example: a review quorum
 
+> **Status:** written for the Rust loop. The BAML loop (since 8 Nov 2026) runs a local model on any OpenAI-compatible server (`[providers.NAME] url`, e.g. Ollama's `http://localhost:11434/v1`) and `claude/*` as Claude Code. It has one reviewer per stage (no seats or quorum), and no metered API provider other than Claude Code. See [config.md](../config.md).
+
 Three reviewer seats from three families, voting: the PR opens at two approvals, and
 goes back only once two of the three have rejected it.
 

@@ -1,5 +1,7 @@
 # Example: a laptop, Ollama and a paid reviewer
 
+> **Status:** written for the Rust loop. The BAML loop (since 8 Nov 2026) runs a local model on any OpenAI-compatible server (`[providers.NAME] url`, e.g. Ollama's `http://localhost:11434/v1`) and `claude/*` as Claude Code. It has one reviewer per stage (no seats or quorum), and no metered API provider other than Claude Code. See [config.md](../config.md).
+
 One local model through opencode's Ollama support, probed on `/api/tags`; one metered
 provider as the second reviewer seat and as the stronger, last-resort stage. Two stages;
 no `[[lanes]]` table, so the loop derives one lane per provider — `ollama` and

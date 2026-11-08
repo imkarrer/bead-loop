@@ -7,7 +7,7 @@ The supervisor is one packed BAML binary, `bead-supervisor` (`baml_src/`), plus 
 
 ## The toolchain
 
-`flox activate` gives `bd`, `gh`, `opencode`, node and shellcheck. `baml-cli` is not in
+`flox activate` gives `bd`, `gh`, node and shellcheck. `baml-cli` is not in
 that env: `scripts/ensure-baml.sh` downloads the pinned static binary and prints its
 directory. To work on the repo with the engineering skills loaded, run the dev stack
 inside it: `flox activate -- nix run .#dev`.

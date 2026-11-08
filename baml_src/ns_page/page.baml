@@ -26,7 +26,11 @@ class RepoView {
 }
 
 class Status {
+    now: int,
     repos: RepoView[],
+    lanes: LaneView[],
+    scores: Score[],
+    loop: LoopView,
 }
 
 function place_name(p: root.machine.Place) -> string throws never {
@@ -123,17 +127,93 @@ function configs_of(config_file: string) -> root.supervisor.LoopConfig[] {
     out
 }
 
-function status_of(configs: root.supervisor.LoopConfig[]) -> Status throws never {
-    Status {
-        repos: configs.map((c) -> {
-            let name = if (c.only.length() > 0) {
-                `${root.supervisor.repo_name(c.beads)} → ${root.supervisor.repo_name(c.repo)}`
-            } else {
-                root.supervisor.repo_name(c.repo)
-            };
-            repo_view(name, c.state, root.supervisor.FileLog { state: c.state }, c.policy)
-        }),
+function name_of(c: root.supervisor.LoopConfig) -> string throws never {
+    if (c.only.length() > 0) {
+        `${root.supervisor.repo_name(c.beads)} → ${root.supervisor.repo_name(c.repo)}`
+    } else {
+        root.supervisor.repo_name(c.repo)
     }
+}
+
+function status_of(configs: root.supervisor.LoopConfig[]) -> Status throws never {
+    let now = root.supervisor.unix_seconds();
+    let names = configs.map((c) -> {
+        name_of(c)
+    });
+    Status {
+        now: now,
+        repos: configs.map((c) -> {
+            repo_view(name_of(c), c.state, root.supervisor.FileLog { state: c.state }, c.policy)
+        }),
+        lanes: lanes_of(configs, names, now),
+        scores: scoreboard(configs, now),
+        loop: loop_view(),
+    }
+}
+
+class ActRequest {
+    state: string?,
+    id: string?,
+    file: string?,
+    what: string?,
+}
+
+function json_reply(body: string) -> PageReply throws never {
+    PageReply { status: 200, content_type: "application/json", body: body }
+}
+
+function text_reply(status: int, body: string) -> PageReply throws never {
+    PageReply { status: status, content_type: "text/plain", body: body }
+}
+
+/// The page's other requests, each a POST with a JSON body: one bead's history, one
+/// round's log, aborting a round, and starting or stopping the loop. Only for the states
+/// the page shows. Null: not one of these.
+function act(
+    method: string,
+    path: string,
+    body: string,
+    states: string[],
+) -> PageReply? throws never {
+    let known = ["/api/bead", "/api/log", "/api/abort", "/api/loop"];
+    if (!known.includes(path)) {
+        return null;
+    }
+    if (method != "POST") {
+        return text_reply(405, "POST");
+    }
+    let req = baml.json.decode<ActRequest>(body) catch_all (e) {
+        _ => {
+            return text_reply(400, "bad request");
+        },
+    };
+    if (path == "/api/loop") {
+        let command = loop_command(req.what ?? "");
+        if let c: string = command {
+            let _ = shell_out(c);
+            return text_reply(200, `${req.what ?? ""}: done`);
+        }
+        return text_reply(400, "start, stop or restart");
+    }
+    let state = req.state ?? "";
+    if (!states.includes(state)) {
+        return text_reply(403, "not a repo this page shows");
+    }
+    if (path == "/api/bead") {
+        return json_reply(
+            baml.json.stringify(bead_detail(state, req.id ?? "")) catch_all (e) {
+                _ => "{}",
+            },
+        );
+    }
+    if (path == "/api/log") {
+        return json_reply(
+            baml.json.stringify(round_log(state, req.file ?? "")) catch_all (e) {
+                _ => "[]",
+            },
+        );
+    }
+    text_reply(200, abort_round(state, req.id ?? ""))
 }
 
 class TellRequest {
@@ -228,6 +308,10 @@ function page(config_file: string, addr: string = "127.0.0.1:4097") -> never {
         } else {
             ""
         };
+        let acted = act(req.method, path_of(req.url), req.body, states);
+        if let a: PageReply = acted {
+            return response_of(a);
+        }
         response_of(page_body(req.method, req.url, req.body, status, states))
     })
 }
@@ -238,41 +322,127 @@ function page(config_file: string, addr: string = "127.0.0.1:4097") -> never {
 const PAGE_HTML: string = `
     <!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>bead-loop</title>
     <style>
-    :root{--bg:#fdf6e3;--panel:#eee8d5;--fg:#586e75;--head:#073642;--muted:#93a1a1;--accent:#268bd2;--warn:#b58900;--bad:#dc322f;--ok:#859900}
-    @media (prefers-color-scheme:dark){:root{--bg:#002b36;--panel:#073642;--fg:#93a1a1;--head:#eee8d5;--muted:#586e75}}
-    body{font:14px/1.45 system-ui,sans-serif;background:var(--bg);color:var(--fg);margin:0;padding:16px;max-width:1100px}
-    h1{color:var(--head);font-size:18px;margin:0 0 4px}h2{color:var(--head);font-size:15px;margin:20px 0 6px}
-    .muted{color:var(--muted)}table{width:100%;border-collapse:collapse}td,th{text-align:left;padding:6px 8px;border-bottom:1px solid var(--panel);vertical-align:top}
-    th{font-weight:600;color:var(--muted);font-size:12px}.place{font-weight:600}.parked{color:var(--bad)}.merging{color:var(--ok)}.working,.reviewing,.researching{color:var(--accent)}
-    .hold{color:var(--warn)}textarea{width:100%;min-height:48px;background:var(--panel);color:var(--fg);border:1px solid var(--muted);border-radius:6px;font:inherit}
-    button{margin:4px 4px 0 0;padding:4px 10px;border-radius:6px;border:1px solid var(--muted);background:var(--panel);color:var(--head);cursor:pointer}
-    .wrap{overflow-x:auto}a{color:var(--accent)}pre{white-space:pre-wrap;margin:0}
+    :root{--bg:#fdf6e3;--panel:#eee8d5;--line:#e4dcc6;--fg:#586e75;--head:#073642;--muted:#93a1a1;--accent:#268bd2;--warn:#b58900;--bad:#dc322f;--ok:#859900;--violet:#6c71c4}
+    @media (prefers-color-scheme:dark){:root{--bg:#002b36;--panel:#073642;--line:#0d4250;--fg:#93a1a1;--head:#eee8d5;--muted:#657b83}}
+    *{box-sizing:border-box}
+    body{font:14px/1.45 system-ui,sans-serif;background:var(--bg);color:var(--fg);margin:0;padding:16px;max-width:1280px}
+    h1{color:var(--head);font-size:18px;margin:0}h2{color:var(--head);font-size:15px;margin:22px 0 8px}h3{color:var(--head);font-size:13px;margin:12px 0 4px}
+    .muted{color:var(--muted)}.mono,pre{font:12px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace}
+    pre{white-space:pre-wrap;word-break:break-word;margin:0}
+    header{display:flex;flex-wrap:wrap;align-items:center;gap:10px;margin-bottom:6px}
+    .pill{border-radius:999px;padding:2px 10px;font-size:12px;font-weight:600;background:var(--panel)}
+    .pill.active{color:var(--ok)}.pill.inactive,.pill.failed{color:var(--bad)}
+    button{padding:4px 10px;border-radius:6px;border:1px solid var(--muted);background:var(--panel);color:var(--head);cursor:pointer;font:inherit;font-size:13px}
+    button:hover{border-color:var(--accent)}
+    .grid{display:grid;gap:10px;grid-template-columns:repeat(auto-fill,minmax(300px,1fr))}
+    .card{background:var(--panel);border-radius:8px;padding:10px 12px}
+    .slot{border-top:1px solid var(--line);padding-top:6px;margin-top:6px}
+    table{width:100%;border-collapse:collapse}td,th{text-align:left;padding:5px 8px;border-bottom:1px solid var(--line);vertical-align:top}
+    th{font-weight:600;color:var(--muted);font-size:12px}
+    tr.bead{cursor:pointer}tr.bead:hover td{background:var(--panel)}
+    .place{font-weight:600}.parked{color:var(--bad)}.merging,.publishable{color:var(--ok)}.working,.reviewing,.researching{color:var(--accent)}.in_review{color:var(--violet)}
+    .hold{color:var(--warn)}
+    .wrap{overflow-x:auto}a{color:var(--accent)}
+    textarea{width:100%;min-height:52px;background:var(--bg);color:var(--fg);border:1px solid var(--muted);border-radius:6px;font:inherit}
+    #panel{position:fixed;top:0;right:0;width:min(640px,100%);height:100%;overflow:auto;background:var(--bg);border-left:1px solid var(--line);padding:16px;box-shadow:-8px 0 24px rgba(0,0,0,.15);display:none}
+    #panel.open{display:block}
+    .ev{border-bottom:1px solid var(--line);padding:6px 0}.ev b{color:var(--head)}
+    .sb td,.sb th{text-align:right}.sb td:first-child,.sb th:first-child{text-align:left}
+    details summary{cursor:pointer;color:var(--head);font-weight:600}
     </style></head><body>
-    <h1>bead-loop</h1><div class="muted" id="when">loading...</div><div id="repos"></div>
+    <header><h1>bead-loop</h1><span id="loop" class="pill">...</span><span id="since" class="muted"></span>
+    <button data-loop="start">Start</button><button data-loop="stop">Stop</button><button data-loop="restart">Restart</button>
+    <span class="muted" id="when"></span></header>
+    <h2>Lanes</h2><div id="lanes" class="grid"></div>
+    <div id="needs"></div>
+    <h2>Scoreboard</h2><div class="wrap"><table class="sb" id="scores"></table></div>
+    <div id="repos"></div>
+    <h2>Supervisor log</h2><details><summary>the last lines of the loop's journal</summary><pre id="journal" class="mono"></pre></details>
+    <div id="panel"></div>
     <script>
+    var NL=String.fromCharCode(10);
     var MAP={'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'};
+    var LAST=null;
     function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){return MAP[c];});}
     function link(u){return u&&u.indexOf('http')===0?'<a href="'+esc(u)+'" target="_blank" rel="noopener">'+esc(u.split('https://github.com/').join(''))+'</a>':esc(u);}
-    async function tell(state,id,what){var t=document.getElementById('t-'+id);var r=await fetch('/api/tell',{method:'POST',body:JSON.stringify({state:state,id:id,what:what,text:t?t.value:''})});alert(await r.text());load();}
-    function button(r,b,what,label){return '<button data-state="'+esc(r.state)+'" data-id="'+esc(b.id)+'" data-what="'+what+'">'+label+'</button>';}
-    function row(r,b){
-      var extra='';
-      if(b.place==='parked'){extra='<pre>'+esc(b.question)+'</pre><textarea id="t-'+esc(b.id)+'" placeholder="your answer"></textarea>'+button(r,b,'answer','Answer')+button(r,b,'reopen','Reopen')+button(r,b,'escalate','Escalate');}
-      else if(b.place==='publishable'){extra='open the PR: '+link(b.question);}
-      var hold=b.hold?'<div class="hold">held: '+esc(b.hold)+'</div>':'';
-      return '<tr><td>'+esc(b.id)+'</td><td class="place '+esc(b.place)+'">'+esc(b.place)+'</td><td>'+b.failures+' / '+b.rounds+'</td><td>'+link(b.pr)+hold+extra+'</td></tr>';
+    function dur(s){if(s<60)return s+'s';if(s<3600)return Math.floor(s/60)+'m';return Math.floor(s/3600)+'h '+Math.floor(s%3600/60)+'m';}
+    function ago(at,now){return at>0?dur(Math.max(0,now-at))+' ago':'';}
+    function clock(at){return at>0?new Date(at*1000).toLocaleString():'(before times were kept)';}
+    async function post(path,body){var r=await fetch(path,{method:'POST',body:JSON.stringify(body)});return r;}
+    async function tell(state,id,what){var t=document.getElementById('t-'+id);var r=await post('/api/tell',{state:state,id:id,what:what,text:t?t.value:''});alert(await r.text());load();}
+    function lane(l){
+      var h='<div class="card"><b>'+esc(l.provider)+'</b> <span class="muted">'+l.rounds.length+' / '+l.slots+' busy</span>';
+      if(!l.rounds.length)h+='<div class="slot muted">idle</div>';
+      l.rounds.forEach(function(r){
+        h+='<div class="slot"><b>'+esc(r.id)+'</b> <span class="muted">'+esc(r.repo)+'</span> &middot; '+esc(r.kind)+' on '+esc(r.model)+' &middot; '+dur(r.seconds)+
+          ' <button data-abort="'+esc(r.id)+'" data-state="'+esc(r.state)+'">Abort</button>'+
+          '<pre class="muted">'+esc(r.last.join(NL))+'</pre></div>';
+      });
+      return h+'</div>';
+    }
+    function scores(list){
+      var kinds={};list.forEach(function(s){Object.keys(s.send_backs).forEach(function(k){kinds[k]=1;});});
+      var h='<tr><th></th>'+list.map(function(s){return '<th>'+esc(s.window)+'</th>';}).join('')+'</tr>';
+      function row(label,f){return '<tr><td>'+label+'</td>'+list.map(function(s){return '<td>'+f(s)+'</td>';}).join('')+'</tr>';}
+      h+=row('Landed',function(s){return s.landed;});
+      h+=row('First try',function(s){return s.landed?s.first_try+' ('+Math.round(100*s.first_try/s.landed)+'%)':'0';});
+      h+=row('Without Claude',function(s){return s.landed?s.without_claude+' ('+Math.round(100*s.without_claude/s.landed)+'%)':'0';});
+      h+=row('Parked',function(s){return s.parked;});
+      Object.keys(kinds).sort().forEach(function(k){h+=row('<span class="muted">sent back: '+esc(k.split('_').join(' '))+'</span>',function(s){return s.send_backs[k]||0;});});
+      return h;
+    }
+    function needs(repos){
+      var items=[];
+      repos.forEach(function(r){r.beads.forEach(function(b){
+        if(b.place==='parked'){items.push('<div class="card"><b>'+esc(b.id)+'</b> <span class="muted">'+esc(r.name)+'</span> <span class="place parked">parked</span><pre>'+esc(b.question)+'</pre>'+
+          '<textarea id="t-'+esc(b.id)+'" placeholder="your answer"></textarea>'+
+          '<button data-tell="answer" data-id="'+esc(b.id)+'" data-state="'+esc(r.state)+'">Answer</button> '+
+          '<button data-tell="reopen" data-id="'+esc(b.id)+'" data-state="'+esc(r.state)+'">Reopen</button> '+
+          '<button data-tell="escalate" data-id="'+esc(b.id)+'" data-state="'+esc(r.state)+'">Escalate</button></div>');}
+        else if(b.place==='publishable'){items.push('<div class="card"><b>'+esc(b.id)+'</b> <span class="muted">'+esc(r.name)+'</span> pushed, yours to open: '+link(b.question)+'</div>');}
+        else if(b.hold){items.push('<div class="card"><b>'+esc(b.id)+'</b> <span class="muted">'+esc(r.name)+'</span> <span class="hold">held</span><pre>'+esc(b.hold)+'</pre></div>');}
+      });});
+      return items.length?'<h2>Needs you</h2><div class="grid">'+items.join('')+'</div>':'';
     }
     function repo(r){
       var head='<h2>'+esc(r.name)+' <span class="muted">'+r.beads.length+' open, '+r.closed+' closed</span></h2>';
       if(!r.beads.length)return head;
-      return head+'<div class="wrap"><table><tr><th>bead</th><th>place</th><th>failures / rounds</th><th>PR, hold, question</th></tr>'+r.beads.map(function(b){return row(r,b);}).join('')+'</table></div>';
+      return head+'<div class="wrap"><table><tr><th>bead</th><th>place</th><th>failures / rounds</th><th>PR, hold</th></tr>'+r.beads.map(function(b){
+        return '<tr class="bead" data-bead="'+esc(b.id)+'" data-state="'+esc(r.state)+'"><td>'+esc(b.id)+'</td><td class="place '+esc(b.place)+'">'+esc(b.place.split('_').join(' '))+'</td><td>'+b.failures+' / '+b.rounds+'</td><td>'+link(b.pr)+(b.hold?'<div class="hold">held: '+esc(b.hold)+'</div>':'')+'</td></tr>';
+      }).join('')+'</table></div>';
     }
     async function load(){
-      var s=await (await fetch('/api/status')).json();
+      var s=await (await fetch('/api/status')).json();LAST=s;
+      var l=document.getElementById('loop');l.textContent='loop '+s.loop.active;l.className='pill '+s.loop.active;
+      document.getElementById('since').textContent=s.loop.since?'since '+s.loop.since:'';
       document.getElementById('when').textContent='as of '+new Date().toLocaleTimeString();
+      document.getElementById('lanes').innerHTML=s.lanes.map(lane).join('');
+      document.getElementById('needs').innerHTML=needs(s.repos);
+      document.getElementById('scores').innerHTML=scores(s.scores);
       document.getElementById('repos').innerHTML=s.repos.map(repo).join('');
+      document.getElementById('journal').textContent=s.loop.journal.join(NL);
     }
-    document.addEventListener('click',function(e){var d=e.target.dataset;if(d&&d.what)tell(d.state,d.id,d.what);});
+    async function open_bead(state,id){
+      var d=await (await post('/api/bead',{state:state,id:id})).json();var now=LAST?LAST.now:0;
+      var h='<button data-close="1">Close</button><h2>'+esc(d.id)+'</h2>';
+      if(d.park)h+='<h3>The question</h3><pre>'+esc(d.park)+'</pre>';
+      if(d.brief)h+='<details><summary>The research brief</summary><pre>'+esc(d.brief)+'</pre></details>';
+      if(d.report)h+='<details><summary>The last report</summary><pre>'+esc(d.report)+'</pre></details>';
+      h+='<h3>History</h3>'+d.events.slice().reverse().map(function(e){return '<div class="ev"><b>'+esc(e.kind.split('_').join(' '))+'</b> <span class="muted" title="'+esc(clock(e.at))+'">'+esc(ago(e.at,now))+'</span>'+(e.text?'<pre>'+esc(e.text)+'</pre>':'')+'</div>';}).join('');
+      if(d.logs.length)h+='<h3>Round logs</h3>'+d.logs.map(function(f){return '<div><a href="#" data-log="'+esc(f)+'" data-state="'+esc(state)+'">'+esc(f)+'</a></div>';}).join('')+'<pre id="roundlog" class="mono"></pre>';
+      var p=document.getElementById('panel');p.innerHTML=h;p.className='open';
+    }
+    async function open_log(state,file){var lines=await (await post('/api/log',{state:state,file:file})).json();document.getElementById('roundlog').textContent=lines.join(NL)||'(empty)';}
+    document.addEventListener('click',async function(e){
+      var t=e.target,d=t.dataset||{};
+      if(d.tell){tell(d.state,d.id,d.tell);return;}
+      if(d.loop){if(confirm(d.loop+' the loop?')){var r=await post('/api/loop',{what:d.loop});alert(await r.text());load();}return;}
+      if(d.abort){if(confirm('Abort '+d.abort+'? The loop starts it again, no failure charged.')){var r2=await post('/api/abort',{state:d.state,id:d.abort});alert(await r2.text());load();}return;}
+      if(d.close){document.getElementById('panel').className='';return;}
+      if(d.log){e.preventDefault();open_log(d.state,d.log);return;}
+      var row=t.closest&&t.closest('tr.bead');if(row){open_bead(row.dataset.state,row.dataset.bead);}
+    });
+    document.addEventListener('keydown',function(e){if(e.key==='Escape')document.getElementById('panel').className='';});
     load();setInterval(function(){var a=document.activeElement;if(!a||a.tagName!=='TEXTAREA')load();},5000);
     </script></body></html>
 `;
@@ -329,4 +499,19 @@ test "the page's script parses as served" {
     let out = baml.sys.run("node", args = ["--check", path], capture_output = true);
     assert.equal(out.stderr.to_string(), "");
     assert.equal(out.exit_code, 0)
+}
+
+test "the page's other requests are POSTs for the states it shows" {
+    assert.equal(act("GET", "/", "", ["/s"]) == null, true);
+    assert.equal(act("GET", "/api/bead", "", ["/s"])?.status, 405);
+    assert.equal(act("POST", "/api/bead", "{\"state\":\"/etc\",\"id\":\"x\"}", ["/s"])?.status, 403);
+    assert.equal(
+        act("POST", "/api/abort", "{\"state\":\"/etc\",\"id\":\"x\"}", ["/s"])?.status,
+        403,
+    );
+    assert.equal(act("POST", "/api/loop", "{\"what\":\"rm\"}", ["/s"])?.status, 400);
+    assert.equal(
+        act("POST", "/api/bead", "{\"state\":\"/s\",\"id\":\"t-1\"}", ["/s"])?.content_type,
+        "application/json",
+    )
 }

@@ -2,7 +2,7 @@
 
 The config this repo is run with, copied from the live files and scrubbed of repo names.
 Two machines on the home network, each served by [agent-hub](https://github.com/imkarrer/agent-hub)
-on port 8100, which opencode reaches as a provider each:
+on port 8100, an OpenAI-compatible server each, which the loop's rounds call directly:
 
 - **devbox**: the dev machine, a WSL2 NixOS box with an RTX 4080 (16 GB). It runs
   Qwen3-Coder-30B (`devbox/coder`), the first stage's worker.
@@ -29,35 +29,24 @@ model = "devbox/coder"           # worker, when no [[stages]] table applies
 worker_timeout = 3600            # seconds per model session
 max_open_prs = 1                 # one open PR at a time across every repo and target
 max_inflight = 100               # no cap: bd's dependencies are the only gate
-attach = "http://127.0.0.1:4096" # sessions run inside opencode-web.service; watch them live in the browser
 on_exhaust = "park"              # after the last stage: park for you, rather than repeat
 
 # A ready bead goes to the 80B first, which reads the repo and writes a brief — Files /
 # Shape / Check / Pitfalls — that every worker prompt then carries; "first" runs it once,
-# before round 1. A brief whose Files all exist puts the worker under aider;
-# `harness:opencode` on a bead opts out.
+# before round 1. On acbox, so it runs while the GPU works another bead.
 research_model = "acbox/coder"
 research = "first"
-research_aider = true
 
-# precheck_model = "acbox/utility"  # off: the 4B model's look before review needs a slot on
-#                                   # acbox beside the reviewer's, so acbox gets parallel = 2 first
+precheck_model = "acbox/utility"   # the 4B model reads the diff after the gate; SEND BACK is a failure
 
-[reference_rate]          # USD per million tokens: what the scoreboard prices the local tokens at
-input = 2.00              # tokens the model reads fresh
-output = 10.00            # tokens it writes (reasoning included)
-cache_read = 0.20         # tokens the server already held
-
-[providers.devbox]               # Qwen3-Coder-30B on the RTX 4080, through opencode
-probe = "http://127.0.0.1:8100/health"
+[providers.devbox]               # Qwen3-Coder-30B on the RTX 4080
+probe = "http://127.0.0.1:8100/health"  # the rounds call http://127.0.0.1:8100/v1
 
 [providers.acbox]                # the HP Z840's CPU: the 80B, gpt-oss-120b, the 4B utility model
 probe = "http://192.168.1.51:8100/health"
 
-[providers.claude]               # the Claude Code subscription: the last stage
-harness = "claude-code"
+[providers.claude]               # the Claude Code subscription: the last stage, one turn each
 parallel = 2
-cost = "metered"
 
 # Escalation, in order: two attempts on the local stage, then Sonnet once; after that the
 # bead parks for you. There is no CPU stage between them (acbox/coder as a worker landed
@@ -97,7 +86,7 @@ Every key here wins over the same key in the global file. The three shapes in us
 
 A repo whose CI is a Buildkite pipeline. The loop labels each green PR and the pipeline's
 automerge step merges it. This repo's own [.bead-loop.toml](../../.bead-loop.toml) is the
-same shape, with a cargo gate.
+same shape, with a BAML gate.
 
 ```toml
 label = "delegate:local"
@@ -151,11 +140,10 @@ habit, a blind spot — that a same-family review would miss. The 80B does the r
 round rather than the reviewer's job because it is too slow to sit in an edit loop but
 good enough to spend once, up front, turning a bead that names no files into one that
 does; it picks up work only when the CPU lane has no review waiting, so the GPU never
-waits on it. The 4B pre-check is written down but off until acbox has the second slot.
+waits on it. The 4B pre-check reads each diff after the gate, before the 120B does.
 Claude Code is the last stage because it never exhausts and never needs a local server up;
 a bead two local attempts could not land is worth the metered cost rather than a park.
-`[reference_rate]` prices the local tokens as if a metered model had billed them, so the
-scoreboard can say what the GPU saved. `max_open_prs = 1` keeps one PR open across every repo
+`max_open_prs = 1` keeps one PR open across every repo
 and target, so a queue of PRs on someone else's repository never becomes a queue of review
 for them.
 

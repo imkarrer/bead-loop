@@ -7,18 +7,32 @@ The loop is one packed BAML binary, `~/.local/bin/bead-supervisor`
 
 ## The page
 
-**<http://127.0.0.1:4097>** — `bead-loop-ui.service`, which runs `bead-supervisor page`
-(`bin/bead-loop-ui` is the two-line wrapper). One section per repo and target: every bead
-that is not closed, where it is (ready, researching, working, in review, reviewing,
-publishable, merging, parked), its failures and rounds, its PR, and why it is held when
-it is. A **parked** bead shows its question and takes **Answer** (your text becomes its
-next round's note and one failure is forgiven), **Reopen** (back to its queue as it was)
-or **Escalate** (straight to the last stage). A **publishable** bead (`open_pr = "ask"`)
-shows the compare link to open its PR; the loop picks the PR up once it exists.
+**<http://127.0.0.1:4097>**: `bead-loop-ui.service`, which runs `bead-supervisor page`
+(`bin/bead-loop-ui` is the two-line wrapper). It starts at boot and comes back after a
+crash. Top to bottom, refreshed every five seconds:
 
-The page refreshes every five seconds, folding each repo's event log afresh. It never
-asks bd, git or gh and never starts anything: the levers leave mail in the repo's inbox,
-which the loop takes on its next tick.
+- **The header**: the loop up or down and since when, with **Start**, **Stop** (the
+  keeper timer too, so it stays down) and **Restart** (a config edit takes effect).
+- **Lanes**: one card per model server (devbox, acbox, claude), with how many of its
+  slots are busy, and for each round on it the bead, its repo, research, work or review,
+  the model, how long, and its last six tool calls. **Abort** stops the round and all it
+  started; the loop starts it again with no failure.
+- **Needs you**: each parked bead with its question and **Answer** (your text becomes
+  the next round's note, one failure forgiven), **Reopen** and **Escalate** (straight to
+  the last stage); each pushed branch waiting for you to open its PR; each held bead with
+  its reason.
+- **Scoreboard**, over 24h, 7d, 30d and all: landed, first try (no send-back), without
+  Claude (no round on a `claude/*` stage), parked, and the send-backs by kind.
+- **Each repo and target**: every bead that is not closed, its place, failures and
+  rounds, its PR, its hold. **Click a bead** for its panel: every event with its whole
+  text (the work order, the gate's output, the pre-check's block, CI's checks), the
+  brief, the last report, the park question, and each round's tool calls.
+- **Supervisor log**: the loop's journal, one line per event.
+
+The page folds each repo's event log afresh on every refresh and never asks bd, git or
+gh, so it cannot take a round's result or start anything. Its levers leave mail in the
+repo's inbox (taken on the next tick), signal a round's process group, or call
+`systemctl --user` for the loop's units.
 
 ## The terminal
 
@@ -26,7 +40,7 @@ which the loop takes on its next tick.
 journalctl --user -u bead-supervisor.service -f -o cat     # the loop's own lines
 bead-supervisor tell --config_file ~/src/repo/.bead-loop.toml --id ID --what answer --text "..."
 bead-supervisor lint --config_file ~/src/repo/.bead-loop.toml --ids "ID ID" --run true
-cat ~/.local/state/bead-loop/<repo>/baml/beads/<id>/events.jsonl   # one bead's history
+cat ~/.local/state/bead-loop/<repo>/baml/beads/<id>/events.jsonl   # one bead's history, each event with its time
 ```
 
 `tell` is the page's levers: `--what` is `answer`, `reopen` or `escalate`. A bead

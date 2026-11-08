@@ -1,5 +1,7 @@
 # Example: API-only, no local model
 
+> **Status:** written for the Rust loop. The BAML loop (since 8 Nov 2026) runs a local model on any OpenAI-compatible server (`[providers.NAME] url`, e.g. Ollama's `http://localhost:11434/v1`) and `claude/*` as Claude Code. It has one reviewer per stage (no seats or quorum), and no metered API provider other than Claude Code. See [config.md](../config.md).
+
 No server to keep up: one provider, reached over the network, wide enough to run several
 beads at once. One stage — there is nothing to escalate to.
 
