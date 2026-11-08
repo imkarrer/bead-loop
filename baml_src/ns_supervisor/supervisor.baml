@@ -30,6 +30,9 @@ class Supervisor {
     /// Ticks a hold lasts before the bead is tried again.
     hold_ticks: int,
     held_for: map<string, int>,
+    /// Each bead's title, from the tickets or asked once; and the closed beads' tallies.
+    titles: map<string, string>,
+    tallies: map<string, FTally>,
 
     function new(
         world: root.world.World,
@@ -52,6 +55,8 @@ class Supervisor {
             ready: [],
             hold_ticks: 5,
             held_for: {},
+            titles: {},
+            tallies: {},
         }
     }
 
@@ -251,6 +256,7 @@ function tick(s: Supervisor) -> void throws never {
     admit_tickets(s);
     expire_holds(s);
     start_rounds(s);
+    write_view(s, alive);
 }
 
 /// A bead on a round whose process is gone and left no result: the round died (killed,
@@ -294,7 +300,26 @@ function take_inbox(s: Supervisor) -> void throws never {
         },
     };
     for (let m in mail) {
-        apply(s, m.id, m.event);
+        if let e: root.machine.Event = m.event {
+            apply(s, m.id, e);
+        }
+        if let o: root.world.Order = m.order {
+            carry_out(s, m.id, o);
+        }
+    }
+}
+
+/// An order from the page or `tell`: the supervisor is the one that acts on a bead.
+function carry_out(s: Supervisor, id: string, o: root.world.Order) -> void throws never {
+    match (o) {
+        let x: root.world.AbortOrder => s.world.abort(id),
+        let x: root.world.NoteOrder => {
+            let _ = s.world.note(id, `operator: ${x.text}`) catch (e) {
+                root.machine.Infra => {
+                    log.warn(`${id}: note: ${e.words}`);
+                },
+            };
+        },
     }
 }
 
@@ -350,6 +375,7 @@ function admit_tickets(s: Supervisor) -> void throws never {
             t.id
         });
     for (let t in tickets) {
+        let _ = s.titles.set(t.id, t.title);
         if (s.bead(t.id) == null) {
             s.put(root.machine.Bead.new(t.id));
         }

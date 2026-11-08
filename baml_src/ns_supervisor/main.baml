@@ -21,6 +21,9 @@ class LoopConfig {
     work_seconds: int,
     research_seconds: int,
     sandbox: bool,
+    /// Beyond its own places, what a sandboxed round may write: another env its gate
+    /// activates (`flox activate -d ~/src/other` writes that repo's .flox).
+    sandbox_writable: string[],
     /// Each provider's server: `url`, or its `probe` with `/health` made `/v1`.
     urls: map<string, string>,
     precheck: string,
@@ -57,6 +60,7 @@ function world_of(c: LoopConfig) -> root.world.LiveWorld throws never {
         work_seconds: c.work_seconds,
         research_seconds: c.research_seconds,
         sandbox: c.sandbox,
+        sandbox_writable: c.sandbox_writable,
         urls: c.urls,
         precheck: c.precheck,
     }
@@ -277,6 +281,15 @@ function mail_to(state: string, id: string, event: root.machine.Event) -> string
     let _ = baml.sys.run("mkdir", args = ["-p", dir]);
     let path = `${dir}/${id}.${baml.sys.pid()}.${unix_seconds()}.json`;
     baml.fs.write(path, baml.json.stringify(root.world.Mail { id: id, event: event }));
+    path
+}
+
+/// An order in the repo's inbox, for the supervisor to carry out on its next tick.
+function order_to(state: string, id: string, order: root.world.Order) -> string {
+    let dir = `${state}/inbox`;
+    let _ = baml.sys.run("mkdir", args = ["-p", dir]);
+    let path = `${dir}/${id}.${baml.sys.pid()}.${unix_seconds()}.json`;
+    baml.fs.write(path, baml.json.stringify(root.world.Mail { id: id, event: null, order: order }));
     path
 }
 

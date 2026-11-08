@@ -40,7 +40,8 @@ tools; any other runs `MODEL` on that provider's OpenAI-compatible server
 | `max_open_prs` | none | global only: the dev lane pauses while this many own PRs are open across a repo and all its targets |
 | `open_pr` | `"auto"` | `ask`: push the branch and stop at a compare link for you to open; the loop picks the PR up once it exists |
 | `pr_style` | `plain` under `ask`, else `loop` | `loop`: the title is `ID: title` and the body the bead · `plain`: the bead's title and description |
-| `sandbox` | `false` | run each round under bwrap: only its worktree, the git dir, the state dir and `/tmp` writable. A gate that writes a cache outside them (`flox activate`, `npm ci`) fails under it, and the network is not cut yet |
+| `sandbox` | `false` | run each round under bwrap. Writable: its worktree, the repo's git dir, its own `beads/ID`, the `logs` and `rounds` folders, `/tmp`, the build caches (`~/.cache`, `~/.npm`, `~/.local/share/flox`, flox's activations) and, for a Claude round, `~/.claude`. Read-only: everything else, so a round cannot forge another bead's log, its inbox or the page's view. Hidden: `~/.config/gh`, `~/.ssh`, the loop's config and the runtime dir (its `docker.sock`). The network is not cut |
+| `sandbox_writable` | `[]` | more paths a sandboxed round may write, `~` allowed: another repo's `.flox` a gate activates with `flox activate -d` |
 | `target_label` | `"work"` | the label prefix that names a target: `work:NAME` sends a bead to `[targets.NAME]` |
 | `heartbeat_seconds` | `30` | global only: the pause between ticks |
 

@@ -45,6 +45,7 @@ class LiveWorld {
     /// state and /tmp writable. Off by default: a gate that writes a cache (flox, npm,
     /// pip) fails read-only, and the network is not cut yet.
     sandbox: bool,
+    sandbox_writable: string[],
     /// Each provider's server, from `[providers.NAME]`.
     urls: map<string, string>,
     /// The pre-check model; empty is none.
@@ -326,6 +327,7 @@ class LiveWorld {
                 brief_file: `${self.state}/beads/${id}/brief`,
                 log_file: `${self.state}/logs/${id}.${stamp}.${kind}.jsonl`,
                 result_file: `${dir}/${id}.result.json`,
+                started: root.supervisor.unix_seconds(),
             };
             let started = self.launch(id, spec) catch_all (e) {
                 _ => {
@@ -344,11 +346,16 @@ class LiveWorld {
                     _ => false,
                 };
                 if (alive && pid.trim().length() > 0) {
+                    let spec = self.read_spec(name) catch_all (e) {
+                        _ => null,
+                    };
                     out.push(
                         RoundRunning {
                             id: name,
-                            kind: self.kind_of(name),
-                            model: self.model_of(name),
+                            kind: spec?.kind ?? RoundKind.Work,
+                            model: spec?.model ?? "",
+                            since: spec?.started ?? 0,
+                            log: spec?.log_file ?? "",
                         },
                     );
                 }
@@ -565,6 +572,17 @@ class LiveWorld {
             let _ = self.tool(root.machine.Trouble.Bd, "bd", ["note", id, `bead-loop: ${text}`], self.beads);
         }
 
+        function abort(self, id: string) -> void throws never {
+            let _ = stop_round(self.rounds(), id);
+        }
+
+        function title_of(self, id: string) -> string throws never {
+            let row = self.bead_row(id) catch_all (e) {
+                _ => null,
+            };
+            row?.title ?? ""
+        }
+
         function mark(
             self,
             id: string,
@@ -645,7 +663,20 @@ class LiveWorld {
         } else {
             ""
         };
-        let argv = round_argv(bwrap, self.agent_bin, spec_file, spec.dir, self.repo, self.state);
+        let home = root.supervisor.home_dir();
+        let jail = Jail {
+            id: id,
+            home: home,
+            claude: root.agents.uses_claude(spec.model),
+            runtime: runtime_dir(),
+            extra: self.sandbox_writable,
+            present: jail_paths(home, runtime_dir()).concat(self.sandbox_writable).filter((p) -> {
+                baml.fs.exists(p) catch_all (e) {
+                    _ => false,
+                }
+            }),
+        };
+        let argv = round_argv(bwrap, self.agent_bin, spec_file, spec.dir, self.repo, self.state, jail);
         let seconds = if (spec.kind == RoundKind.Research) {
             self.research_seconds
         } else {
@@ -659,6 +690,7 @@ class LiveWorld {
             env = {
                 "BAML_HOME": `${self.repo}/.baml`,
                 "BAML_CONTEXT": trace_context(spec.id, kind_name(spec.kind), spec.log_file),
+                "BEAD_LOOP_WORKTREE": spec.dir,
             },
             stdin = "ignore",
             stdout = "ignore",
@@ -951,11 +983,55 @@ function bwrap_path() -> string throws never {
     }
 }
 
-/// The round process. With bwrap the worktree, the git dir, the state dir and the
-/// trace directory are writable and the rest of the filesystem is not, so a model
-/// cannot write the checkout it was not given. The network stays, because the
-/// model server is on it. Traces go to `<repo>/.baml/btel`, which is where
-/// `baml query --local` reads them.
+/// XDG_RUNTIME_DIR, or "" when there is none.
+function runtime_dir() -> string throws never {
+    let out = baml.sys.run("printenv", args = ["XDG_RUNTIME_DIR"], capture_output = true) catch_all (e) {
+        _ => {
+            return "";
+        },
+    };
+    out.stdout.to_string().trim()
+}
+
+/// Where a sandboxed round may write, and what it may not see.
+class Jail {
+    /// The bead's id: only its own beads/ID is writable, not the other beads' logs.
+    id: string,
+    home: string,
+    /// A claude/* round: Claude Code keeps its sign-in and settings under home.
+    claude: bool,
+    /// XDG_RUNTIME_DIR: hidden whole (it holds docker.sock, and a socket is reachable
+    /// through a read-only mount), with flox's activations bound back for the gate.
+    runtime: string,
+    /// What the config adds to the writable places (`sandbox_writable`).
+    extra: string[],
+    /// Of the optional paths below, the ones that exist on this box: bwrap cannot mount
+    /// over a path that is not there.
+    present: string[],
+}
+
+/// The paths a round may want but that need not exist: the build caches a gate writes
+/// (flox, npm), Claude Code's own files, and the credentials it must not see.
+function jail_paths(home: string, runtime: string) -> string[] throws never {
+    [
+        `${runtime}/activations`,
+        `${home}/.cache`,
+        `${home}/.npm`,
+        `${home}/.local/share/flox`,
+        `${home}/.claude`,
+        `${home}/.claude.json`,
+        `${home}/.config/gh`,
+        `${home}/.ssh`,
+        `${home}/.config/bead-loop`,
+    ]
+}
+
+/// The round process. Under bwrap the filesystem is read-only but for the round's own
+/// places: its worktree, the git dir its commits go to, the trace dir, its bead's folder
+/// (report, brief), the logs and rounds folders (its log, its result), /tmp, and the build
+/// caches. The inbox, the other beads' event logs and the page's view stay read-only, so
+/// a round cannot forge another bead's history or mail the loop. The gh token and ssh keys
+/// are hidden behind an empty dir: a round never pushes, the supervisor does.
 function round_argv(
     bwrap: string,
     bin: string,
@@ -963,56 +1039,122 @@ function round_argv(
     worktree: string,
     repo: string,
     state: string,
+    jail: Jail,
 ) -> string[] throws never {
     if (bwrap.length() == 0) {
         return [bin, "round", "--spec_file", spec_file];
     }
-    [
-        bwrap,
-        "--ro-bind",
-        "/",
-        "/",
-        "--bind",
+    let h = jail.home;
+    let rw = [
         worktree,
-        worktree,
-        "--bind",
         `${repo}/.git`,
-        `${repo}/.git`,
-        "--bind",
         `${repo}/.baml/btel`,
-        `${repo}/.baml/btel`,
-        "--bind",
-        state,
-        state,
-        "--bind",
+        `${state}/beads/${jail.id}`,
+        `${state}/logs`,
+        `${state}/rounds`,
         "/tmp",
-        "/tmp",
-        "--dev",
-        "/dev",
-        "--proc",
-        "/proc",
-        "--chdir",
-        worktree,
-        "--",
-        bin,
-        "round",
-        "--spec_file",
-        spec_file,
-    ]
+    ];
+    for (let p in jail.extra) {
+        if (jail.present.includes(p)) {
+            rw.push(p);
+        }
+    }
+    for (let p in [`${h}/.cache`, `${h}/.npm`, `${h}/.local/share/flox`]) {
+        if (jail.present.includes(p)) {
+            rw.push(p);
+        }
+    }
+    if (jail.claude) {
+        for (let p in [`${h}/.claude`, `${h}/.claude.json`]) {
+            if (jail.present.includes(p)) {
+                rw.push(p);
+            }
+        }
+    }
+    let out = [bwrap, "--ro-bind", "/", "/"];
+    for (let p in rw) {
+        out.push("--bind");
+        out.push(p);
+        out.push(p);
+    }
+    for (let p in [`${h}/.config/gh`, `${h}/.ssh`, `${h}/.config/bead-loop`]) {
+        if (jail.present.includes(p)) {
+            out.push("--tmpfs");
+            out.push(p);
+        }
+    }
+    if (jail.runtime.length() > 0) {
+        out.push("--tmpfs");
+        out.push(jail.runtime);
+        let act = `${jail.runtime}/activations`;
+        if (jail.present.includes(act)) {
+            out.push("--bind");
+            out.push(act);
+            out.push(act);
+        }
+    }
+    for (
+        let x in [
+            "--dev",
+            "/dev",
+            "--proc",
+            "/proc",
+            "--chdir",
+            worktree,
+            "--",
+            bin,
+            "round",
+            "--spec_file",
+            spec_file,
+        ]
+    ) {
+        out.push(x);
+    }
+    out
 }
 
-test "a round is sandboxed when bwrap is there" {
-    let args = round_argv("bwrap", "bead-loop", "/state/rounds/t-1.spec.json", "/state/wt/t-1", "/repo", "/state");
+test "a round is sandboxed when bwrap is there, writing only its own places" {
+    let jail = Jail {
+        id: "t-1",
+        home: "/h",
+        claude: false,
+        runtime: "/run/user/1",
+        extra: [],
+        present: ["/h/.cache", "/h/.config/gh", "/h/.claude"],
+    };
+    let args = round_argv("bwrap", "bead-loop", "/state/rounds/t-1.spec.json", "/state/wt/t-1", "/repo", "/state", jail);
+    let line = args.join(" ");
     assert.equal(args.at(0), "bwrap");
-    assert.contains(args.join(" "), "--ro-bind");
-    assert.contains(args.join(" "), "--bind /state/wt/t-1 /state/wt/t-1");
-    assert.contains(args.join(" "), "--bind /repo/.git /repo/.git");
-    assert.contains(args.join(" "), "--bind /repo/.baml/btel /repo/.baml/btel");
+    assert.contains(line, "--ro-bind / /");
+    assert.contains(line, "--bind /state/wt/t-1 /state/wt/t-1");
+    assert.contains(line, "--bind /repo/.git /repo/.git");
+    assert.contains(line, "--bind /state/beads/t-1 /state/beads/t-1");
+    assert.contains(line, "--bind /h/.cache /h/.cache");
+    assert.contains(line, "--tmpfs /h/.config/gh");
+    assert.contains(line, "--tmpfs /run/user/1");
+    assert.is_true(!line.includes("--bind /state /state"));
+    assert.is_true(!line.includes("/h/.claude"));
+    assert.is_true(!line.includes("/h/.npm"));
     assert.equal(args.at(args.length() - 1), "/state/rounds/t-1.spec.json")
 }
 
+test "a Claude round keeps Claude Code's own files writable" {
+    let jail = Jail {
+        id: "t-1",
+        home: "/h",
+        claude: true,
+        runtime: "/run/user/1",
+        extra: [],
+        present: ["/h/.claude", "/h/.claude.json"],
+    };
+    let line = round_argv("bwrap", "b", "s", "/w", "/r", "/s", jail).join(" ");
+    assert.contains(line, "--bind /h/.claude /h/.claude");
+    assert.contains(line, "--bind /h/.claude.json /h/.claude.json")
+}
+
 test "without bwrap the round is the binary itself" {
-    let args = round_argv("", "bead-loop", "spec.json", "/wt", "/repo", "/state");
+    let jail = Jail { id: "t-1", home: "/h", claude: false, runtime: "/run/user/1", extra: [], present: [] };
+    let args = round_argv("", "bead-loop", "spec.json", "/wt", "/repo", "/state", jail);
     assert.equal(args, ["bead-loop", "round", "--spec_file", "spec.json"])
 }
 
@@ -1347,4 +1489,73 @@ test "a move is one bd update with only what changed" {
         "update t-1 --status in_progress --remove-label loop:ready --add-label loop:work",
     );
     assert.equal(mark_args("t-1", "", "loop:work", "loop:work").join(" "), "update t-1")
+}
+
+/// Stop a round and everything it started: its wrapper's process group, then each child's,
+/// since `timeout` makes a group of its own.
+function stop_round(rounds: string, id: string) -> string throws never {
+    if (id.includes("/") || id.includes("..")) {
+        return "no such round";
+    }
+    let pid = (
+        baml.fs.read(`${rounds}/${id}.pid`) catch_all (e) {
+            _ => "",
+        }
+    )
+        .trim();
+    if (pid.length() == 0) {
+        return "no such round";
+    }
+    let n = baml.json.decode<int>(pid) catch_all (e) {
+        _ => {
+            return "no such round";
+        },
+    };
+    let _ = baml.sys.shell(
+        `for c in $(pgrep -P ${n}); do kill -TERM -- -$c 2>/dev/null || kill -TERM $c; done; kill -TERM -- -${n} 2>/dev/null || kill -TERM ${n} 2>/dev/null`,
+        capture_output = true,
+    ) catch_all (e) {
+        _ => null,
+    };
+    `aborted ${id}: the loop starts it again on its next tick`
+}
+
+test "abort stops the round under timeout, not only its wrapper" {
+    let state = root.tools.scratch("abort");
+    let _ = baml.sys.run("rm", args = ["-rf", state]);
+    let _ = baml.sys.run("mkdir", args = ["-p", `${state}/rounds`]);
+    let mark = `${state}/rounds/t-1.timedout`;
+    let child = baml.sys.subprocess(
+        "/bin/sh",
+        args = root.world.timed_argv(["sleep", "30"], 60, mark),
+        stdin = "ignore",
+        stdout = "ignore",
+        stderr = "ignore",
+        detached = true,
+    );
+    baml.fs.write(`${state}/rounds/t-1.pid`, `${child.pid}`);
+    baml.sys.sleep(baml.time.Duration.from_seconds(1));
+    let in_session = `ps -o pid= -s ${child.pid} | wc -l`;
+    assert.equal(
+        baml.sys.shell(in_session, capture_output = true).stdout.to_string().trim() == "0",
+        false,
+    );
+    let said = stop_round(`${state}/rounds`, "t-1");
+    assert.contains(said, "aborted t-1");
+    baml.sys.sleep(baml.time.Duration.from_seconds(1));
+    assert.equal(baml.sys.shell(in_session, capture_output = true).stdout.to_string().trim(), "0")
+}
+
+test "a path the config makes writable is bound, if it is there" {
+    let jail = Jail {
+        id: "t-1",
+        home: "/h",
+        claude: false,
+        runtime: "",
+        extra: ["/h/src/env/.flox", "/h/gone"],
+        present: ["/h/src/env/.flox"],
+    };
+    let line = round_argv("bwrap", "b", "s", "/w", "/r", "/s", jail).join(" ");
+    assert.contains(line, "--bind /h/src/env/.flox /h/src/env/.flox");
+    assert.is_true(!line.includes("/h/gone"))
 }

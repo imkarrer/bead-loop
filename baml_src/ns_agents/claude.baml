@@ -10,40 +10,26 @@
 // parked. Before that, fourteen rounds failed on "the Claude Code CLI exited with code 1",
 // with the reason in a stream nobody kept.
 
-/// Claude Code's own tools, by role: the worker edits and runs; a reviewer reads, with
-/// git's reading commands (the Rust loop's sets, src/harness.rs before the rebuild).
+/// Claude Code's own tools, by role. The worker edits and runs in its worktree. A reviewer
+/// only reads: the diff is in its prompt, so it has no shell at all (a "read-only" shell
+/// allow-list is not one: `rg --pre` runs commands and `git diff --output` writes files).
 function claude_tools(writes: bool) -> string[] throws never {
     if (writes) {
         ["Read", "Edit", "Write", "Glob", "Grep", "Bash"]
     } else {
-        ["Read", "Glob", "Grep", "Bash"]
+        ["Read", "Glob", "Grep"]
     }
 }
 
-/// What runs without asking. A -p session has no one to ask, so anything else is refused.
+/// What runs without asking; a -p session has no one to ask, so anything else is refused.
+/// Reading, editing and writing are allowed under the round's working directory, its
+/// worktree, and nowhere else.
 function claude_allowed(writes: bool) -> string throws never {
     if (writes) {
-        return "Read,Edit,Write,Glob,Grep,Bash";
+        "Read(./**),Edit(./**),Write(./**),Glob,Grep,Bash"
+    } else {
+        "Read(./**),Glob,Grep"
     }
-    let reads = [
-        "git diff *",
-        "git log *",
-        "git show *",
-        "git status *",
-        "git grep *",
-        "git blame *",
-        "git ls-files *",
-        "git rev-parse *",
-        "git merge-base *",
-        "cat *",
-        "ls *",
-        "rg *",
-        "grep *",
-    ];
-    let bash = reads.map((r: string) -> {
-        `Bash(${r})`
-    });
-    `Read,Glob,Grep,${bash.join(",")}`
 }
 
 /// The wrapper's text: the CLI with the allow-list, its stream teed into `log`, its stderr
@@ -136,18 +122,18 @@ function claude_said(log: string) -> string throws never {
     }
 }
 
-test "the worker may edit and the reviewer only reads" {
+test "the worker may edit and the reviewer only reads, neither outside the worktree" {
     assert.contains(claude_tools(true).join(","), "Edit");
     assert.is_true(!claude_tools(false).join(",").includes("Edit"));
-    assert.contains(claude_allowed(false), "Bash(git diff *)");
-    assert.is_true(!claude_allowed(false).includes("Bash,"));
-    assert.equal(claude_allowed(true), "Read,Edit,Write,Glob,Grep,Bash")
+    assert.is_true(!claude_tools(false).join(",").includes("Bash"));
+    assert.equal(claude_allowed(false), "Read(./**),Glob,Grep");
+    assert.contains(claude_allowed(true), "Edit(./**)")
 }
 
 test "the wrapper tees the stream into the log and keeps the CLI's status" {
     let w = claude_wrapper("/s/logs/x.1.Work.jsonl", true);
     assert.contains(w, "log='/s/logs/x.1.Work.jsonl'");
-    assert.contains(w, "'--allowedTools=Read,Edit,Write,Glob,Grep,Bash'");
+    assert.contains(w, "'--allowedTools=Read(./**),Edit(./**),Write(./**),Glob,Grep,Bash'");
     assert.contains(w, "| tee -a \"$log\"");
     assert.contains(w, "exit \"$(cat \"$log.rc\"")
 }

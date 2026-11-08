@@ -55,10 +55,42 @@ function mark_read(path: string, offset: int) -> void throws never {
     };
 }
 
+/// The worktree a round confines its file tools to: BEAD_LOOP_WORKTREE, which the
+/// round's launch sets. Unset (a test, a hand run), nothing is confined.
+function confined_to() -> string throws never {
+    let out = baml.sys.run("printenv", args = ["BEAD_LOOP_WORKTREE"], capture_output = true) catch_all (e) {
+        _ => {
+            return "";
+        },
+    };
+    out.stdout.to_string().trim()
+}
+
+/// Why `path` is not the round's to touch, or null when it is: a relative path that
+/// does not climb out with `..`, or an absolute one under the worktree. Staying in the
+/// worktree was only a line in the prompt; a model that wandered could read the gh token
+/// or write another repo.
+function outside(path: string, tree: string) -> string? throws never {
+    if (tree.length() == 0) {
+        return null;
+    }
+    if (path.split("/").includes("..")) {
+        return `${path} climbs out with ..: give a path inside the worktree`;
+    }
+    if (path.starts_with("/") && !(path == tree || path.starts_with(`${tree}/`))) {
+        return `${path} is outside the worktree (${tree}): give a path relative to it`;
+    }
+    null
+}
+
 /// Read lines of a file. A file longer than the limit comes in parts: pass `offset`, the
 /// 1-based line to start from, for the next one. A second read of the same lines in this
 /// process returns a stub, so whole-file reads do not pile up (bl-b1a.1, 7 Nov).
 function read_file(path: string, offset: int = 1) -> string throws never {
+    let refused = outside(path, confined_to());
+    if let why: string = refused {
+        return `cannot read ${why}`;
+    }
     let text = baml.fs.read(path) catch_all (e) {
         _ => {
             return `cannot read ${path}: no such file, or it is not text`;
@@ -89,6 +121,10 @@ function read_file(path: string, offset: int = 1) -> string throws never {
 
 /// Create a file, or replace all of one.
 function write_file(path: string, content: string) -> string throws never {
+    let refused = outside(path, confined_to());
+    if let why: string = refused {
+        return `cannot write ${why}`;
+    }
     let n = baml.fs.write(path, content) catch_all (e) {
         _ => {
             return `cannot write ${path}: ${e}`;
@@ -100,6 +136,10 @@ function write_file(path: string, content: string) -> string throws never {
 /// Replace `old_text` with `new_text` in a file. `old_text` must match exactly, whitespace
 /// included, and appear exactly once.
 function edit_file(path: string, old_text: string, new_text: string) -> string throws never {
+    let refused = outside(path, confined_to());
+    if let why: string = refused {
+        return `cannot edit ${why}`;
+    }
     let text = baml.fs.read(path) catch_all (e) {
         _ => {
             return `cannot read ${path}: no such file, or it is not text`;
@@ -306,4 +346,16 @@ test "a second read of the same lines is a stub" {
     assert.contains(read_file(p), "alpha");
     assert.contains(read_file(p), "already read this session");
     let _ = baml.fs.remove(p);
+}
+
+test "a round's file tools stay in its worktree" {
+    assert.equal(outside("src/a.ts", "/w/t-1") == null, true);
+    assert.equal(outside("/w/t-1/src/a.ts", "/w/t-1") == null, true);
+    assert.contains(
+        outside("/home/me/.config/gh/hosts.yml", "/w/t-1") ?? "",
+        "outside the worktree",
+    );
+    assert.contains(outside("../../etc/passwd", "/w/t-1") ?? "", "climbs out");
+    assert.contains(outside("/w/t-10/x", "/w/t-1") ?? "", "outside");
+    assert.equal(outside("/anywhere", "") == null, true)
 }
