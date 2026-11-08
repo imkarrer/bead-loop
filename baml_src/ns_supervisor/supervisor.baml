@@ -132,6 +132,10 @@ function perform(
             let opened: root.machine.Event = s.world.push_and_open_pr(id);
             [opened]
         },
+        let x: root.machine.PushBranch => {
+            let pushed: root.machine.Event = s.world.push_branch(id);
+            [pushed]
+        },
         let x: root.machine.MergePr => {
             s.world.merge_pr(id);
             none
@@ -207,6 +211,11 @@ function adopt_prs(s: Supervisor) -> void throws never {
     };
     for (let a in open) {
         let known = s.bead(a.id) ?? root.machine.Bead.new(a.id);
+        // A branch pushed for you to open: the PR you opened is the one it waited for.
+        if (known.place is root.machine.Publishable) {
+            apply(s, a.id, root.machine.PrOpened { kind: "pr_opened", url: a.url, head: "" });
+            continue;
+        }
         if (known.pr == null && known.place is root.machine.Ready) {
             apply(s, a.id, root.machine.PrAdopted { kind: "pr_adopted", url: a.url });
         }

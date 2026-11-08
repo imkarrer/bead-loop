@@ -127,6 +127,13 @@ class FakeWorld {
             self.record("push_and_open_pr");
             root.machine.PrOpened { kind: "pr_opened", url: `pr/${id}`, head: "head" }
         }
+        function push_branch(
+            self,
+            id: string,
+        ) -> root.machine.BranchPushed throws root.machine.Infra {
+            self.record("push_branch");
+            root.machine.BranchPushed { kind: "branch_pushed", compare_url: `compare/${id}` }
+        }
         function merge_pr(self, id: string) -> void throws root.machine.Infra {
             self.record("merge_pr");
         }

@@ -435,3 +435,19 @@ test "an answer in the inbox takes a parked bead back to ready" {
     assert.is_type<root.machine.Working>(place_of(s));
     assert.is_true(w.calls.includes("note use the other file"))
 }
+
+test "open_pr ask pushes, waits for you to open the PR, then watches it" {
+    let w = one_bead([committed()], [approved()], [green(), merged()]);
+    let p = policy();
+    p.ask_before_pr = true;
+    p.merge = root.machine.MergeMode.External;
+    let s = Supervisor.new(w, MemoryLog.new(), p);
+    turns(s, w, 3);
+    assert.is_type<root.machine.Publishable>(place_of(s));
+    assert.is_true(w.calls.includes("push_branch"));
+    assert.equal(w.calls.includes("push_and_open_pr"), false);
+    w.adoptable_now = [root.world.Adoptable { id: "t-1", url: "pr/t-1" }];
+    turns(s, w, 2);
+    assert.is_type<root.machine.Closed>(place_of(s));
+    assert.equal(w.calls.includes("merge_pr"), false)
+}

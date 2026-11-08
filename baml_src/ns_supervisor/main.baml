@@ -1,12 +1,22 @@
 // The loop's entry: `bead-agent run --config_file PATH`.
 
 class LoopConfig {
+    /// The checkout git works in.
     repo: string,
+    /// Where bd runs: the repo, or for a target the repo that plans it.
+    beads: string,
     state: string,
     base: string,
     remote: string,
+    push_remote: string,
+    pr_repo: string,
     label: string,
+    only: string,
+    skip: string,
     gate: string,
+    setup: string,
+    pr_style: string,
+    merge_label: string,
     agent_bin: string,
     policy: root.machine.Policy,
     lanes: int,
@@ -18,26 +28,48 @@ class LoopConfig {
     heartbeat_seconds: int,
 }
 
-function start_of(config_file: string) -> Supervisor {
-    let c = load_config(config_file);
-    let world = root.world.LiveWorld {
+function world_of(c: LoopConfig) -> root.world.LiveWorld throws never {
+    root.world.LiveWorld {
         repo: c.repo,
+        beads: c.beads,
         state: c.state,
         base: c.base,
         remote: c.remote,
+        push_remote: c.push_remote,
+        pr_repo: c.pr_repo,
         label: c.label,
+        only: c.only,
+        skip: c.skip,
         gate: c.gate,
+        setup: c.setup,
         agent_bin: c.agent_bin,
         merge: root.machine.merge_name(c.policy.merge),
-    };
-    let s = recover(world, FileLog { state: c.state }, c.policy);
+        pr_style: c.pr_style,
+        merge_label: c.merge_label,
+    }
+}
+
+function start_config(c: LoopConfig, group: string) -> Supervisor throws never {
+    let s = recover(world_of(c), FileLog { state: c.state }, c.policy);
     s.lanes = c.lanes;
     s.capacity = c.capacity;
     s.max_inflight = c.max_inflight;
     s.max_open_prs = c.max_open_prs;
     s.adopt = c.adopt;
-    s.group = c.repo;
+    s.group = group;
     s
+}
+
+/// A repo's supervisor and one for each of its targets, all in the repo's group.
+function start_all(config_file: string) -> Supervisor[] {
+    let c = load_config(config_file);
+    let out: Supervisor[] = [start_config(c, c.repo)];
+    if (config_file.ends_with(".toml")) {
+        for (let t in targets_of(read_or_empty(config_file), c, home_dir())) {
+            out.push(start_config(t, c.repo));
+        }
+    }
+    out
 }
 
 /// Tick each supervisor and keep the result. An index write on a local array does not
@@ -97,10 +129,10 @@ function share(s: Supervisor, others: Supervisor[]) -> void throws never {
 
 function run_one(config_file: string, ticks: int) -> int {
     let c = load_config(config_file);
-    let s = start_of(config_file);
+    let worlds = start_all(config_file);
     let n = 0;
     while (ticks == 0 || n < ticks) {
-        tick(s);
+        worlds = tick_all(worlds);
         baml.sys.sleep(baml.time.Duration.from_seconds(c.heartbeat_seconds));
         n = n + 1;
     }
@@ -112,7 +144,9 @@ function run_one(config_file: string, ticks: int) -> int {
 function run_listed(repos: string[], wait: int, ticks: int) -> int {
     let worlds: Supervisor[] = [];
     for (let repo in repos) {
-        worlds.push(start_of(`${repo}/.bead-loop.toml`));
+        for (let s in start_all(`${repo}/.bead-loop.toml`)) {
+            worlds.push(s);
+        }
     }
     let n = 0;
     while (ticks == 0 || n < ticks) {

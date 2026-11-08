@@ -194,21 +194,39 @@ function config_from_toml(
     } else {
         stages_of(global)
     };
-    let merge = merge_of(pick(repo_table, global, "merge", "pipeline"));
+    let merge = merge_of(pick(repo_table, global, "merge", "auto"));
+    let open_pr = pick(repo_table, global, "open_pr", "auto");
     LoopConfig {
         repo: repo,
+        beads: repo,
         state: state,
         base: pick(repo_table, global, "base", "main"),
         remote: pick(repo_table, global, "remote", "origin"),
+        push_remote: pick(repo_table, global, "remote", "origin"),
+        pr_repo: "",
         label: pick(repo_table, global, "label", "delegate:local"),
+        only: "",
+        skip: `${pick(repo_table, global, "target_label", "work")}:`,
         gate: pick(repo_table, global, "gate", ""),
+        setup: pick(repo_table, global, "setup", ""),
+        pr_style: pick(
+            repo_table,
+            global,
+            "pr_style",
+            if (open_pr == "ask") {
+                "plain"
+            } else {
+                "loop"
+            },
+        ),
+        merge_label: pick(repo_table, global, "merge_label", "automerge"),
         agent_bin: agent_bin,
         policy: root.machine.Policy {
             stages: stages,
             on_exhaust: exhaust_of(pick(repo_table, global, "on_exhaust", "park")),
             merge: merge,
             second_opinion: false,
-            ask_before_pr: pick(repo_table, global, "open_pr", "") == "ask",
+            ask_before_pr: open_pr == "ask",
             research: research_model(global),
         },
         lanes: 1,
@@ -343,4 +361,138 @@ test "providers set their lanes and the caps come from the files" {
     assert.equal(c.capacity.get("devbox") ?? 0, 1);
     assert.equal(c.max_inflight, 3);
     assert.equal(c.max_open_prs, 1)
+}
+
+/// Each `[targets.NAME]` of a repo file as a config of its own: git in the target's
+/// checkout, bd in the repo that plans it, only the beads labelled `work:NAME`, and its
+/// state under the repo's. What a target leaves out it takes from the repo, except the
+/// gate, setup and PR settings, which belong to the other repo.
+function targets_of(
+    repo_text: string,
+    parent: LoopConfig,
+    home: string,
+) -> LoopConfig[] throws never {
+    let table = baml.toml.Table.parse(repo_text) catch_all (e) {
+        _ => baml.toml.Table.new(),
+    };
+    let out: LoopConfig[] = [];
+    let v = table.get("targets");
+    let prefix = text_at(table, "target_label");
+    let label = if (prefix.length() > 0) {
+        prefix
+    } else {
+        "work"
+    };
+    if let targets: baml.toml.Table = v {
+        for (let name in targets.items.keys()) {
+            let row = targets.get(name);
+            if let t: baml.toml.Table = row {
+                out.push(target_config(name, t, parent, label, home));
+            }
+        }
+    }
+    out
+}
+
+function or_else(s: string, fallback: string) -> string throws never {
+    if (s.length() > 0) {
+        s
+    } else {
+        fallback
+    }
+}
+
+function target_config(
+    name: string,
+    t: baml.toml.Table,
+    parent: LoopConfig,
+    label: string,
+    home: string,
+) -> LoopConfig throws never {
+    let pr_repo = text_at(t, "pr_repo");
+    let open_pr = or_else(
+        text_at(t, "open_pr"),
+        if (pr_repo.length() > 0) {
+            "ask"
+        } else {
+            "auto"
+        },
+    );
+    let merge = or_else(text_at(t, "merge"), root.machine.merge_name(parent.policy.merge));
+    let policy = root.machine.Policy {
+        stages: parent.policy.stages,
+        on_exhaust: parent.policy.on_exhaust,
+        merge: merge_of(merge),
+        second_opinion: parent.policy.second_opinion,
+        ask_before_pr: open_pr == "ask",
+        research: parent.policy.research,
+    };
+    LoopConfig {
+        repo: expand_home(text_at(t, "path"), home),
+        beads: parent.repo,
+        state: `${parent.state}/targets/${name}`,
+        base: or_else(text_at(t, "base"), "main"),
+        remote: or_else(text_at(t, "base_remote"), "origin"),
+        push_remote: or_else(text_at(t, "push_remote"), "origin"),
+        pr_repo: pr_repo,
+        label: parent.label,
+        only: `${label}:${name}`,
+        skip: "",
+        gate: text_at(t, "gate"),
+        setup: text_at(t, "setup"),
+        pr_style: or_else(
+            text_at(t, "pr_style"),
+            if (open_pr == "ask") {
+                "plain"
+            } else {
+                "loop"
+            },
+        ),
+        merge_label: or_else(text_at(t, "merge_label"), parent.merge_label),
+        agent_bin: parent.agent_bin,
+        policy: policy,
+        lanes: parent.lanes,
+        capacity: parent.capacity,
+        max_inflight: int_at(t, "max_inflight", 0),
+        max_open_prs: parent.max_open_prs,
+        adopt: bool_at(t, "adopt", parent.adopt),
+        heartbeat_seconds: parent.heartbeat_seconds,
+    }
+}
+
+const TARGETS_SAMPLE: string = `
+    label = "delegate:local"
+    merge = "manual"
+
+    [targets.euclid]
+    path = "~/src/euclid"
+    base_remote = "upstream"
+    push_remote = "origin"
+    pr_repo = "brownnrl/euclid"
+    setup = "npm ci"
+    gate = "npm test"
+    merge = "external"
+    open_pr = "ask"
+    max_inflight = 1
+`;
+
+test "a target is its own checkout, planned from the repo, its PRs asked for" {
+    let parent = config_from_toml(TARGETS_SAMPLE, GLOBAL_SAMPLE, "/src/pw", "/state/pw", "bead-loop");
+    assert.equal(parent.skip, "work:");
+    assert.equal(parent.policy.merge, root.machine.MergeMode.Manual);
+    let ts = targets_of(TARGETS_SAMPLE, parent, "/home/me");
+    assert.equal(ts.length(), 1);
+    let t = ts.at(0);
+    assert.equal(t?.repo, "/home/me/src/euclid");
+    assert.equal(t?.beads, "/src/pw");
+    assert.equal(t?.state, "/state/pw/targets/euclid");
+    assert.equal(t?.only, "work:euclid");
+    assert.equal(t?.remote, "upstream");
+    assert.equal(t?.pr_repo, "brownnrl/euclid");
+    assert.equal(t?.setup, "npm ci");
+    assert.equal(t?.pr_style, "plain");
+    assert.equal(t?.max_inflight, 1);
+    assert.equal(t?.policy?.merge, root.machine.MergeMode.External);
+    assert.equal(t?.policy?.ask_before_pr, true);
+    assert.equal(t?.policy?.stages?.length(), 2)
 }

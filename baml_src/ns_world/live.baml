@@ -6,18 +6,70 @@ class BdRow {
     title: string,
     description: string?,
     acceptance_criteria: string?,
+    labels: string[]?,
 }
 
 class LiveWorld {
+    /// The checkout git works in: the repo, or a target's path.
     repo: string,
+    /// Where bd runs. A target's beads live in the repo that plans them.
+    beads: string,
     state: string,
     base: string,
+    /// The remote the base is fetched from.
     remote: string,
+    /// The remote `bead/*` branches are pushed to: a fork, for someone else's repo.
+    push_remote: string,
+    /// `owner/name` the PR is opened against; empty is the checkout's own.
+    pr_repo: string,
     label: string,
+    /// A target takes only the beads with this label (`work:NAME`); empty takes any.
+    only: string,
+    /// The repo itself leaves the beads with a label of this prefix (`work:`) to its targets.
+    skip: string,
     gate: string,
+    /// Runs in a fresh worktree before the first round (`npm ci`).
+    setup: string,
     agent_bin: string,
     /// auto, pipeline, manual, or external. The watcher reads it.
     merge: string,
+    /// `loop`: the title is `ID: TITLE`. `plain`: the bead's title and description alone.
+    pr_style: string,
+    merge_label: string,
+
+    /// gh, pointed at the PR's repo when that is not the checkout's own.
+    function gh_args(self, args: string[]) -> string[] throws never {
+        if (self.pr_repo.length() == 0) {
+            return args;
+        }
+        let out = args;
+        out.push("-R");
+        out.push(self.pr_repo);
+        out
+    }
+
+    /// The PR's head: `owner:bead/ID` when the branch lives on a fork.
+    function head_ref(self, id: string) -> string throws never {
+        if (self.pr_repo.length() == 0) {
+            return self.branch(id);
+        }
+        let url = baml.sys.run(
+            "git",
+            args = ["remote", "get-url", self.push_remote],
+            cwd = self.repo,
+            capture_output = true,
+        ) catch_all (e) {
+            _ => {
+                return self.branch(id);
+            },
+        };
+        let owner = github_owner(url.stdout.to_string().trim());
+        if (owner.length() == 0) {
+            self.branch(id)
+        } else {
+            `${owner}:${self.branch(id)}`
+        }
+    }
 
     function worktree(self, id: string) -> string throws never {
         `${self.state}/wt/${id}`
@@ -57,8 +109,8 @@ class LiveWorld {
         throw root.machine.Infra { kind: "infra", what: what, words: words }
     }
 
-    function bead_text(self, id: string) -> string throws root.machine.Infra {
-        let shown = self.tool(root.machine.Trouble.Bd, "bd", ["show", id, "--json"], self.repo);
+    function bead_row(self, id: string) -> BdRow throws root.machine.Infra {
+        let shown = self.tool(root.machine.Trouble.Bd, "bd", ["show", id, "--json"], self.beads);
         let rows = baml.json.decode<BdRow[]>(shown) catch_all (e) {
             _ => {
                 self.refuse(root.machine.Trouble.Bd, `bd show ${id}: ${e}`)
@@ -66,10 +118,64 @@ class LiveWorld {
         };
         let b = rows.at(0);
         if let row: BdRow = b {
-            `<bead id="${id}">\nTITLE: ${row.title}\n\nDESCRIPTION:\n${row.description ?? ""}\n\nACCEPTANCE CRITERIA:\n${row.acceptance_criteria ?? ""}\n</bead>`
+            row
         } else {
             self.refuse(root.machine.Trouble.Bd, `bd show ${id} returned nothing`)
         }
+    }
+
+    function bead_text(self, id: string) -> string throws root.machine.Infra {
+        let row = self.bead_row(id);
+        `<bead id="${id}">\nTITLE: ${row.title}\n\nDESCRIPTION:\n${row.description ?? ""}\n\nACCEPTANCE CRITERIA:\n${row.acceptance_criteria ?? ""}\n</bead>`
+    }
+
+    /// Push the bead's branch to the push remote; returns the head pushed.
+    function push(self, id: string) -> string throws root.machine.Infra {
+        let dir = self.worktree(id);
+        let _ = self.tool(
+            root.machine.Trouble.Push,
+            "git",
+            ["push", "-q", "--force-with-lease", "-u", self.push_remote, self.branch(id)],
+            dir,
+        );
+        self.tool(root.machine.Trouble.Git, "git", ["rev-parse", "HEAD"], dir).trim()
+    }
+
+    /// The open PR from this bead's branch, or "".
+    function open_pr_url(self, id: string) -> string throws root.machine.Infra {
+        self
+            .tool(
+                root.machine.Trouble.Gh,
+                "gh",
+                self.gh_args(
+                    [
+                        "pr",
+                        "list",
+                        "--head",
+                        self.branch(id),
+                        "--state",
+                        "open",
+                        "--json",
+                        "url",
+                        "--jq",
+                        ".[0].url // \"\"",
+                    ],
+                ),
+                self.repo,
+            )
+            .trim()
+    }
+
+    /// `owner/name` of the checkout's own GitHub repo.
+    function own_repo(self) -> string throws root.machine.Infra {
+        self
+            .tool(
+                root.machine.Trouble.Gh,
+                "gh",
+                ["repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"],
+                self.repo,
+            )
+            .trim()
     }
 
     implements World {
@@ -78,21 +184,25 @@ class LiveWorld {
                 root.machine.Trouble.Bd,
                 "bd",
                 ["ready", "-l", self.label, "--json", "-n", "0"],
-                self.repo,
+                self.beads,
             );
             let rows = baml.json.decode<BdRow[]>(text) catch_all (e) {
                 _ => {
                     self.refuse(root.machine.Trouble.Bd, `bd ready: ${e}`)
                 },
             };
-            rows.map((r) -> {
-                Ticket {
-                    id: r.id,
-                    title: r.title,
-                    description: r.description ?? "",
-                    acceptance: r.acceptance_criteria ?? "",
-                }
-            })
+            rows
+                .filter((r) -> {
+                    takes(r.labels ?? [], self.only, self.skip)
+                })
+                .map((r) -> {
+                    Ticket {
+                        id: r.id,
+                        title: r.title,
+                        description: r.description ?? "",
+                        acceptance: r.acceptance_criteria ?? "",
+                    }
+                })
         }
 
         function prepare_worktree(
@@ -119,6 +229,22 @@ class LiveWorld {
                 ["worktree", "add", "-q", "-B", self.branch(id), dir, `${self.remote}/${self.base}`]
             };
             let _ = self.tool(root.machine.Trouble.Git, "git", args, self.repo);
+            if (!resume && self.setup.length() > 0) {
+                let out = baml.sys.shell(
+                    self.setup,
+                    cwd = dir,
+                    capture_output = true,
+                    timeout = baml.time.Duration.from_seconds(1800),
+                ) catch_all (e) {
+                    _ => {
+                        self.refuse(root.machine.Trouble.Setup, `setup did not finish: ${e}`)
+                    },
+                };
+                if (out.exit_code != 0) {
+                    let said = root.tools.tail(out.stderr.to_string() + out.stdout.to_string());
+                    self.refuse(root.machine.Trouble.Setup, `setup failed: ${said}`);
+                }
+            }
         }
 
         function remove_branch(self, id: string) -> void throws never {
@@ -265,53 +391,40 @@ class LiveWorld {
             self,
             id: string,
         ) -> root.machine.PrOpened throws root.machine.Infra {
-            let dir = self.worktree(id);
-            let branch = self.branch(id);
-            let _ = self.tool(
-                root.machine.Trouble.Push,
-                "git",
-                ["push", "-q", "--force-with-lease", "-u", self.remote, branch],
-                dir,
-            );
-            let head = self.tool(root.machine.Trouble.Git, "git", ["rev-parse", "HEAD"], dir).trim();
-            let existing = self
-                .tool(
-                    root.machine.Trouble.Gh,
-                    "gh",
-                    [
-                        "pr",
-                        "list",
-                        "--head",
-                        branch,
-                        "--state",
-                        "open",
-                        "--json",
-                        "url",
-                        "--jq",
-                        ".[0].url // \"\"",
-                    ],
-                    self.repo,
-                )
-                .trim();
+            let head = self.push(id);
+            let existing = self.open_pr_url(id);
             let url = if (existing.length() > 0) {
                 existing
             } else {
+                let row = self.bead_row(id);
+                let title = if (self.pr_style == "plain") {
+                    row.title
+                } else {
+                    `${id}: ${row.title}`
+                };
+                let body = if (self.pr_style == "plain") {
+                    row.description ?? ""
+                } else {
+                    `${self.bead_text(id)}\n\nOpened by bead-loop.`
+                };
                 self
                     .tool(
                         root.machine.Trouble.Gh,
                         "gh",
-                        [
-                            "pr",
-                            "create",
-                            "--head",
-                            branch,
-                            "--base",
-                            self.base,
-                            "--title",
-                            id,
-                            "--body",
-                            self.bead_text(id),
-                        ],
+                        self.gh_args(
+                            [
+                                "pr",
+                                "create",
+                                "--head",
+                                self.head_ref(id),
+                                "--base",
+                                self.base,
+                                "--title",
+                                title,
+                                "--body",
+                                body,
+                            ],
+                        ),
                         self.repo,
                     )
                     .trim()
@@ -319,11 +432,31 @@ class LiveWorld {
             root.machine.PrOpened { kind: "pr_opened", url: url, head: head }
         }
 
+        function push_branch(
+            self,
+            id: string,
+        ) -> root.machine.BranchPushed throws root.machine.Infra {
+            let _ = self.push(id);
+            let existing = self.open_pr_url(id);
+            if (existing.length() > 0) {
+                return root.machine.BranchPushed { kind: "branch_pushed", compare_url: existing };
+            }
+            let repo = if (self.pr_repo.length() > 0) {
+                self.pr_repo
+            } else {
+                self.own_repo()
+            };
+            root.machine.BranchPushed {
+                kind: "branch_pushed",
+                compare_url: `https://github.com/${repo}/compare/${self.base}...${self.head_ref(id)}?expand=1`,
+            }
+        }
+
         function merge_pr(self, id: string) -> void throws root.machine.Infra {
             let _ = self.tool(
                 root.machine.Trouble.MergeRefused,
                 "gh",
-                ["pr", "merge", self.branch(id), "--squash", "--delete-branch"],
+                self.gh_args(["pr", "merge", self.branch(id), "--squash", "--delete-branch"]),
                 self.repo,
             );
         }
@@ -332,7 +465,7 @@ class LiveWorld {
             let _ = self.tool(
                 root.machine.Trouble.Gh,
                 "gh",
-                ["pr", "update-branch", self.branch(id)],
+                self.gh_args(["pr", "update-branch", self.branch(id)]),
                 self.repo,
             );
         }
@@ -341,7 +474,7 @@ class LiveWorld {
             let pr = self.branch(id);
             let _ = baml.sys.run(
                 "gh",
-                args = ["pr", "edit", pr, "--remove-label", "automerge"],
+                args = self.gh_args(["pr", "edit", pr, "--remove-label", self.merge_label]),
                 cwd = self.repo,
                 capture_output = true,
             ) catch_all (e) {
@@ -350,7 +483,7 @@ class LiveWorld {
             let _ = self.tool(
                 root.machine.Trouble.Gh,
                 "gh",
-                ["pr", "edit", pr, "--add-label", "automerge"],
+                self.gh_args(["pr", "edit", pr, "--add-label", self.merge_label]),
                 self.repo,
             );
         }
@@ -358,7 +491,7 @@ class LiveWorld {
         function delete_remote_branch(self, id: string) -> void throws never {
             let _ = baml.sys.run(
                 "git",
-                args = ["push", "-q", self.remote, "--delete", self.branch(id)],
+                args = ["push", "-q", self.push_remote, "--delete", self.branch(id)],
                 cwd = self.repo,
                 capture_output = true,
             ) catch_all (e) {
@@ -367,7 +500,7 @@ class LiveWorld {
         }
 
         function note(self, id: string, text: string) -> void throws root.machine.Infra {
-            let _ = self.tool(root.machine.Trouble.Bd, "bd", ["note", id, `bead-loop: ${text}`], self.repo);
+            let _ = self.tool(root.machine.Trouble.Bd, "bd", ["note", id, `bead-loop: ${text}`], self.beads);
         }
 
         function close_bead(self, id: string, url: string?) -> void throws root.machine.Infra {
@@ -375,7 +508,7 @@ class LiveWorld {
                 root.machine.Trouble.Bd,
                 "bd",
                 ["close", id, "--reason", url ?? "merged"],
-                self.repo,
+                self.beads,
             );
         }
 
@@ -399,7 +532,9 @@ class LiveWorld {
             let text = self.tool(
                 root.machine.Trouble.Gh,
                 "gh",
-                ["pr", "list", "--state", "open", "--limit", "200", "--json", "headRefName,url"],
+                self.gh_args(
+                    ["pr", "list", "--state", "open", "--limit", "200", "--json", "headRefName,url"],
+                ),
                 self.repo,
             );
             let rows = baml.json.decode<PrRow[]>(text) catch_all (e) {
@@ -790,4 +925,37 @@ function read_inbox(state: string) -> Mail[] throws never {
         }
     }
     out
+}
+
+/// Whether a world takes a bead with these labels: a target only its `work:NAME`, the
+/// repo itself none that a target takes.
+function takes(labels: string[], only: string, skip: string) -> bool throws never {
+    let wanted = only.length() == 0 || labels.includes(only);
+    let left = skip.length() > 0
+        && labels.some((l) -> {
+            l.starts_with(skip)
+        });
+    wanted && !left
+}
+
+/// `imkarrer` from `git@github.com:imkarrer/euclid.git` or `https://github.com/imkarrer/euclid`.
+function github_owner(url: string) -> string throws never {
+    let rest = if (url.includes("github.com:")) {
+        url.split("github.com:").at(1) ?? ""
+    } else {
+        url.split("github.com/").at(1) ?? ""
+    };
+    rest.split("/").at(0) ?? ""
+}
+
+test "a target takes its own beads and the repo leaves them alone" {
+    assert.equal(takes(["delegate:local", "work:lektor"], "work:lektor", ""), true);
+    assert.equal(takes(["delegate:local"], "work:lektor", ""), false);
+    assert.equal(takes(["delegate:local", "work:lektor"], "", "work:"), false);
+    assert.equal(takes(["delegate:local", "phase:P0"], "", "work:"), true)
+}
+
+test "a fork's owner comes from its remote" {
+    assert.equal(github_owner("git@github.com:imkarrer/euclid.git"), "imkarrer");
+    assert.equal(github_owner("https://github.com/imkarrer/euclid"), "imkarrer")
 }

@@ -94,16 +94,7 @@ function response_of(reply: PageReply) -> baml.http.Response throws never {
 /// request so a restart of the supervisor is visible here without shared memory.
 function page(config_file: string, addr: string = "127.0.0.1:4097") -> never {
     let c = root.supervisor.load_config(config_file);
-    let world = root.world.LiveWorld {
-        repo: c.repo,
-        state: c.state,
-        base: c.base,
-        remote: c.remote,
-        label: c.label,
-        gate: c.gate,
-        agent_bin: c.agent_bin,
-        merge: root.machine.merge_name(c.policy.merge),
-    };
+    let world = root.supervisor.world_of(c);
     let server = baml.http.Server.bind(addr);
     server.serve((req) -> {
         let s = root.supervisor.recover(world, root.supervisor.FileLog { state: c.state }, c.policy);

@@ -282,7 +282,14 @@ function on_reviewing(b: Bead, e: Event, p: Policy) -> Step throws never {
     match (e) {
         let x: Rejected => rejected(b, x, p),
         let x: ReviewerCrashed => charge(b, x),
-        let x: Approved => Step { bead: b, effects: [PushAndOpenPr {}] },
+        let x: Approved => {
+            let effects: Effect[] = if (p.ask_before_pr) {
+                [PushBranch {}]
+            } else {
+                [PushAndOpenPr {}]
+            };
+            Step { bead: b, effects: effects }
+        },
         let x: PrOpened => opened(b, x, p),
         let x: BranchPushed => {
             stay(b.at(Publishable { kind: "publishable", compare_url: x.compare_url }))

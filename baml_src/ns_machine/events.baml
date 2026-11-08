@@ -260,6 +260,10 @@ class WriteParkBrief {
 class PushAndOpenPr {
 }
 
+/// open_pr = "ask": push the branch and stop short of a PR, for you to open.
+class PushBranch {
+}
+
 class MergePr {
 }
 
@@ -284,6 +288,7 @@ type Effect = Note
     | SecondOpinion
     | WriteParkBrief
     | PushAndOpenPr
+    | PushBranch
     | MergePr
     | UpdateBranch
     | Relabel

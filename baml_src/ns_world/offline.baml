@@ -223,6 +223,16 @@ class OfflineWorld {
             root.machine.PrOpened { kind: "pr_opened", url: `bench://${id}`, head: head }
         }
 
+        function push_branch(
+            self,
+            id: string,
+        ) -> root.machine.BranchPushed throws root.machine.Infra {
+            root.machine.BranchPushed {
+                kind: "branch_pushed",
+                compare_url: `bench://compare/${id}`,
+            }
+        }
+
         function merge_pr(self, id: string) -> void throws root.machine.Infra {
             self.merged.push(id);
         }

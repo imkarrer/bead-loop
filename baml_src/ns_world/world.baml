@@ -64,6 +64,8 @@ interface World {
         pr: string,
     ) -> root.machine.Event[] throws root.machine.Infra;
     function push_and_open_pr(self, id: string) -> root.machine.PrOpened throws root.machine.Infra;
+    /// Push the branch, open no PR, and say where one would be opened.
+    function push_branch(self, id: string) -> root.machine.BranchPushed throws root.machine.Infra;
     function merge_pr(self, id: string) -> void throws root.machine.Infra;
     function update_branch(self, id: string) -> void throws root.machine.Infra;
     function relabel(self, id: string) -> void throws root.machine.Infra;
