@@ -81,7 +81,7 @@ function decode_line(line: string) -> root.machine.Event {
 }
 
 test "the log survives a restart and a half-written line" {
-    let dir = "/tmp/bead-loop-log-test";
+    let dir = root.tools.scratch("log-test");
     let _ = baml.sys.run("rm", args = ["-rf", dir]);
     let log_file = FileLog { state: dir };
     log_file.append("t-1", root.machine.Picked { kind: "picked" });

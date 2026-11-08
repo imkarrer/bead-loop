@@ -16,6 +16,12 @@ function tail(text: string) -> string throws never {
     `[first ${n - OUTPUT_LIMIT} characters cut]\n${text.slice(n - OUTPUT_LIMIT, n)}`
 }
 
+/// A path for one test's scratch file or folder, unique to this run: two builds on one
+/// agent run the tests at once, and a fixed /tmp name lets one trample the other (#577).
+function scratch(name: string) -> string throws never {
+    `/tmp/bead-loop-test-${baml.sys.pid()}-${name}`
+}
+
 function seen_path() -> string throws never {
     `/tmp/bead-loop-seen-${baml.sys.pid()}`
 }
@@ -227,7 +233,7 @@ function run_for(command: string, seconds: int) -> string throws never {
 }
 
 test "a command that times out takes what it started with it" {
-    let mark = "/tmp/bead-loop-orphan-mark";
+    let mark = root.tools.scratch("orphan-mark");
     let _ = baml.sys.run("rm", args = ["-f", mark]);
     let said = run_for(`(sleep 4; touch ${mark}) & sleep 30`, 1);
     assert.contains(said, "timed out after 1s");
@@ -240,7 +246,7 @@ test "quotes survive the wrapping" {
 }
 
 test "edit replaces text that appears once" {
-    let p = "/tmp/bead-loop-edit-once.txt";
+    let p = root.tools.scratch("edit-once.txt");
     let _ = baml.fs.write(p, "alpha\nbeta\n");
     assert.equal(edit_file(p, "beta", "gamma"), `edited ${p}`);
     assert.equal(baml.fs.read(p), "alpha\ngamma\n");
@@ -248,14 +254,14 @@ test "edit replaces text that appears once" {
 }
 
 test "edit refuses text that appears twice" {
-    let p = "/tmp/bead-loop-edit-twice.txt";
+    let p = root.tools.scratch("edit-twice.txt");
     let _ = baml.fs.write(p, "x\nx\n");
     assert.contains(edit_file(p, "x", "y"), "appears 2 times");
     let _ = baml.fs.remove(p);
 }
 
 test "edit undoes a model's escaped quotes" {
-    let p = "/tmp/bead-loop-edit-esc.txt";
+    let p = root.tools.scratch("edit-esc.txt");
     let _ = baml.fs.write(p, "let b = json!({\"id\": id});\n");
     assert.equal(
         edit_file(p, "json!({\\\"id\\\": id})", "json!({\\\"id\\\": x})"),
@@ -266,14 +272,14 @@ test "edit undoes a model's escaped quotes" {
 }
 
 test "a near miss shows the real lines" {
-    let p = "/tmp/bead-loop-edit-show.txt";
+    let p = root.tools.scratch("edit-show.txt");
     let _ = baml.fs.write(p, "fn a() {\n    let x = 1;\n    let y = 2;\n}\n");
     assert.contains(edit_file(p, "fn a() {\n    let x = 9;", "z"), "    let x = 1;");
     let _ = baml.fs.remove(p);
 }
 
 test "edit says where a near miss broke" {
-    let p = "/tmp/bead-loop-edit-near.txt";
+    let p = root.tools.scratch("edit-near.txt");
     let _ = baml.fs.write(p, "fn a() {\n    let x = 1;\n}\n");
     assert.contains(edit_file(p, "  let x = 2;", "y"), "not found");
     assert.contains(edit_file(p, "let x = 1;\nmissing", "y"), "matches line 2");
@@ -281,7 +287,7 @@ test "edit says where a near miss broke" {
 }
 
 test "read comes in parts" {
-    let p = "/tmp/bead-loop-read.txt";
+    let p = root.tools.scratch("read.txt");
     let lines: string[] = [];
     let i = 0;
     while (i < 2100) {
@@ -295,7 +301,7 @@ test "read comes in parts" {
 }
 
 test "a second read of the same lines is a stub" {
-    let p = "/tmp/bead-loop-read-again.txt";
+    let p = root.tools.scratch("read-again.txt");
     let _ = baml.fs.write(p, "alpha\nbeta\n");
     assert.contains(read_file(p), "alpha");
     assert.contains(read_file(p), "already read this session");

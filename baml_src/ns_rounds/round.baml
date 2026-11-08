@@ -439,10 +439,10 @@ test "the worker prompt carries the brief and the send-back" {
 
 test "the worker's report is what the reviewer reads" {
     assert.equal(report_text(report_of("done")), "done: s");
-    let p = "/tmp/bead-loop-report.txt";
+    let p = root.tools.scratch("report.txt");
     save_report(p, report_of("done"));
     assert.equal(load_report(p), "done: s");
-    assert.equal(load_report("/tmp/bead-loop-report-missing.txt"), "");
+    assert.equal(load_report(root.tools.scratch("report-missing.txt")), "");
     let _ = baml.fs.remove(p);
 }
 
@@ -531,7 +531,7 @@ function commit_left(dir: string, id: string, summary: string) -> void throws ne
 }
 
 test "a done report's uncommitted change is committed for it" {
-    let dir = "/tmp/bead-loop-commit-left";
+    let dir = root.tools.scratch("commit-left");
     let _ = baml.sys.run("rm", args = ["-rf", dir]);
     let _ = baml.sys.run("mkdir", args = ["-p", dir]);
     let _ = baml.sys.run("git", args = ["init", "-q"], cwd = dir);
