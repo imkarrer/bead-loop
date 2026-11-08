@@ -8,7 +8,7 @@
 # downloaded and checked, install.sh installs it and refreshes the links and units from
 # the clone, and what changed is restarted: the loop always (it is the binary); the
 # opencode server only when the agents, the skills or its unit changed, since the model
-# sessions live in it; the UI only when bin/, ui/ or its unit changed. When the opencode
+# sessions live in it; the page always (it is the binary too). When the opencode
 # server does restart, the loop is stopped first (a plain stop, not a restart) and started
 # again once the server is back, so the rounds in flight are reopened with no failure
 # charged; otherwise the loop's restart drops $STATE_DIR/restart first, so it leaves its
@@ -151,7 +151,9 @@ restart() {  # restart UNIT
   fi
 }
 systemctl --user daemon-reload
-if changed bin ui systemd/bead-loop-ui.service; then restart bead-loop-ui.service; else echo "bead-loop-ui.service kept: bin, ui and its unit are as deployed"; fi
+# The page is `bead-supervisor page`, the same binary as the loop: a deploy is a new binary,
+# so the page restarts every time, as the loop does. It holds no state of its own.
+restart bead-loop-ui.service
 if changed agents skills systemd/opencode-web.service; then
   # Restarting opencode-web.service kills every session in flight: rejoining a session
   # that died with the server (not the loop) charges its round a failure that isn't the
