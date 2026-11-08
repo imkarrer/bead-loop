@@ -76,6 +76,69 @@ function run_gate(dir: string, gate: string) -> GateRun throws never {
 }
 
 /// What a worker's report and the commits it left add up to. Pure, so it is tested alone.
+/// What the reviewer reads of the gate: its command, whether it passed, and the end of its
+/// output. web-2ad.3's reviewer rejected a sort as "causing the template to error" while
+/// the gate had just built the site; it never saw that.
+function gate_text(gate: string, run: GateRun) -> string throws never {
+    if (gate.length() == 0) {
+        return "no gate is configured for this repo: CI is the gate";
+    }
+    let verdict = if (run.ok) {
+        "passed"
+    } else {
+        "failed"
+    };
+    let out = if (run.output.length() > 0) {
+        run.output
+    } else {
+        "(no output)"
+    };
+    `$ ${gate}\n${verdict}\n${root.tools.tail(out)}`
+}
+
+function gate_file(spec: RoundSpec) -> string throws never {
+    `${spec.report_file}.gate`
+}
+
+function save_gate(spec: RoundSpec, run: GateRun) -> void throws never {
+    if (spec.report_file.length() == 0) {
+        return;
+    }
+    let _ = baml.fs.write(gate_file(spec), gate_text(spec.gate, run)) catch_all (e) {
+        _ => null,
+    };
+}
+
+function gate_of(spec: RoundSpec) -> string throws never {
+    let text = baml.fs.read(gate_file(spec)) catch_all (e) {
+        _ => "",
+    };
+    if (text.length() > 0) {
+        text
+    } else if (spec.gate.length() == 0) {
+        "no gate is configured for this repo: CI is the gate"
+    } else {
+        "the gate passed (its output was not kept)"
+    }
+}
+
+/// Whether the branch has commits the base does not.
+function ahead_of_base(dir: string, base: string) -> bool throws never {
+    let out = baml.sys.run(
+        "git",
+        args = ["rev-list", "--count", `${base}..HEAD`],
+        cwd = dir,
+        capture_output = true,
+    ) catch_all (e) {
+        _ => {
+            return false;
+        },
+    };
+    out.exit_code == 0
+        && out.stdout.to_string().trim() != "0"
+        && out.stdout.to_string().trim().length() > 0
+}
+
 function work_outcome(
     report: root.agents.Report,
     before: string,
@@ -165,7 +228,11 @@ function failed_session(spec: RoundSpec, e: unknown) -> root.machine.Event throw
     }
     match (e) {
         let x: ai.errors.StepBudgetExceeded => {
-            root.machine.RoundTimedOut { kind: "round_timed_out" }
+            // Said as what it is: web-2ad.3's second round "timed out" in 3.5 minutes.
+            root.machine.WorkerCrashed {
+                kind: "worker_crashed",
+                words: `it ran out of its ${MAX_STEPS} steps`,
+            }
         },
         let x: ai.errors.ParseFailed => {
             root.machine.WorkerCrashed { kind: "worker_crashed", words: "its report did not parse" }
@@ -259,12 +326,23 @@ function work_round(spec: RoundSpec) -> root.machine.Event[] throws never {
         commit_left(spec.dir, spec.id, report.summary);
     }
     let after = git_head(spec.dir);
+    // Done, and nothing new to commit, on a branch that already holds work: the worker says
+    // the work stands. If the gate agrees, that is a rebuttal of the last REJECT, not a
+    // missing commit.
+    if (report.outcome == "done" && before == after && ahead_of_base(spec.dir, spec.base)) {
+        let check = run_gate(spec.dir, spec.gate);
+        save_gate(spec, check);
+        if (check.ok) {
+            return [root.machine.Rebutted { kind: "rebutted", text: report.summary }];
+        }
+    }
     let stop = work_outcome(report, before, after);
     if let event: root.machine.Event = stop {
         return [event];
     }
     let done: root.machine.Event = root.machine.Committed { kind: "committed", sha: after };
     let first = run_gate(spec.dir, spec.gate);
+    save_gate(spec, first);
     if (first.ok) {
         return passed(spec, done);
     }
@@ -281,6 +359,7 @@ function work_round(spec: RoundSpec) -> root.machine.Event[] throws never {
         commit_left(spec.dir, spec.id, fixed.summary);
     }
     let second = run_gate(spec.dir, spec.gate);
+    save_gate(spec, second);
     if (second.ok) {
         passed(spec, done)
     } else {
@@ -315,14 +394,16 @@ function run_reviewer(spec: RoundSpec, diff: string) -> root.agents.Verdict {
             client = root.agents.claude_client(spec.model, spec.dir, spec.log_file, false),
             max_steps = 2,
         );
-        return agent.run(root.agents.ReviewOnClaude@spec(spec.bead, spec.report, diff)).value;
+        return agent
+            .run(root.agents.ReviewOnClaude@spec(spec.bead, spec.report, gate_of(spec), diff))
+            .value;
     }
     let agent = ai.Agent.new(
         client = root.agents.client_for(spec.model, spec.base_url),
         max_steps = REVIEW_STEPS,
         on_event = event_log(spec.log_file),
     );
-    agent.run(root.agents.Review@spec(spec.bead, spec.report, diff)).value
+    agent.run(root.agents.Review@spec(spec.bead, spec.report, gate_of(spec), diff)).value
 }
 
 /// No verdict is "nothing from the model": held, not charged. state-machine.md, and the
@@ -608,4 +689,30 @@ test "a researcher's answer that will not parse is no brief, not a hold" {
     } else {
         assert.is_true(false);
     }
+}
+
+test "the reviewer reads the gate: its command, its verdict and its output" {
+    let t = gate_text("scripts/check.sh", GateRun { ok: true, output: "check: PASS" });
+    assert.equal(t, "$ scripts/check.sh\npassed\ncheck: PASS");
+    assert.contains(gate_text("", GateRun { ok: true, output: "" }), "CI is the gate")
+}
+
+test "a branch ahead of its base is told from one at it" {
+    let dir = root.tools.scratch("ahead");
+    let _ = baml.sys.run("rm", args = ["-rf", dir]);
+    let _ = baml.sys.run("mkdir", args = ["-p", dir]);
+    let _ = baml.sys.run("git", args = ["init", "-q", "-b", "main"], cwd = dir);
+    let _ = baml.sys.run(
+        "git",
+        args = ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "base"],
+        cwd = dir,
+    );
+    assert.equal(ahead_of_base(dir, "main"), false);
+    let _ = baml.sys.run(
+        "git",
+        args = ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "work"],
+        cwd = dir,
+    );
+    assert.equal(ahead_of_base(dir, "main~1"), true);
+    let _ = baml.sys.run("rm", args = ["-rf", dir]);
 }

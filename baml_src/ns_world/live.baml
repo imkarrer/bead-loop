@@ -308,7 +308,9 @@ class LiveWorld {
                 ["-p", dir, `${self.state}/logs`],
                 self.repo,
             );
-            let stamp = baml.sys.pid();
+            // The round's own second: two rounds of one kind under one supervisor wrote one
+            // file when this was its pid (web-2ad.3's second and third rounds, 8 Nov).
+            let stamp = root.supervisor.unix_seconds();
             let spec = root.rounds.RoundSpec {
                 id: id,
                 kind: kind,

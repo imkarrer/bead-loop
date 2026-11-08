@@ -19,6 +19,7 @@ The local stages' worker is a BAML agent with six tools: `read_file`, `write_fil
 - State the change as an edit: what to find and what it becomes, anchored on one short, exact line.
 - Name one acceptance command that fails on the base branch and passes once the change is in. The gate runs after the worker whatever it reports; the reviewer holds the diff to the bead.
 - Leave out what a worker cannot do in a worktree: clone, download, sign in, touch another repo.
+- Where the change uses an idiom a reader might take for a mistake, say why in a few words (`sort $xs "value" "desc"` is Hugo's form for plain values). A reviewer that thinks it a bug rejects good work.
 
 A bead with two possible shapes, or a decision in it, is not ready: settle it first, or the last stage parks it with your question.
 

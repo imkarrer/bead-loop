@@ -333,7 +333,7 @@ class OfflineWorld {
     function launch(self, id: string, kind: RoundKind, model: string, note: string) -> void {
         let dir = self.rounds();
         let _ = baml.sys.run("mkdir", args = ["-p", dir, `${self.state}/logs`, `${self.state}/beads/${id}`]);
-        let stamp = baml.sys.pid();
+        let stamp = root.supervisor.unix_seconds();
         let spec = root.rounds.RoundSpec {
             id: id,
             kind: kind,

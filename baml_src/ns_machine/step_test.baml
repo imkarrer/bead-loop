@@ -907,3 +907,23 @@ test "a bead research parked goes to the worker once you overrule it, not to res
     let other = step(bead(Parked { kind: "parked", question: "q" }), Reopened { kind: "reopened" }, policy()).bead;
     assert.equal(other.brief == null, true)
 }
+
+test "a worker's rebuttal goes back to review, uncharged, and a REJECT ends it" {
+    let b = bead(working(), failures = 1);
+    b.kept = true;
+    let s = step(
+        b,
+        Rebutted { kind: "rebutted", text: "the commit already does it; the gate passes" },
+        policy(),
+    );
+    assert.is_type<InReview>(s.bead.place);
+    assert.equal(s.bead.failures, 1);
+    assert.equal(s.bead.rebutted, true);
+    let r = step(
+        s.bead.at(Reviewing { kind: "reviewing" }),
+        Rejected { kind: "rejected", line: "REJECT: x", text: "REJECT: x" },
+        policy(),
+    );
+    assert.equal(r.bead.rebutted, false);
+    assert.equal(r.bead.failures, 2)
+}
