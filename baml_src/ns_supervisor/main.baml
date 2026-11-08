@@ -20,6 +20,7 @@ class LoopConfig {
     feedback: bool,
     work_seconds: int,
     research_seconds: int,
+    sandbox: bool,
     /// Each provider's server: `url`, or its `probe` with `/health` made `/v1`.
     urls: map<string, string>,
     precheck: string,
@@ -55,6 +56,7 @@ function world_of(c: LoopConfig) -> root.world.LiveWorld throws never {
         feedback: c.feedback,
         work_seconds: c.work_seconds,
         research_seconds: c.research_seconds,
+        sandbox: c.sandbox,
         urls: c.urls,
         precheck: c.precheck,
     }

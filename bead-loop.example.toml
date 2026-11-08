@@ -88,3 +88,5 @@ failures = 1
 # max_inflight = 1                      # PRs in the merge queue before the dev lane pauses on this target
 # open_pr = "ask"                       # auto | ask (the operator publishes it)     (default "auto")
 # pr_style = "plain"                    # loop | plain (a contribution, no loop id or line) (default "loop")
+
+# sandbox = false              # true: each round under bwrap, only its worktree, git dir, state and /tmp writable

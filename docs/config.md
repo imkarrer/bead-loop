@@ -51,6 +51,7 @@ OpenAI root its `probe` implies (`http://host:8100/health` is `http://host:8100/
 | `stall_compactions` | `10` | opencode sessions only: past this many compactions in one session, the watchdog aborts it as stalled — a read/compaction loop, not the model at work. `0` disables the check |
 | `stall_steps` | `60` | opencode sessions only: past this many tool calls since the last edit/write/patch call, the watchdog aborts the session as stalled. `0` disables the check |
 | `attach` | none | an opencode server url; sessions run there and stream in its web UI |
+| `sandbox` | `false` | run each round under bwrap: only its worktree, the git dir, the state dir and `/tmp` writable. A gate that writes a cache outside them (`flox activate`, `npm ci`) fails under it, and the network is not cut yet |
 | `target_label` | `"work"` | the label prefix that names a target: a bead's `work:NAME` label sends its round to `[targets.NAME]` (see Targets below) |
 
 ## Lanes per model server

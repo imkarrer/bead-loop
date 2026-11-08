@@ -41,6 +41,10 @@ class LiveWorld {
     /// Seconds a work or review round may run (worker_timeout), and a research round.
     work_seconds: int,
     research_seconds: int,
+    /// Run rounds under bwrap (when it is on PATH): only the worktree, the git dir, the
+    /// state and /tmp writable. Off by default: a gate that writes a cache (flox, npm,
+    /// pip) fails read-only, and the network is not cut yet.
+    sandbox: bool,
     /// Each provider's server, from `[providers.NAME]`.
     urls: map<string, string>,
     /// The pre-check model; empty is none.
@@ -614,7 +618,12 @@ class LiveWorld {
         let _ = baml.sys.run("mkdir", args = ["-p", `${self.repo}/.baml/btel`]) catch_all (e) {
             _ => null,
         };
-        let argv = round_argv(bwrap_path(), self.agent_bin, spec_file, spec.dir, self.repo, self.state);
+        let bwrap = if (self.sandbox) {
+            bwrap_path()
+        } else {
+            ""
+        };
+        let argv = round_argv(bwrap, self.agent_bin, spec_file, spec.dir, self.repo, self.state);
         let seconds = if (spec.kind == RoundKind.Research) {
             self.research_seconds
         } else {
