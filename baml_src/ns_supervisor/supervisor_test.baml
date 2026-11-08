@@ -707,3 +707,23 @@ test "a bead's view carries its newest event, and a proposal the bead's descript
     let p = baml.json.decode<View>(log.view);
     assert.equal(p.beads.at(0)?.proposal?.body, "d")
 }
+
+test "a BLOCKED from research gets its second opinion as a queued round, never lost" {
+    let blocked: root.machine.Event[] = [
+        root.machine.ResearchBlocked {
+            kind: "research_blocked",
+            line: "layouts/a.html:3",
+            second_opinion: false,
+        },
+    ];
+    let brief: root.machine.Event[] = [root.machine.BriefWritten { kind: "brief_written", overruled: true, text: "Files:\nok" }];
+    let w = one_bead([committed()], [approved()], [merged()], research = [blocked, brief]);
+    let p = policy();
+    p.research = "acbox/coder";
+    p.brief_model = "claude/sonnet";
+    let s = Supervisor.new(w, MemoryLog.new(), p);
+    turns(s, w, 3);
+    assert.is_true(w.calls.includes("start_round Research claude/sonnet"));
+    assert.equal(s.bead("t-1")?.first_block == null, true);
+    assert.equal(starts(w, "round_lost"), 0)
+}

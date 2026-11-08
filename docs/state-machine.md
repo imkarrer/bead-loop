@@ -68,7 +68,7 @@ The loop's state is its event log. A bead's place is a fold of its events:
 stateDiagram-v2
   [*] --> ready: labelled, no blocker open
   ready --> researching: research_model set, no brief
-  researching --> ready: brief written, or research timed out   (no failure)
+  researching --> ready: brief written, research timed out or unreadable, or blocked (to the research queue for a second opinion)   (no failure)
   researching --> parked: blocked, upheld by the second opinion
   ready --> working: picked (fewest failures first)
   working --> in_review: committed, gate passed, pre-check passed
@@ -124,8 +124,8 @@ is **lost**: back to where it was picked from, uncharged.
 | Outcome | Bead | Branch / PR |
 | --- | --- | --- |
 | Researcher writes a brief | ready with the brief, **no failure** | the worktree stays for the worker |
-| Research runs out of time | ready with an empty brief: the worker goes without one | stays |
-| Researcher blocked | noted, then a **second opinion** (`brief_model`, else the researcher again) with the first reply in its prompt | stays |
+| Research runs out of time, or answers nothing that parses | ready with an empty brief: the worker goes without one | stays |
+| Researcher blocked | noted, and back to the research queue for a **second opinion** (`brief_model`, else the researcher again) with the first reply in its prompt; it starts like any research round, on a free lane | stays |
 | … the second opinion writes a brief | ready, **no failure** | stays |
 | … the second opinion is blocked too | parked before any edit | removed |
 | No brief yet, and the worker's server has a slot | worked without one: the GPU never waits on the CPU | as any work round |

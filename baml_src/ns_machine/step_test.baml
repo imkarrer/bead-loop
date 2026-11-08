@@ -131,18 +131,50 @@ test "Researcher writes a brief" {
     assert.equal(s.bead.brief, "Files:\ncalc.js")
 }
 
-test "Researcher BLOCKED asks for a second opinion" {
+test "Researcher BLOCKED goes back to the research queue for a second opinion" {
     let s = step(
+        bead(researching()),
+        ResearchBlocked {
+            kind: "research_blocked",
+            line: "layouts/a.html:3",
+            second_opinion: false,
+        },
+        policy(),
+    );
+    assert.is_type<Ready>(s.bead.place);
+    assert.equal(s.bead.first_block, "BLOCKED: layouts/a.html:3");
+    assert.equal(s.bead.last_note, "BLOCKED: layouts/a.html:3");
+    assert.equal(s.bead.brief == null, true)
+}
+
+test "a second BLOCKED parks, however the round marked it" {
+    let first = step(
         bead(researching()),
         ResearchBlocked { kind: "research_blocked", line: "BLOCKED: x", second_opinion: false },
         policy(),
+    ).bead;
+    let again = step(
+        first.at(Researching { kind: "researching" }),
+        ResearchBlocked { kind: "research_blocked", line: "BLOCKED: x", second_opinion: false },
+        policy(),
     );
-    assert.is_type<Researching>(s.bead.place);
-    assert.is_true(
-        s.effects.some((e) -> {
-            e is SecondOpinion
-        }),
-    )
+    assert.is_type<Parked>(again.bead.place);
+}
+
+test "a second opinion's brief clears the block" {
+    let first = step(
+        bead(researching()),
+        ResearchBlocked { kind: "research_blocked", line: "BLOCKED: x", second_opinion: false },
+        policy(),
+    ).bead;
+    let s = step(
+        first.at(Researching { kind: "researching" }),
+        BriefWritten { kind: "brief_written", overruled: true, text: "Files:\nok" },
+        policy(),
+    );
+    assert.equal(s.bead.first_block == null, true);
+    assert.equal(s.bead.last_note == null, true);
+    assert.equal(s.bead.brief, "Files:\nok")
 }
 
 test "the second opinion writes a brief" {

@@ -207,6 +207,10 @@ function on_researching(b: Bead, e: Event, p: Policy) -> Step throws never {
         let x: BriefWritten => {
             let n = back.copy();
             n.brief = x.text;
+            if (b.first_block != null) {
+                n.first_block = null;
+                n.last_note = null;
+            }
             let text = if (x.overruled) {
                 "brief written: the second opinion overruled the block"
             } else {
@@ -215,15 +219,21 @@ function on_researching(b: Bead, e: Event, p: Policy) -> Step throws never {
             Step { bead: n, effects: [Note { text: text }] }
         },
         let x: ResearchBlocked => {
-            if (x.second_opinion || !p.second_opinion) {
+            if (x.second_opinion || b.first_block != null || !p.second_opinion) {
                 let parked = park(b, x.line);
                 parked.effects.push(RemoveBranch {});
                 parked
             } else {
-                Step {
-                    bead: b,
-                    effects: [Note { text: x.line }, SecondOpinion { first_reply: x.line }],
-                }
+                // Back to the research queue for a second opinion, which reads this line.
+                let line = if (x.line.starts_with("BLOCKED")) {
+                    x.line
+                } else {
+                    `BLOCKED: ${x.line}`
+                };
+                let n = back.copy();
+                n.first_block = line;
+                n.last_note = line;
+                Step { bead: n, effects: [Note { text: line }] }
             }
         },
         let x: Infra => held(back, x),
