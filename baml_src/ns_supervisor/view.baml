@@ -72,6 +72,21 @@ class FBead {
     last: string,
 }
 
+/// One round of a bead, from its event log: what kind, on which model, when it was picked
+/// (and how long the bead had waited for that), when it ended and what it came to.
+class FRoundRec {
+    kind: string,
+    model: string,
+    picked_at: int,
+    ended_at: int,
+    /// The kind of the event that ended it (gate_passed, rejected, infra, ...).
+    outcome: string,
+    /// That event's words: the REJECT line, the hold's words.
+    words: string,
+    /// From the event before the pick to the pick: the wait for a free lane.
+    waited_s: int,
+}
+
 /// One bead's life, as the scoreboard counts it.
 class FTally {
     slug: string,
@@ -93,6 +108,8 @@ class FTally {
     review_rounds: int[],
     prechecks: int[],
     send_backs: FSend[],
+    /// Its rounds in order; filled by `ftally`.
+    round_log: FRoundRec[],
 }
 
 class FSend {
@@ -332,6 +349,7 @@ function ftally(
         review_rounds: [],
         prechecks: [],
         send_backs: [],
+        round_log: [],
     };
     let b = root.machine.Bead.new(id);
     for (let e in timed) {

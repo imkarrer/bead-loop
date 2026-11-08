@@ -880,6 +880,23 @@ const mtok = (n) => n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${Math.r
 const price = (n) => String(Number(n.toFixed(3)));
 const pct = (n, of) => of ? `${Math.round(n * 100 / of)}%` : '–';
 const tile = (label, value, sub, cls) => `<div class="tile" data-key="${esc(label)}"><div class="label">${label}</div><div class="value ${cls || ''}">${value}</div><div class="sub">${sub}</div></div>`;
+// Insights: what the loop's record says to change (/api/insights, rebuilt by the server at
+// most every five minutes, asked here once a minute). Each is a table with a level and a
+// hint; the page draws any of them the same way, so a new one needs no code here.
+let insights = null;
+async function pollInsights() {
+  try { const r = await fetch('/api/insights'); if (r.ok) { insights = await r.json(); render(); } } catch (e) { /* the next minute */ }
+}
+const LEVEL = { ok: '', warn: 'warn', bad: 'bad' };
+function insightsPane() {
+  if (!insights) return '<section class="card" id="insights"><h2>Insights <span class="cfg">what the loop\u2019s record says to change</span></h2><div class="empty">reading the traces\u2026</div></section>';
+  const one = (x) => `<div class="insight" data-key="${esc(x.key)}"><h3>${esc(x.title)}${x.level !== 'ok' ? ` <span class="chip ${LEVEL[x.level] || ''}">${esc(x.level)}</span>` : ''}<span class="note">${esc(x.about)}</span></h3>`
+    + (x.rows.length === 0 ? '<div class="empty">nothing yet</div>'
+      : `<table><tr>${x.columns.map((c) => `<th>${esc(c)}</th>`).join('')}</tr>${x.rows.map((r, i) => `<tr data-key="${i}">${r.map((c) => `<td>${esc(c)}</td>`).join('')}</tr>`).join('')}</table>`)
+    + (x.hint ? `<div class="note">${esc(x.hint)}</div>` : '') + '</div>';
+  return `<section class="card" id="insights"><h2>Insights <span class="cfg">what the loop\u2019s record says to change \u00b7 as of ${clock(insights.at)}</span></h2>${insights.insights.map(one).join('')}</section>`;
+}
+
 function scoreboard(s) {
   const st = s.stats;
   const seg = `<span class="seg">${['24h', '7d', '30d', 'all'].map((w) => `<button class="${w === scoreWin ? 'cur' : ''}" onclick="setWin('${w}')">${w}</button>`).join('')}</span>`;
@@ -1059,7 +1076,7 @@ function render() {
     : `<pre class="log" id="log">${lines.map((l) => `<span class="t">${clock(l.t)}</span>  <span class="${l.cls}">${esc(l.m)}</span>`).join("\n")}</pre>`;
   const sysBox = `<label class="opt" title="systemd’s Starting/Finished/Stopped lines for the unit"><input type="checkbox" ${showSys ? 'checked' : ''} onchange="setSys(this.checked)">systemd lines</label>`;
   patch($('main'), (last.error ? `<div class="banner" data-key="error">status failed: ${esc(last.error)}</div>` : '')
-    + (last.repos.length === 0 ? '<section class="card" data-key="norepos"><div class="empty">no repos: set <span class="mono">repos</span> in ~/.config/bead-loop/config.toml</div></section>' : flowPane(last) + scoreboard(last))
+    + (last.repos.length === 0 ? '<section class="card" data-key="norepos"><div class="empty">no repos: set <span class="mono">repos</span> in ~/.config/bead-loop/config.toml</div></section>' : flowPane(last) + scoreboard(last) + insightsPane())
     + last.repos.map((r) => repo(r, last.now, last.service.available && (last.service.active === 'active' || last.service.active === 'activating'))).join("")
     + `<section class="card" id="journal"><h3 class="log">Supervisor log${sysBox}</h3>${log}</section>`);
   drawEdges();
@@ -1096,6 +1113,7 @@ function connect() {
 function disconnect() { if (es) { clearInterval(es); es = null; } setLive(false, 'paused'); }
 document.addEventListener('visibilitychange', () => (document.hidden ? disconnect() : connect()));
 connect();
+pollInsights(); setInterval(pollInsights, 60000);
 // Between pushes the clock still moves: re-render the ages every 10 s from the last state.
 setInterval(() => { if (last && live) { last.now = Math.floor(Date.now() / 1000); render(); } }, 10000);
 </script>
