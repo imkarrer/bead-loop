@@ -276,17 +276,12 @@ function config_from_toml_file(path: string) -> LoopConfig throws never {
     } else {
         `${repo}/.bead-loop-state`
     };
-    let bin = baml.sys.run("readlink", args = ["-f", "/proc/self/exe"], capture_output = true) catch_all (e) {
-        _ => {
-            return config_from_toml(read_or_empty(path), "", repo, state, "bead-loop");
-        },
-    };
     config_from_toml(
         read_or_empty(path),
         read_or_empty(`${home}/.config/bead-loop/config.toml`),
         repo,
         state,
-        bin.stdout.to_string().trim(),
+        own_exe(),
     )
 }
 
@@ -561,4 +556,28 @@ test "a provider's server is its url, or what its probe implies" {
     assert.equal(urls.get("devbox") ?? "", "http://127.0.0.1:8100/v1");
     assert.equal(urls.get("acbox") ?? "", "http://192.168.1.51:8100/v1");
     assert.equal(urls.get("claude") ?? "none", "none")
+}
+
+/// This process's own binary, which each round runs as `round`. Asked through our pid:
+/// `readlink /proc/self/exe` run as a child names the child, and every live round was
+/// started as `readlink round --spec_file ...` and exited at once (8 Nov).
+function own_exe() -> string throws never {
+    let out = baml.sys.run("readlink", args = ["-f", `/proc/${baml.sys.pid()}/exe`], capture_output = true) catch_all (e) {
+        _ => {
+            return "bead-supervisor";
+        },
+    };
+    let path = out.stdout.to_string().trim();
+    if (out.exit_code == 0 && path.length() > 0) {
+        path
+    } else {
+        "bead-supervisor"
+    }
+}
+
+test "the binary a round runs is this process's own, not readlink's" {
+    let exe = own_exe();
+    assert.equal(exe.includes("coreutils") || exe.ends_with("/readlink"), false);
+    let theirs = baml.sys.run("readlink", args = ["-f", "/proc/self/exe"], capture_output = true);
+    assert.equal(exe == theirs.stdout.to_string().trim(), false)
 }
