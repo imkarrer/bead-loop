@@ -137,6 +137,10 @@ function run_worker(spec: RoundSpec, task: string) -> root.agents.Report {
 }
 
 function failed_session(e: unknown) -> root.machine.Event throws never {
+    let limit = limit_hit(`${e}`);
+    if let held: root.machine.Event = limit {
+        return held;
+    }
     match (e) {
         let x: ai.errors.StepBudgetExceeded => {
             root.machine.RoundTimedOut { kind: "round_timed_out" }
@@ -292,6 +296,10 @@ function run_reviewer(spec: RoundSpec, diff: string) -> root.agents.Verdict {
 /// No verdict is "nothing from the model": held, not charged. state-machine.md, and the
 /// t-1 e2e that charged a worker because the reviewer ran out of steps.
 function review_failed_session(e: unknown) -> root.machine.Event throws never {
+    let limit = limit_hit(`${e}`);
+    if let held: root.machine.Event = limit {
+        return held;
+    }
     match (e) {
         let x: ai.errors.StepBudgetExceeded => {
             infra_harness("the reviewer returned no verdict: out of steps")
@@ -336,7 +344,7 @@ function run_researcher(spec: RoundSpec) -> root.agents.ResearchResult {
 function research_round(spec: RoundSpec) -> root.machine.Event[] throws never {
     let result = run_researcher(spec) catch_all (e) {
         _ => {
-            let out: root.machine.Event[] = [infra_harness(`${e}`)];
+            let out: root.machine.Event[] = [limit_hit(`${e}`) ?? infra_harness(`${e}`)];
             return out;
         },
     };
@@ -461,4 +469,25 @@ test "only a SEND BACK from the pre-check counts" {
 
 test "no pre-check model is no pre-check" {
     assert.equal(precheck(spec_of("", "")) == null, true)
+}
+
+/// Claude's own "You've hit your session limit · resets 7:40am (UTC)": the provider's
+/// limit, not the model's failure, however many turns the session spent first (bl-boc.5).
+/// It holds the bead, and the supervisor holds every claude round while it lasts.
+function limit_hit(said: string) -> root.machine.Event? throws never {
+    if (said.includes("hit your") && said.includes("limit")) {
+        root.machine.Infra {
+            kind: "infra",
+            what: root.machine.Trouble.SignedOut,
+            words: `usage limit on claude: ${root.tools.tail(said)}`,
+        }
+    } else {
+        null
+    }
+}
+
+test "a usage limit is the provider's, not the worker's" {
+    let e = limit_hit("claude: You've hit your session limit · resets 7:40am (UTC)");
+    assert.is_type<root.machine.Infra>(e);
+    assert.equal(limit_hit("there is a limit on how much I can help") == null, true)
 }

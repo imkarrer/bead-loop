@@ -451,3 +451,32 @@ test "open_pr ask pushes, waits for you to open the PR, then watches it" {
     assert.is_type<root.machine.Closed>(place_of(s));
     assert.equal(w.calls.includes("merge_pr"), false)
 }
+
+test "a usage limit on claude holds every claude round, and nothing else" {
+    let w = two_beads();
+    let p = policy();
+    p.stages
+        = [
+            root.machine.Stage {
+                name: "frontier",
+                worker: "claude/sonnet",
+                reviewer: "claude/sonnet",
+                attempts: 1,
+            },
+        ];
+    let s = Supervisor.new(w, MemoryLog.new(), p);
+    let _ = s.capacity.set("claude", 2);
+    admit_tickets(s);
+    apply(
+        s,
+        "t-1",
+        root.machine.Infra {
+            kind: "infra",
+            what: root.machine.Trouble.SignedOut,
+            words: "usage limit on claude: resets 7:40am",
+        },
+    );
+    start_rounds(s);
+    assert.equal(starts(w, "start_round Work claude/sonnet"), 0);
+    assert.equal(lane_free(s, [], "devbox/coder"), true)
+}

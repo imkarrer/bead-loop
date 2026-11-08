@@ -257,7 +257,13 @@ function expire_holds(s: Supervisor) -> void throws never {
     for (let b in s.beads) {
         if (b.hold != null) {
             let n = (s.held_for.get(b.id) ?? 0) + 1;
-            if (n >= s.hold_ticks) {
+            // A usage limit resets in hours, not ticks: try it again every half hour.
+            let lasts = if ((b.hold?.words ?? "").starts_with("usage limit on ")) {
+                s.hold_ticks * 12
+            } else {
+                s.hold_ticks
+            };
+            if (n >= lasts) {
                 let _ = s.held_for.set(b.id, 0);
                 apply(s, b.id, root.machine.HoldCleared { kind: "hold_cleared" });
             } else {
@@ -296,6 +302,13 @@ function lane_free(s: Supervisor, busy: string[], model: string) -> bool throws 
         return true;
     }
     let p = provider_of(model);
+    // A usage limit on the provider holds all of its rounds, not just the bead that met it.
+    let limited = s.beads.some((b) -> {
+        (b.hold?.words ?? "").starts_with(`usage limit on ${p}:`)
+    });
+    if (limited) {
+        return false;
+    }
     let used = busy
         .filter((m) -> {
             provider_of(m) == p
