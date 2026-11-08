@@ -10,6 +10,10 @@ class LoopConfig {
     agent_bin: string,
     policy: root.machine.Policy,
     lanes: int,
+    /// `[providers.NAME] parallel`, by provider.
+    capacity: map<string, int>,
+    max_inflight: int,
+    max_open_prs: int,
     heartbeat_seconds: int,
 }
 
@@ -27,22 +31,66 @@ function start_of(config_file: string) -> Supervisor {
     };
     let s = recover(world, FileLog { state: c.state }, c.policy);
     s.lanes = c.lanes;
+    s.capacity = c.capacity;
+    s.max_inflight = c.max_inflight;
+    s.max_open_prs = c.max_open_prs;
+    s.group = c.repo;
     s
 }
 
 /// Tick each supervisor and keep the result. An index write on a local array does not
-/// stick, so the ticked value is pushed onto a new array.
+/// stick, so the ticked value is pushed onto a new array. Before each tick it is told
+/// what the others are running, so a model server's slots are shared by every repo, and
+/// how many PRs the rest of its group has open, for `max_open_prs`.
 function tick_all(worlds: Supervisor[]) -> Supervisor[] {
     let out: Supervisor[] = [];
     let i = 0;
     while (i < worlds.length()) {
         if let s: Supervisor = worlds.at(i) {
+            let others: Supervisor[] = [];
+            let j = 0;
+            while (j < worlds.length()) {
+                let o = if (j < i) {
+                    out.at(j)
+                } else {
+                    worlds.at(j)
+                };
+                if let other: Supervisor = o {
+                    if (j != i) {
+                        others.push(other);
+                    }
+                }
+                j = j + 1;
+            }
+            share(s, others);
             tick(s);
             out.push(s);
         }
         i = i + 1;
     }
     out
+}
+
+/// What `s` needs to know about the other supervisors in this process.
+function share(s: Supervisor, others: Supervisor[]) -> void throws never {
+    let busy: string[] = [];
+    let group = 0;
+    for (let o in others) {
+        let running = o.world.running() catch (e) {
+            root.machine.Infra => {
+                let none: root.world.RoundRunning[] = [];
+                none
+            },
+        };
+        for (let r in running) {
+            busy.push(r.model);
+        }
+        if (o.group == s.group) {
+            group = group + inflight(o);
+        }
+    }
+    s.elsewhere = busy;
+    s.group_inflight = group;
 }
 
 function run_one(config_file: string, ticks: int) -> int {

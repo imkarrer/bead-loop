@@ -189,7 +189,13 @@ class LiveWorld {
                     _ => false,
                 };
                 if (alive && pid.trim().length() > 0) {
-                    out.push(RoundRunning { id: name, kind: self.kind_of(name) });
+                    out.push(
+                        RoundRunning {
+                            id: name,
+                            kind: self.kind_of(name),
+                            model: self.model_of(name),
+                        },
+                    );
                 }
             }
             out
@@ -473,6 +479,15 @@ class LiveWorld {
             },
         };
         spec.kind
+    }
+
+    function model_of(self, id: string) -> string throws never {
+        let spec = self.read_spec(id) catch_all (e) {
+            _ => {
+                return "";
+            },
+        };
+        spec.model
     }
 
     function read_spec(self, id: string) -> root.rounds.RoundSpec {

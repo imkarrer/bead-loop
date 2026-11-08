@@ -7,8 +7,21 @@ class Supervisor {
     log: Log,
     policy: root.machine.Policy,
     beads: root.machine.Bead[],
-    /// How many rounds may run at once on each lane.
+    /// How many rounds may run at once on a model server this map does not name.
     lanes: int,
+    /// Rounds at once per model server, by provider (`devbox`, `acbox`, `claude`).
+    capacity: map<string, int>,
+    /// The models running in the other repos this process ticks. A model server is
+    /// shared, so its lane counts every repo's rounds.
+    elsewhere: string[],
+    /// The repo this supervisor plans for; a target shares its parent's group.
+    group: string,
+    /// PRs in the merge queue in the rest of the group.
+    group_inflight: int,
+    /// The dev lane pauses at this many PRs in this merge queue; 0 is no cap.
+    max_inflight: int,
+    /// The dev lane pauses at this many PRs across the group; 0 is no cap.
+    max_open_prs: int,
     /// Ticks a hold lasts before the bead is tried again.
     hold_ticks: int,
     held_for: map<string, int>,
@@ -24,6 +37,12 @@ class Supervisor {
             policy: policy,
             beads: [],
             lanes: 1,
+            capacity: {},
+            elsewhere: [],
+            group: "",
+            group_inflight: 0,
+            max_inflight: 0,
+            max_open_prs: 0,
             hold_ticks: 5,
             held_for: {},
         }
@@ -218,20 +237,82 @@ function needs_research(s: Supervisor, b: root.machine.Bead) -> bool throws neve
     s.policy.research.length() > 0 && b.brief == null
 }
 
+/// `devbox/coder` runs on `devbox`. A lane is a model server, so it is the provider.
+function provider_of(model: string) -> string throws never {
+    model.split("/").at(0) ?? model
+}
+
+/// Whether the server `model` runs on has a free slot, counting `busy` across every repo.
+function lane_free(s: Supervisor, busy: string[], model: string) -> bool throws never {
+    // No model: the stages are used up, and picking it is what parks it.
+    if (model.length() == 0) {
+        return true;
+    }
+    let p = provider_of(model);
+    let used = busy
+        .filter((m) -> {
+            provider_of(m) == p
+        })
+        .length();
+    used < (s.capacity.get(p) ?? s.lanes)
+}
+
+/// PRs this supervisor has in the merge queue. An adopted PR is someone else's and
+/// does not count, as in the Rust loop.
+function inflight(s: Supervisor) -> int throws never {
+    s.beads
+        .filter((b) -> {
+            own_pr(b)
+        })
+        .length()
+}
+
+function own_pr(b: root.machine.Bead) -> bool throws never {
+    if let m: root.machine.Merging = b.place {
+        !m.adopted
+    } else {
+        false
+    }
+}
+
+/// The dev lane waits while the merge queue is at a cap. Review and research go on: they
+/// do not open a PR of their own until a bead already in review is approved.
+function dev_paused(s: Supervisor) -> bool throws never {
+    let here = inflight(s);
+    (s.max_inflight > 0 && here >= s.max_inflight)
+        || (s.max_open_prs > 0 && here + s.group_inflight >= s.max_open_prs)
+}
+
+function worker_of(s: Supervisor, b: root.machine.Bead) -> string throws never {
+    root.machine.stage_for(s.policy, b.failures)?.worker ?? ""
+}
+
+function reviewer_of(s: Supervisor, b: root.machine.Bead) -> string throws never {
+    root.machine.stage_for(s.policy, b.failures)?.reviewer ?? ""
+}
+
+/// Reviews first, then research, then work, each on its own server's lane. A worker
+/// lane with no briefed bead to take works one without a brief rather than sit idle.
 function start_rounds(s: Supervisor) -> void throws never {
-    let busy = s.world.running() catch (e) {
+    let running = s.world.running() catch (e) {
         root.machine.Infra => {
             return;
         },
     };
-    let free = s.lanes - busy.length();
+    let busy: string[] = running.map((r) -> {
+        r.model
+    });
+    for (let m in s.elsewhere) {
+        busy.push(m);
+    }
     for (
         let b in queue_of(s, (x) -> {
             x.place is root.machine.InReview
         })
     ) {
-        if (free > 0) {
-            free = free - start_review(s, b);
+        let model = reviewer_of(s, b);
+        if (lane_free(s, busy, model) && start_review(s, b) > 0) {
+            busy.push(model);
         }
     }
     for (
@@ -239,17 +320,31 @@ function start_rounds(s: Supervisor) -> void throws never {
             x.place is root.machine.Ready && needs_research(s, x)
         })
     ) {
-        if (free > 0) {
-            free = free - start_research(s, b);
+        if (lane_free(s, busy, s.policy.research) && start_research(s, b) > 0) {
+            busy.push(s.policy.research);
         }
+    }
+    if (dev_paused(s)) {
+        return;
     }
     for (
         let b in queue_of(s, (x) -> {
             x.place is root.machine.Ready && !needs_research(s, x)
         })
     ) {
-        if (free > 0) {
-            free = free - start_work(s, b);
+        let model = worker_of(s, b);
+        if (lane_free(s, busy, model) && start_work(s, b) > 0) {
+            busy.push(model);
+        }
+    }
+    for (
+        let b in queue_of(s, (x) -> {
+            x.place is root.machine.Ready && needs_research(s, x)
+        })
+    ) {
+        let model = worker_of(s, b);
+        if (lane_free(s, busy, model) && start_work(s, b) > 0) {
+            busy.push(model);
         }
     }
 }
@@ -269,14 +364,12 @@ function start_work(s: Supervisor, b: root.machine.Bead) -> int throws never {
     if (!(now.place is root.machine.Working) || now.hold != null) {
         return 0;
     }
-    let model = root.machine.stage_for(s.policy, now.failures)?.worker ?? "";
-    start(s, b.id, root.world.RoundKind.Work, model)
+    start(s, b.id, root.world.RoundKind.Work, worker_of(s, now))
 }
 
 function start_review(s: Supervisor, b: root.machine.Bead) -> int throws never {
     apply(s, b.id, root.machine.ReviewPicked { kind: "review_picked" });
-    let model = root.machine.stage_for(s.policy, b.failures)?.reviewer ?? "";
-    start(s, b.id, root.world.RoundKind.Review, model)
+    start(s, b.id, root.world.RoundKind.Review, reviewer_of(s, b))
 }
 
 function start(

@@ -281,3 +281,113 @@ test "a restart loses nothing a bead has been charged" {
     let again = recover(w, log, policy());
     assert.equal(again.bead("t-1")?.failures, 1)
 }
+
+// Lanes and caps: a lane is a model server, shared by every repo the process ticks.
+
+function two_beads() -> root.world.FakeWorld throws never {
+    root.world.FakeWorld.new(
+        [ticket("t-1"), ticket("t-2")],
+        [
+            root.world.Script {
+                id: "t-1",
+                work: [committed()],
+                review: [approved()],
+                pr: [],
+                research: [],
+            },
+            root.world.Script {
+                id: "t-2",
+                work: [committed()],
+                review: [approved()],
+                pr: [],
+                research: [],
+            },
+        ],
+    )
+}
+
+function starts(w: root.world.FakeWorld, call: string) -> int throws never {
+    w.calls
+        .filter((c) -> {
+            c == call
+        })
+        .length()
+}
+
+test "one devbox slot takes one bead and the other waits" {
+    let w = two_beads();
+    let s = Supervisor.new(w, MemoryLog.new(), policy());
+    tick(s);
+    assert.equal(starts(w, "start_round Work devbox/coder"), 1)
+}
+
+test "a server with two slots takes two beads" {
+    let w = two_beads();
+    let s = Supervisor.new(w, MemoryLog.new(), policy());
+    let _ = s.capacity.set("devbox", 2);
+    tick(s);
+    assert.equal(starts(w, "start_round Work devbox/coder"), 2)
+}
+
+test "research on acbox and work on devbox run at once" {
+    let w = two_beads();
+    let p = policy();
+    p.research = "acbox/coder";
+    let s = Supervisor.new(w, MemoryLog.new(), p);
+    tick(s);
+    assert.equal(starts(w, "start_round Research acbox/coder"), 1);
+    assert.equal(starts(w, "start_round Work devbox/coder"), 1)
+}
+
+test "a round in another repo holds its server's slot" {
+    let w = two_beads();
+    let s = Supervisor.new(w, MemoryLog.new(), policy());
+    s.elsewhere = ["devbox/coder"];
+    tick(s);
+    assert.equal(starts(w, "start_round Work devbox/coder"), 0)
+}
+
+test "max_inflight pauses the dev lane while a PR is in the queue" {
+    let w = two_beads();
+    let s = Supervisor.new(w, MemoryLog.new(), policy());
+    let _ = s.capacity.set("devbox", 2);
+    s.max_inflight = 1;
+    turns(s, w, 3);
+    // t-1 and t-2 both worked at once, both reviewed; then both opened PRs. Nothing new
+    // is ready, so the check is the next bead: none is picked while one is in the queue.
+    assert.is_true(inflight(s) >= 1);
+    assert.is_true(dev_paused(s))
+}
+
+test "max_open_prs counts the PRs elsewhere in the group" {
+    let w = two_beads();
+    let s = Supervisor.new(w, MemoryLog.new(), policy());
+    s.max_open_prs = 1;
+    s.group_inflight = 1;
+    tick(s);
+    assert.equal(starts(w, "start_round Work devbox/coder"), 0)
+}
+
+test "an adopted PR does not count toward the caps" {
+    let w = two_beads();
+    let s = Supervisor.new(w, MemoryLog.new(), policy());
+    s.max_inflight = 1;
+    apply(s, "t-1", root.machine.PrAdopted { kind: "pr_adopted", url: "pr/t-1" });
+    assert.equal(inflight(s), 0);
+    tick(s);
+    assert.equal(starts(w, "start_round Work devbox/coder"), 1)
+}
+
+test "a round in one repo holds the server for the next repo in the same pass" {
+    let a = two_beads();
+    let b = two_beads();
+    let sa = Supervisor.new(a, MemoryLog.new(), policy());
+    let sb = Supervisor.new(b, MemoryLog.new(), policy());
+    sa.group = "a";
+    sb.group = "b";
+    let _ = tick_all([sa, sb]);
+    assert.equal(
+        starts(a, "start_round Work devbox/coder") + starts(b, "start_round Work devbox/coder"),
+        1,
+    )
+}

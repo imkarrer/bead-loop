@@ -203,6 +203,9 @@ function config_from_toml(
             research: research_model(global),
         },
         lanes: 1,
+        capacity: capacity_of(global),
+        max_inflight: int_at(repo_table, "max_inflight", int_at(global, "max_inflight", 0)),
+        max_open_prs: int_at(global, "max_open_prs", 0),
         heartbeat_seconds: int_at(global, "heartbeat_seconds", 30),
     }
 }
@@ -296,4 +299,38 @@ test "a repo toml keeps its merge mode and takes the global stages" {
     assert.equal(c.policy.stages.at(1)?.worker, "claude/sonnet");
     assert.equal(c.policy.research, "acbox/coder");
     assert.equal(c.policy.on_exhaust, root.machine.OnExhaust.Park)
+}
+
+/// `[providers.NAME] parallel` for each provider that sets it. A provider that does not
+/// runs one round at a time, the Rust loop's default.
+function capacity_of(global: baml.toml.Table) -> map<string, int> throws never {
+    let out: map<string, int> = {};
+    let v = global.get("providers");
+    if let t: baml.toml.Table = v {
+        for (let name in t.items.keys()) {
+            let row = t.get(name);
+            if let p: baml.toml.Table = row {
+                let _ = out.set(name, int_at(p, "parallel", 1));
+            }
+        }
+    }
+    out
+}
+
+test "providers set their lanes and the caps come from the files" {
+    let global = `
+        max_open_prs = 1
+        max_inflight = 100
+
+        [providers.devbox]
+        probe = "http://127.0.0.1:8100/health"
+
+        [providers.claude]
+        parallel = 2
+    `;
+    let c = config_from_toml("max_inflight = 3\n", global, "/src/r", "/state", "bead-loop");
+    assert.equal(c.capacity.get("claude") ?? 0, 2);
+    assert.equal(c.capacity.get("devbox") ?? 0, 1);
+    assert.equal(c.max_inflight, 3);
+    assert.equal(c.max_open_prs, 1)
 }

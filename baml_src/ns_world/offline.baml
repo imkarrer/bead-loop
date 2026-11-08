@@ -164,7 +164,7 @@ class OfflineWorld {
                         _ => false,
                     };
                     if (alive && pid.trim().length() > 0) {
-                        out.push(RoundRunning { id: name, kind: RoundKind.Work });
+                        out.push(RoundRunning { id: name, kind: RoundKind.Work, model: "" });
                     }
                 }
             }

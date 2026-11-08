@@ -25,6 +25,8 @@ class RoundDone {
 class RoundRunning {
     id: string,
     kind: RoundKind,
+    /// The model the round runs on: its provider is the lane it holds.
+    model: string,
 }
 
 interface World {

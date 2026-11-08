@@ -98,7 +98,7 @@ class FakeWorld {
         ) -> void throws root.machine.Infra {
             self.record(`start_round ${kind} ${model}`);
             self.notes_given.push(note);
-            self.running_now.push(RoundRunning { id: id, kind: kind });
+            self.running_now.push(RoundRunning { id: id, kind: kind, model: model });
         }
         function running(self) -> RoundRunning[] throws never {
             self.running_now
