@@ -543,3 +543,15 @@ test "a PR the loop's own account opened before a cutover counts as its own" {
     assert.equal(inflight(s), 1);
     assert.equal(starts(w, "start_round Work devbox/coder"), 0)
 }
+
+test "a round that died with no result is lost and started again, uncharged" {
+    let w = one_bead([committed()], [approved()], [green(), merged()]);
+    let s = Supervisor.new(w, MemoryLog.new(), policy());
+    tick(s);
+    assert.is_type<root.machine.Working>(place_of(s));
+    // The process is gone, and it wrote nothing.
+    w.running_now = [];
+    tick(s);
+    assert.equal(s.bead("t-1")?.failures, 0);
+    assert.equal(starts(w, "start_round Work devbox/coder"), 2)
+}

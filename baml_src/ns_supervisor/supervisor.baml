@@ -170,13 +170,40 @@ function perform(
 
 /// One pass. Reads the world, then decides; everything it does is safe to do again.
 function tick(s: Supervisor) -> void throws never {
+    // What runs is asked before results are taken: a round that ends in between still
+    // counts as running, and its result is there next tick.
+    let alive = s.world.running() catch (e) {
+        root.machine.Infra => {
+            let none: root.world.RoundRunning[] = [];
+            none
+        },
+    };
     take_finished(s);
+    settle_lost(s, alive);
     take_inbox(s);
     adopt_prs(s);
     watch_prs(s);
     admit_tickets(s);
     expire_holds(s);
     start_rounds(s);
+}
+
+/// A bead on a round whose process is gone and left no result: the round died (killed,
+/// out of memory). Lost, not charged, and tried again.
+function settle_lost(s: Supervisor, alive: root.world.RoundRunning[]) -> void throws never {
+    for (let b in s.beads) {
+        let on_a_round = b.place is root.machine.Working
+            || b.place is root.machine.Reviewing
+            || b.place is root.machine.Researching;
+        if (
+            on_a_round
+                && !alive.some((r) -> {
+                    r.id == b.id
+                })
+        ) {
+            apply(s, b.id, root.machine.RoundLost { kind: "round_lost" });
+        }
+    }
 }
 
 function take_finished(s: Supervisor) -> void throws never {

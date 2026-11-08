@@ -38,6 +38,9 @@ class LiveWorld {
     merge_label: string,
     /// Review comments from others on the loop's own PR send it back to act on them.
     feedback: bool,
+    /// Seconds a work or review round may run (worker_timeout), and a research round.
+    work_seconds: int,
+    research_seconds: int,
     /// Each provider's server, from `[providers.NAME]`.
     urls: map<string, string>,
     /// The pre-check model; empty is none.
@@ -338,6 +341,22 @@ class LiveWorld {
 
         function take_finished(self) -> RoundDone[] throws root.machine.Infra {
             let out: RoundDone[] = [];
+            for (let name in self.names_in(self.rounds(), ".timedout")) {
+                let kind = self.kind_of(name);
+                out.push(
+                    RoundDone {
+                        id: name,
+                        kind: kind,
+                        events: [timed_out(kind, self.limit_of(kind))],
+                    },
+                );
+                let _ = baml.fs.remove(`${self.rounds()}/${name}.timedout`) catch_all (e) {
+                    _ => null,
+                };
+                let _ = baml.fs.remove(`${self.rounds()}/${name}.pid`) catch_all (e) {
+                    _ => null,
+                };
+            }
             for (let name in self.names_in(self.rounds(), ".result.json")) {
                 let path = `${self.rounds()}/${name}.result.json`;
                 let done = self.read_result(path) catch_all (e) {
@@ -585,16 +604,14 @@ class LiveWorld {
             _ => null,
         };
         let argv = round_argv(bwrap_path(), self.agent_bin, spec_file, spec.dir, self.repo, self.state);
-        let program = argv.at(0) ?? self.agent_bin;
-        let args: string[] = [];
-        let i = 1;
-        while (i < argv.length()) {
-            args.push(argv.at(i) ?? "");
-            i = i + 1;
-        }
+        let seconds = if (spec.kind == RoundKind.Research) {
+            self.research_seconds
+        } else {
+            self.work_seconds
+        };
         let child = baml.sys.subprocess(
-            program,
-            args = args,
+            "sh",
+            args = timed_argv(argv, seconds, `${self.rounds()}/${id}.timedout`),
             cwd = spec.dir,
             env = {
                 "BAML_HOME": `${self.repo}/.baml`,
@@ -717,6 +734,14 @@ class LiveWorld {
             },
         };
         spec.kind
+    }
+
+    function limit_of(self, kind: RoundKind) -> int throws never {
+        if (kind == RoundKind.Research) {
+            self.research_seconds
+        } else {
+            self.work_seconds
+        }
     }
 
     function model_of(self, id: string) -> string throws never {
@@ -1164,4 +1189,60 @@ test "comments from others after the mark are feedback; the loop's own and bots'
     assert.equal((f?.text ?? "").includes("thanks"), false);
     assert.equal((f?.text ?? "").includes("build passed"), false);
     assert.equal(feedback_of(COMMENTS_SAMPLE, "imkarrer", "2026-11-02T09:30:00Z") == null, true)
+}
+
+/// The round under `timeout`: past `seconds` it and everything it started are stopped
+/// (TERM, then KILL thirty seconds on), and `marker` says it was the clock, not a crash.
+function timed_argv(argv: string[], seconds: int, marker: string) -> string[] throws never {
+    let out = [
+        "-c",
+        "m=$1; s=$2; shift 2; timeout -k 30 \"$s\" \"$@\"; rc=$?; if [ $rc -eq 124 ] || [ $rc -eq 137 ]; then : >\"$m\"; fi; exit $rc",
+        "round",
+        marker,
+        `${seconds}`,
+    ];
+    for (let a in argv) {
+        out.push(a);
+    }
+    out
+}
+
+/// What a round that ran out of time comes to. A worker's is the model's failure, as in
+/// the Rust loop; a reviewer's is held, since no verdict is nothing from the model; a
+/// researcher's lets the worker go without a brief.
+function timed_out(kind: RoundKind, seconds: int) -> root.machine.Event throws never {
+    match (kind) {
+        RoundKind.Work => root.machine.RoundTimedOut { kind: "round_timed_out" },
+        RoundKind.Review => {
+            root.machine.Infra {
+                kind: "infra",
+                what: root.machine.Trouble.Harness,
+                words: `the reviewer returned no verdict in ${seconds}s`,
+            }
+        },
+        RoundKind.Research => {
+            root.machine.BriefWritten { kind: "brief_written", overruled: false, text: "" }
+        },
+    }
+}
+
+test "a timed-out round marks itself, and only on the clock" {
+    let argv = timed_argv(["bin", "round", "--spec_file", "s"], 5, "/r/t-1.timedout");
+    assert.equal(argv.at(2), "round");
+    assert.equal(argv.at(3), "/r/t-1.timedout");
+    assert.equal(argv.at(4), "5");
+    assert.equal(argv.at(5), "bin");
+    let dir = "/tmp/bead-loop-timed-test";
+    let _ = baml.sys.run("rm", args = ["-rf", dir]);
+    let _ = baml.sys.run("mkdir", args = ["-p", dir]);
+    let slow = baml.sys.run("sh", args = timed_argv(["sleep", "5"], 1, `${dir}/slow.timedout`));
+    assert.equal(baml.fs.exists(`${dir}/slow.timedout`), true);
+    let quick = baml.sys.run("sh", args = timed_argv(["false"], 5, `${dir}/quick.timedout`));
+    assert.equal(baml.fs.exists(`${dir}/quick.timedout`), false)
+}
+
+test "a timeout charges a worker, holds a reviewer, and frees a researcher" {
+    assert.is_type<root.machine.RoundTimedOut>(timed_out(RoundKind.Work, 1));
+    assert.is_type<root.machine.Infra>(timed_out(RoundKind.Review, 1));
+    assert.is_type<root.machine.BriefWritten>(timed_out(RoundKind.Research, 1));
 }

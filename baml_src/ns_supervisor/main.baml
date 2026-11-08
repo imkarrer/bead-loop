@@ -18,6 +18,8 @@ class LoopConfig {
     pr_style: string,
     merge_label: string,
     feedback: bool,
+    work_seconds: int,
+    research_seconds: int,
     /// Each provider's server: `url`, or its `probe` with `/health` made `/v1`.
     urls: map<string, string>,
     precheck: string,
@@ -51,6 +53,8 @@ function world_of(c: LoopConfig) -> root.world.LiveWorld throws never {
         pr_style: c.pr_style,
         merge_label: c.merge_label,
         feedback: c.feedback,
+        work_seconds: c.work_seconds,
+        research_seconds: c.research_seconds,
         urls: c.urls,
         precheck: c.precheck,
     }
