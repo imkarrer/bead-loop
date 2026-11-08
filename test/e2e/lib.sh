@@ -44,6 +44,7 @@ setup() {
   cat >"$HOME/.config/bead-loop/config.toml" <<EOF
 on_exhaust = "park"
 heartbeat_seconds = 1
+${GLOBAL_EXTRA:-}
 
 [providers.fake]
 url = "$url"
