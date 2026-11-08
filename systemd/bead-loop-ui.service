@@ -1,5 +1,5 @@
 [Unit]
-Description=bead-loop web UI: the loop on one page at http://127.0.0.1:4097, with abort / tick / pause / reopen
+Description=bead-loop page: every repo's beads at http://127.0.0.1:4097, and the levers on a parked bead
 After=network.target
 
 [Service]

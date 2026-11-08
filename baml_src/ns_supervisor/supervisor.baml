@@ -24,6 +24,9 @@ class Supervisor {
     max_open_prs: int,
     /// Open `bead/*` PRs from anyone join the merge queue.
     adopt: bool,
+    /// The beads `bd ready` listed on the last tick that could ask. Only these are picked:
+    /// a bead closed, claimed or blocked since is left where it is.
+    ready: string[],
     /// Ticks a hold lasts before the bead is tried again.
     hold_ticks: int,
     held_for: map<string, int>,
@@ -46,6 +49,7 @@ class Supervisor {
             max_inflight: 0,
             max_open_prs: 0,
             adopt: true,
+            ready: [],
             hold_ticks: 5,
             held_for: {},
         }
@@ -241,10 +245,13 @@ function watch_prs(s: Supervisor) -> void throws never {
 function admit_tickets(s: Supervisor) -> void throws never {
     let tickets = s.world.tickets() catch (e) {
         root.machine.Infra => {
-            let none: root.world.Ticket[] = [];
-            none
+            return;
         },
     };
+    s.ready
+        = tickets.map((t) -> {
+            t.id
+        });
     for (let t in tickets) {
         if (s.bead(t.id) == null) {
             s.put(root.machine.Bead.new(t.id));
@@ -284,6 +291,11 @@ function queue_of(
     waiting.sort_by_key((b) -> {
         b.failures
     })
+}
+
+/// Ready here, and listed by `bd ready` now.
+function pickable(s: Supervisor, b: root.machine.Bead) -> bool throws never {
+    b.place is root.machine.Ready && s.ready.includes(b.id)
 }
 
 function needs_research(s: Supervisor, b: root.machine.Bead) -> bool throws never {
@@ -377,7 +389,7 @@ function start_rounds(s: Supervisor) -> void throws never {
     }
     for (
         let b in queue_of(s, (x) -> {
-            x.place is root.machine.Ready && needs_research(s, x)
+            pickable(s, x) && needs_research(s, x)
         })
     ) {
         if (lane_free(s, busy, s.policy.research) && start_research(s, b) > 0) {
@@ -389,7 +401,7 @@ function start_rounds(s: Supervisor) -> void throws never {
     }
     for (
         let b in queue_of(s, (x) -> {
-            x.place is root.machine.Ready && !needs_research(s, x)
+            pickable(s, x) && !needs_research(s, x)
         })
     ) {
         let model = worker_of(s, b);
@@ -399,7 +411,7 @@ function start_rounds(s: Supervisor) -> void throws never {
     }
     for (
         let b in queue_of(s, (x) -> {
-            x.place is root.machine.Ready && needs_research(s, x)
+            pickable(s, x) && needs_research(s, x)
         })
     ) {
         let model = worker_of(s, b);

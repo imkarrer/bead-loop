@@ -480,3 +480,32 @@ test "a usage limit on claude holds every claude round, and nothing else" {
     assert.equal(starts(w, "start_round Work claude/sonnet"), 0);
     assert.equal(lane_free(s, [], "devbox/coder"), true)
 }
+
+test "a ready bead that left bd ready is not picked" {
+    let w = one_bead([no_commit(), committed()], [approved()], [green(), merged()]);
+    let s = Supervisor.new(w, MemoryLog.new(), policy());
+    turn(s, w);
+    // Sent back by the no-commit, then closed or blocked by hand.
+    w.tickets_now = [];
+    turn(s, w);
+    assert.is_type<root.machine.Ready>(place_of(s));
+    assert.equal(starts(w, "start_round Work devbox/coder"), 1)
+}
+
+test "a world that cannot list its beads keeps the last list" {
+    let w = two_beads();
+    let s = Supervisor.new(w, MemoryLog.new(), policy());
+    w.failing = ["tickets"];
+    s.ready = ["t-1"];
+    admit_tickets(s);
+    assert.equal(s.ready.join(","), "t-1")
+}
+
+test "a folder with no log is not a bead of this loop's" {
+    let state = "/tmp/bead-loop-filelog-test";
+    let _ = baml.sys.run("rm", args = ["-rf", state]);
+    let _ = baml.sys.run("mkdir", args = ["-p", `${state}/beads/rust-only`]);
+    let log = FileLog { state: state };
+    log.append("t-1", root.machine.Picked { kind: "picked" });
+    assert.equal(log.ids().join(","), "t-1")
+}

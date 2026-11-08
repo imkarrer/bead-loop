@@ -6,5 +6,5 @@
 # (scripts/deploy.sh), which restarts the loop.
 label = "delegate:local"
 base = "main"
-gate = "flox activate -- bash -c 'export PATH=$(scripts/ensure-baml.sh):$PATH DEVBOX_URL=${DEVBOX_URL:-http://127.0.0.1:8100/v1} ACBOX_URL=${ACBOX_URL:-http://192.168.1.51:8100/v1} DO_NOT_TRACK=1 BAML_CLI_ALLOW_DIRECT=1 BOUNDARY_API_KEY=${BOUNDARY_API_KEY:-local} && baml-cli --agent-skill-check off fmt --check && baml-cli --agent-skill-check off test && bash -n install.sh scripts/*.sh test/lint-skills.sh test/package.sh && node --check bin/bead-loop-ui test/ui-onclicks.js && shellcheck -S warning install.sh scripts/*.sh test/lint-skills.sh test/package.sh && test/lint-skills.sh'"
+gate = "flox activate -- bash -c 'export PATH=$(scripts/ensure-baml.sh):$PATH DEVBOX_URL=${DEVBOX_URL:-http://127.0.0.1:8100/v1} ACBOX_URL=${ACBOX_URL:-http://192.168.1.51:8100/v1} DO_NOT_TRACK=1 BAML_CLI_ALLOW_DIRECT=1 BOUNDARY_API_KEY=${BOUNDARY_API_KEY:-local} && baml-cli --agent-skill-check off fmt --check && baml-cli --agent-skill-check off test && bash -n install.sh scripts/*.sh test/lint-skills.sh test/package.sh && bash -n bin/bead-loop-ui && shellcheck -S warning install.sh scripts/*.sh test/lint-skills.sh test/package.sh bin/bead-loop-ui && test/lint-skills.sh'"
 merge = "pipeline"                   # Buildkite reports, and its automerge step merges a labelled PR on green

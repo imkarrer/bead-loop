@@ -39,9 +39,9 @@ case ${1:-} in
   scripts)
     echo "--- :bash: syntax"
     bash -n install.sh scripts/*.sh test/lint-skills.sh test/package.sh
-    node --check bin/bead-loop-ui test/ui-onclicks.js
+    bash -n bin/bead-loop-ui
     echo "--- :bash: shellcheck"
-    shellcheck -S warning install.sh scripts/*.sh test/lint-skills.sh test/package.sh
+    shellcheck -S warning install.sh scripts/*.sh test/lint-skills.sh test/package.sh bin/bead-loop-ui
     echo "--- :memo: skills and agents"
     test/lint-skills.sh
     ;;

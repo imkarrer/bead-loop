@@ -34,8 +34,14 @@ class FileLog {
                     return none;
                 },
             };
+            // Only a directory with a log is a bead of this loop's.
             out.stdout.to_string().split("\n").filter((f) -> {
                 f.length() > 0
+                    && (
+                        baml.fs.exists(self.path(f)) catch_all (e) {
+                            _ => false,
+                        }
+                    )
             })
         }
 

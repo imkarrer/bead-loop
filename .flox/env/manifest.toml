@@ -21,7 +21,7 @@ curl.outputs = "all"
 opencode.pkg-path = "opencode"
 opencode.version = "1.18.29"   # 1.18.30 fails every session: TypeError evaluating 'a.name' in SystemPrompt.environment
 opencode.pkg-group = "opencode"  # its own group, so the pin does not pull the rest back a catalog page
-nodejs.pkg-path = "nodejs"     # bin/bead-loop-ui
+nodejs.pkg-path = "nodejs"     # no longer used by the page (it is the binary); stays until the lock is regenerated
 shellcheck.pkg-path = "shellcheck"
 shellcheck.outputs = "all"
 # The loop is packed by scripts/pack.sh, not cargo. These stay until the lock is

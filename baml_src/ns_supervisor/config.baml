@@ -261,7 +261,7 @@ function config_from_toml_file(path: string) -> LoopConfig throws never {
     let repo = parent_dir(path);
     let home = home_dir();
     let state = if (home.length() > 0) {
-        `${home}/.local/state/bead-loop/${repo_name(repo)}`
+        `${home}/.local/state/bead-loop/${repo_name(repo)}/baml`
     } else {
         `${repo}/.bead-loop-state`
     };

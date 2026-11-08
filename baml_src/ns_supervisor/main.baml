@@ -202,11 +202,19 @@ function tell(config_file: string, id: string, what: string, text: string = "") 
     let event = told(what, text);
     if let e: root.machine.Event = event {
         let c = load_config(config_file);
-        let dir = `${c.state}/inbox`;
-        let _ = baml.sys.run("mkdir", args = ["-p", dir]);
-        let path = `${dir}/${id}.${baml.sys.pid()}.json`;
-        baml.fs.write(path, baml.json.stringify(root.world.Mail { id: id, event: e }));
-        path
+        let configs: LoopConfig[] = [c];
+        for (let t in targets_of(read_or_empty(config_file), c, home_dir())) {
+            configs.push(t);
+        }
+        let shown = baml.sys.run("bd", args = ["show", id, "--json"], cwd = c.repo, capture_output = true);
+        let rows = baml.json.decode<root.world.BdRow[]>(shown.stdout.to_string()) catch_all (x) {
+            _ => {
+                let none: root.world.BdRow[] = [];
+                none
+            },
+        };
+        let here = config_for(configs, rows.at(0)?.labels ?? []) ?? c;
+        mail_to(here.state, id, e)
     } else {
         `unknown: ${what} (answer, reopen or escalate)`
     }
@@ -232,4 +240,24 @@ test "a mail written by tell reads back as its event" {
     assert.equal(mail.length(), 1);
     assert.is_type<root.machine.Answered>(mail.at(0)?.event);
     assert.equal(root.world.read_inbox(state).length(), 0)
+}
+
+/// Leaves one event for one bead in a state's inbox; returns the file.
+function mail_to(state: string, id: string, event: root.machine.Event) -> string {
+    let dir = `${state}/inbox`;
+    let _ = baml.sys.run("mkdir", args = ["-p", dir]);
+    let path = `${dir}/${id}.${baml.sys.pid()}.${unix_seconds()}.json`;
+    baml.fs.write(path, baml.json.stringify(root.world.Mail { id: id, event: event }));
+    path
+}
+
+function unix_seconds() -> int throws never {
+    let out = baml.sys.run("date", args = ["+%s"], capture_output = true) catch_all (e) {
+        _ => {
+            return 0;
+        },
+    };
+    baml.json.decode<int>(out.stdout.to_string().trim()) catch_all (e) {
+        _ => 0,
+    }
 }
