@@ -383,7 +383,10 @@ window.act = async function act(name, body, ask) {
     else {
       ok = true;
       if (name === 'claude_login' && j.url && last) last.login = { url: j.url };
-      if (SAID[name]) toast(SAID[name](body || {}), 'ok');
+      // What the loop did, as the server says it; else the lever's own words.
+      if (j.said && !/^systemctl /.test(j.said)) toast(j.said, 'ok');
+      else if (SAID[name]) toast(SAID[name](body || {}), 'ok');
+      if (typeof poll === 'function') poll();
     }
   } catch (e) { toast(e.message, 'bad'); }
   busy = null; render();

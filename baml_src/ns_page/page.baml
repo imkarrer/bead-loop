@@ -236,12 +236,12 @@ function pull(
                 return json_error(400, "write the note first");
             }
         }
-        let _ = root.supervisor.order_to(state, id, o) catch_all (x) {
+        let sent = root.supervisor.order_to(state, id, o) catch_all (x) {
             _ => {
                 return json_error(500, `${x}`);
             },
         };
-        return json_ok("told: the loop does it on its next tick");
+        return json_ok(await_loop(state, id, sent));
     }
     let word = word_of(lever);
     if let w: string = word {
@@ -255,15 +255,52 @@ function pull(
         }
         let event = root.supervisor.told(w, text, title = l.title ?? "");
         if let e: root.machine.Event = event {
-            let _ = root.supervisor.mail_to(state, id, e) catch_all (x) {
+            let sent = root.supervisor.mail_to(state, id, e) catch_all (x) {
                 _ => {
                     return json_error(500, `${x}`);
                 },
             };
-            return json_ok("told: the loop takes it on its next tick");
+            return json_ok(await_loop(state, id, sent));
         }
     }
     json_error(404, `no lever ${lever} in the BAML loop`)
+}
+
+/// Waits for the supervisor to take the mail at `sent` and write its next view, then says
+/// what became of the bead: its newest event (`pr_opened: https://...`), so a lever comes
+/// back with what the loop did, not a promise. The loop wakes for mail within a second; a
+/// tick that runs rounds or asks GitHub can take longer, so this waits up to a minute.
+function await_loop(state: string, id: string, sent: string) -> string throws never {
+    let start = root.supervisor.unix_seconds();
+    let taken = false;
+    let waited = 0;
+    while (waited < 120) {
+        let there = baml.fs.exists(sent) catch_all (e) {
+            _ => false,
+        };
+        if (!there) {
+            taken = true;
+        }
+        if (taken) {
+            let v = view_at(state);
+            if (v.at >= start) {
+                let found = v.beads.filter((b) -> {
+                    b.id == id
+                });
+                if let b: root.supervisor.FBead = found.at(0) {
+                    return `${id}: ${b.last}`;
+                }
+                return `${id}: done (it is no longer in a queue)`;
+            }
+        }
+        baml.sys.sleep(baml.time.Duration.from_milliseconds(500));
+        waited = waited + 1;
+    }
+    if (taken) {
+        `${id}: taken; the loop is still on its tick`
+    } else {
+        `${id}: waiting for the loop (is it running?)`
+    }
 }
 
 /// A POST comes from the page itself: this run's token, and no Origin but the page's own
@@ -432,4 +469,18 @@ test "a log is asked for by its repo and file name" {
         query_param("/api/log?repo=%2Fs%2Fb&file=t-1.9.Work.jsonl", "file"),
         "t-1.9.Work.jsonl",
     )
+}
+
+test "a lever comes back with what the loop did" {
+    let state = root.tools.scratch("await");
+    let _ = baml.sys.run("mkdir", args = ["-p", state]);
+    let b = root.supervisor.fbead("t-1", "t", 0, 1);
+    b.last = "pr_opened: https://github.com/o/r/pull/1";
+    let v = root.supervisor.View { at: root.supervisor.unix_seconds() + 5, beads: [b], tallies: [] };
+    baml.fs.write(`${state}/view.json`, baml.json.stringify(v));
+    assert.equal(
+        await_loop(state, "t-1", `${state}/inbox/gone.json`),
+        "t-1: pr_opened: https://github.com/o/r/pull/1",
+    );
+    assert.contains(await_loop(state, "t-2", `${state}/inbox/gone.json`), "done")
 }

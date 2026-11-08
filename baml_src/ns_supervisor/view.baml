@@ -68,6 +68,8 @@ class FBead {
     why: string?,
     /// Its branch holds work that passed the gate: a parked bead can go to a PR.
     has_work: bool,
+    /// Its newest event and its words: what a lever on the page comes back with.
+    last: string,
 }
 
 /// One bead's life, as the scoreboard counts it.
@@ -192,6 +194,7 @@ function fbead(id: string, title: string, failures: int, since: int) -> FBead th
         where: null,
         why: null,
         has_work: false,
+        last: "",
     }
 }
 
@@ -484,15 +487,19 @@ function last_calls(log_file: string, n: int) -> string[] throws never {
 
 // ---- the view -----------------------------------------------------------------------
 
-/// A bead's title: from the tickets, or asked once of the world and kept.
-function title(s: Supervisor, id: string) -> string throws never {
-    let known = s.titles.get(id);
-    if let t: string = known {
+/// A bead as bd has it: from the tickets, or asked once of the world and kept.
+function bead_ticket(s: Supervisor, id: string) -> root.world.Ticket throws never {
+    let known = s.known.get(id);
+    if let t: root.world.Ticket = known {
         return t;
     }
-    let asked = s.world.title_of(id);
-    let _ = s.titles.set(id, asked);
+    let asked = s.world.ticket_of(id);
+    let _ = s.known.set(id, asked);
     asked
+}
+
+function title(s: Supervisor, id: string) -> string throws never {
+    bead_ticket(s, id).title
 }
 
 /// One bead as the page draws it: null when it is closed, or waiting in a queue bd no
@@ -517,6 +524,15 @@ function view_of(
     x.stage = fstage(p, b.failures);
     x.notes = b.last_note ?? "";
     x.has_work = b.kept;
+    if let newest: TimedEvent = timed.at(timed.length() - 1) {
+        let w = said_of(newest.event);
+        x.last
+            = if (w.text.length() > 0) {
+                `${w.kind}: ${w.text}`
+            } else {
+                w.kind
+            };
+    }
     x.history = history_of(timed, p, s.log.round_logs(b.id));
     if (p.research.length() > 0) {
         x.research
@@ -564,7 +580,7 @@ function view_of(
                 = FProposal {
                     compare_url: q.compare_url,
                     title: x.title,
-                    body: s.log.side(b.id, "report"),
+                    body: bead_ticket(s, b.id).description,
                 };
         },
         let q: root.machine.Merging => {
