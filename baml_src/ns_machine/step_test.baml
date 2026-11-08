@@ -785,3 +785,41 @@ test "a research pick prepares the worktree the researcher reads" {
         }),
     )
 }
+
+/// One pick and its harness failure, as the supervisor applies them.
+function picked_and_held(b: Bead, what: Trouble) -> Bead throws never {
+    let p = policy();
+    let held = step(step(b, Picked { kind: "picked" }, p).bead, infra(what), p).bead;
+    step(held, HoldCleared { kind: "hold_cleared" }, p).bead
+}
+
+test "five harness holds in a row park the bead, with the words" {
+    let b = bead(ready(), failures = 2);
+    for (let i in [1, 2, 3, 4]) {
+        b = picked_and_held(b, Trouble.Harness);
+    }
+    assert.is_true(b.place is Ready);
+    let p = policy();
+    let s = step(step(b, Picked { kind: "picked" }, p).bead, infra(Trouble.Harness), p);
+    if let x: Parked = s.bead.place {
+        assert.equal(x.question, "held 5 times in a row: the words");
+    } else {
+        assert.is_true(false);
+    }
+    assert.equal(s.bead.failures, 2)
+}
+
+test "a usage limit is waited out however long, and work between holds resets the count" {
+    let b = bead(ready());
+    for (let i in [1, 2, 3, 4, 5, 6]) {
+        b = picked_and_held(b, Trouble.SignedOut);
+    }
+    assert.is_true(b.place is Ready);
+    let c = bead(ready());
+    for (let i in [1, 2, 3, 4]) {
+        c = picked_and_held(c, Trouble.Harness);
+    }
+    let p = policy();
+    let worked = step(step(c, Picked { kind: "picked" }, p).bead, Committed { kind: "committed", sha: "s" }, p).bead;
+    assert.equal(worked.harness_streak, 0)
+}

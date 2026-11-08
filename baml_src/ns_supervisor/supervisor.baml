@@ -82,6 +82,15 @@ function apply(s: Supervisor, id: string, event: root.machine.Event) -> void thr
     log.info(`${root.supervisor.repo_name(s.group)}: ${id}: ${event_line(event)}`);
     let next = root.machine.step(current, event, s.policy);
     s.put(next.bead);
+    if let status: string = status_change(current.place, next.bead.place) {
+        // The bead says what the loop is doing with it. A bd that refuses is said in the
+        // journal and the loop goes on: the next transition writes it again.
+        let _ = s.world.set_status(id, status) catch (e) {
+            root.machine.Infra => {
+                log.warn(`${id}: bd status ${status}: ${e.words}`);
+            },
+        };
+    }
     for (let effect in next.effects) {
         let follow = perform(s, id, effect) catch (e) {
             root.machine.Infra => {
@@ -93,6 +102,39 @@ function apply(s: Supervisor, id: string, event: root.machine.Event) -> void thr
             apply(s, id, f);
         }
     }
+}
+
+/// The bd status a transition writes, so the bead itself says where it is and a lost state
+/// dir loses nothing that matters: `in_progress` once the loop picks it (and `bd ready` stops
+/// listing it), `blocked` when it parks, `open` again when you answer, reopen or escalate.
+/// Closing is the merge's own `bd close`. Anything else writes nothing, so a status you set
+/// by hand stands until the bead next moves.
+function status_change(
+    before: root.machine.Place,
+    after: root.machine.Place,
+) -> string? throws never {
+    if (after is root.machine.Parked) {
+        return if (before is root.machine.Parked) {
+            null
+        } else {
+            "blocked"
+        };
+    }
+    if (before is root.machine.Parked) {
+        return if (after is root.machine.Closed) {
+            null
+        } else {
+            "open"
+        };
+    }
+    if (
+        before is root.machine.Ready
+            && !(after is root.machine.Ready)
+            && !(after is root.machine.Closed)
+    ) {
+        return "in_progress";
+    }
+    null
 }
 
 /// Does one effect. Each is safe to repeat, because a crash can land between doing it and
@@ -422,7 +464,9 @@ function start_rounds(s: Supervisor) -> void throws never {
     }
     for (
         let b in queue_of(s, (x) -> {
-            x.place is root.machine.InReview
+            // Only a bead bd still lists: one you took the label off, blocked or closed
+            // waits where it is.
+            x.place is root.machine.InReview && s.ready.includes(x.id)
         })
     ) {
         let model = reviewer_of(s, b);

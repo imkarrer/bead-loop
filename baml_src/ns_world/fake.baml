@@ -149,6 +149,9 @@ class FakeWorld {
         function note(self, id: string, text: string) -> void throws never {
             self.calls.push(`note ${text}`);
         }
+        function set_status(self, id: string, status: string) -> void throws never {
+            self.calls.push(`status ${id} ${status}`);
+        }
         function close_bead(self, id: string, url: string?) -> void throws root.machine.Infra {
             self.record("close_bead");
         }

@@ -32,7 +32,8 @@ other than the loop's account do the same, with the comments as the order. And
 a session that returns nothing from the model, `gh` or the push refusing, a usage limit.
 The round did not happen. The bead stays where it is, **held** with the reason, and is
 tried again a few ticks later (a usage limit: half an hour, and every round on that
-provider waits with it).
+provider waits with it). A harness that fails five times in a row, with nothing else
+between, parks the bead with its words: it is broken, and retrying all night fixes nothing.
 
 The failure count chooses the **stage** ([config.md](config.md#stages)). Ready beads go
 fewest failures first, so everything is tried once before anything is tried twice. The
@@ -55,7 +56,7 @@ The loop's state is its event log. A bead's place is a fold of its events:
 | `STATE/rounds/ID.{spec.json,pid,result.json,timedout}` | a round in flight: what it was given, its process, what it found, and whether its time ran out |
 | `STATE/wt/ID`, branch `bead/ID` | the work |
 | `STATE/inbox/` | your answers, reopens and escalations, taken on the next tick |
-| bd | the bead's text, its label, blockers. Only beads `bd ready` lists now are picked. The loop notes each event on the bead and closes it on merge |
+| bd | the bead's text, its label, blockers, and its status, which the loop keeps: `in_progress` once it picks the bead, `blocked` when it parks, `open` when you answer, reopen or escalate, closed on merge. Only a bead `bd ready` lists, or one the loop carries (`in_progress`), is picked or reviewed. The loop notes each event on the bead |
 | GitHub | the PR: open (checks pending, green, red, none; conflicting; behind), merged, closed |
 
 `STATE` is `~/.local/state/bead-loop/<repo>/baml/`; a target's is under it, in
@@ -133,6 +134,7 @@ is **lost**: back to where it was picked from, uncharged.
 | Worker reports done with its change uncommitted | the round commits it, and the gate decides | — |
 | Setup fails, git refuses the worktree, a session returns nothing | **held**, no failure | removed unless a round had committed |
 | A Claude usage limit | **held**, no failure; no claude round starts until it clears | as it was |
+| The harness held five times in a row (the same broken CLI) | **parked** with its words, no failure | as it was |
 | Gate fails twice (one fix round with its output) | +1 failure; ready | removed |
 | Gate passes, pre-check passes (or cannot answer) | in review | kept |
 | Pre-check SEND BACK | +1 failure; ready, the block as the note | kept |
@@ -170,7 +172,7 @@ is **lost**: back to where it was picked from, uncharged.
 | parked | reopen | ready, count as is | — |
 | parked | escalate | ready at the last stage | set |
 | anything else | answer, reopen or escalate | refused, with a note saying why | — |
-| a bead in bd | close it, block it, or take its label off | not picked again: only what `bd ready` lists is | — |
+| a bead in bd | close it, block it, defer it, or take its label off | not picked or reviewed again: only what `bd ready` lists, and the loop's own `in_progress`, are. A round already running finishes | — |
 
 ## Not built
 
