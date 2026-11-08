@@ -26,13 +26,28 @@ client Acbox = openai.GenericClient.new(
     timeout = baml.time.Duration.from_seconds(1800),
 );
 
-/// The client a stage's model name means.
-function client_for(model: string) -> ai.Client throws never {
-    match (model) {
-        "acbox/reviewer" => Acbox,
-        "claude/sonnet" => Sonnet,
-        _ => Devbox,
+/// The client a stage's model name means: `claude/*` is Claude Code; `PROVIDER/MODEL` is
+/// MODEL on that provider's server, at `url` (from `[providers.PROVIDER]`). With no url,
+/// the two clients above, from the environment.
+function client_for(model: string, url: string) -> ai.Client throws never {
+    if (uses_claude(model)) {
+        return Sonnet;
     }
+    if (url.length() == 0) {
+        return if (model.starts_with("acbox/")) {
+            Acbox
+        } else {
+            Devbox
+        };
+    }
+    openai.GenericClient.new(
+        model = model.split("/").at(1) ?? model,
+        base_url = url,
+        temperature = 0.1,
+        max_tokens = 8192,
+        request_body = { "parallel_tool_calls": false },
+        timeout = baml.time.Duration.from_seconds(1800),
+    )
 }
 
 /// The last stage is one Claude Code turn, with its own tools. The local stages

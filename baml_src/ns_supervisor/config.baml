@@ -220,6 +220,8 @@ function config_from_toml(
             },
         ),
         merge_label: pick(repo_table, global, "merge_label", "automerge"),
+        urls: urls_of(global),
+        precheck: pick(repo_table, global, "precheck_model", ""),
         agent_bin: agent_bin,
         policy: root.machine.Policy {
             stages: stages,
@@ -449,6 +451,8 @@ function target_config(
             },
         ),
         merge_label: or_else(text_at(t, "merge_label"), parent.merge_label),
+        urls: parent.urls,
+        precheck: parent.precheck,
         agent_bin: parent.agent_bin,
         policy: policy,
         lanes: parent.lanes,
@@ -495,4 +499,48 @@ test "a target is its own checkout, planned from the repo, its PRs asked for" {
     assert.equal(t?.policy?.merge, root.machine.MergeMode.External);
     assert.equal(t?.policy?.ask_before_pr, true);
     assert.equal(t?.policy?.stages?.length(), 2)
+}
+
+/// `[providers.NAME] url`, or the OpenAI root its `probe` implies
+/// (`http://host:8100/health` is `http://host:8100/v1`). A provider with neither has no
+/// entry, and its rounds take the environment's.
+function urls_of(global: baml.toml.Table) -> map<string, string> throws never {
+    let out: map<string, string> = {};
+    let v = global.get("providers");
+    if let t: baml.toml.Table = v {
+        for (let name in t.items.keys()) {
+            let row = t.get(name);
+            if let p: baml.toml.Table = row {
+                let url = text_at(p, "url");
+                let probe = text_at(p, "probe");
+                if (url.length() > 0) {
+                    let _ = out.set(name, url);
+                } else if (probe.starts_with("http") && probe.ends_with("/health")) {
+                    let _ = out.set(name, probe.slice(0, probe.length() - 7) + "/v1");
+                }
+            }
+        }
+    }
+    out
+}
+
+test "a provider's server is its url, or what its probe implies" {
+    let global = baml.toml.Table.parse(
+        `
+            [providers.devbox]
+            probe = "http://127.0.0.1:8100/health"
+
+            [providers.acbox]
+            url = "http://192.168.1.51:8100/v1"
+
+            [providers.claude]
+            probe = "claude auth status"
+        `,
+    ) catch_all (e) {
+        _ => baml.toml.Table.new(),
+    };
+    let urls = urls_of(global);
+    assert.equal(urls.get("devbox") ?? "", "http://127.0.0.1:8100/v1");
+    assert.equal(urls.get("acbox") ?? "", "http://192.168.1.51:8100/v1");
+    assert.equal(urls.get("claude") ?? "none", "none")
 }

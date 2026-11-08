@@ -6,6 +6,11 @@ class RoundSpec {
     id: string,
     kind: root.world.RoundKind,
     model: string,
+    /// The model server, from `[providers.NAME]`; empty takes the environment.
+    base_url: string,
+    /// The pre-check model and its server; empty is no pre-check.
+    precheck: string,
+    precheck_url: string,
     dir: string,
     base: string,
     bead: string,
@@ -124,7 +129,7 @@ function run_worker(spec: RoundSpec, task: string) -> root.agents.Report {
         return root.agents.WorkOnClaude(task);
     }
     root.runner.run_compacted(
-        root.agents.client_for(spec.model),
+        root.agents.client_for(spec.model, spec.base_url),
         root.agents.Work@spec(task),
         MAX_STEPS,
         event_log(spec.log_file),
@@ -160,6 +165,59 @@ function worker_task(spec: RoundSpec) -> string throws never {
     body
 }
 
+/// The gate passed: the pre-check, when there is one, may still send it back.
+function passed(spec: RoundSpec, done: root.machine.Event) -> root.machine.Event[] throws never {
+    let sent = precheck(spec);
+    if let e: root.machine.Event = sent {
+        [done, e]
+    } else {
+        [done, root.machine.GatePassed { kind: "gate_passed" }]
+    }
+}
+
+/// SEND BACK is the only verdict that counts: a model that fails to answer is not the
+/// worker's fault, so the round goes on to review.
+function precheck(spec: RoundSpec) -> root.machine.Event? throws never {
+    if (spec.precheck.length() == 0) {
+        return null;
+    }
+    let diff = baml.sys.run(
+        "git",
+        args = ["diff", `${spec.base}...HEAD`],
+        cwd = spec.dir,
+        capture_output = true,
+    ) catch_all (e) {
+        _ => {
+            return null;
+        },
+    };
+    let agent = ai.Agent.new(
+        client = root.agents.client_for(spec.precheck, spec.precheck_url),
+        max_steps = 2,
+        on_event = event_log(spec.log_file),
+    ) catch_all (e) {
+        _ => {
+            return null;
+        },
+    };
+    let v = agent.run(
+        root.agents.Precheck@spec(spec.bead, load_report(spec.report_file), diff.stdout.to_string()),
+    ) catch_all (e) {
+        _ => {
+            return null;
+        },
+    };
+    precheck_outcome(v.value)
+}
+
+function precheck_outcome(v: root.agents.PrecheckVerdict) -> root.machine.Event? throws never {
+    if (v.send_back) {
+        root.machine.PrecheckSentBack { kind: "precheck_sent_back", block: v.block }
+    } else {
+        null
+    }
+}
+
 function work_round(spec: RoundSpec) -> root.machine.Event[] throws never {
     let before = git_head(spec.dir);
     let task = worker_task(spec);
@@ -179,7 +237,7 @@ function work_round(spec: RoundSpec) -> root.machine.Event[] throws never {
     let done: root.machine.Event = root.machine.Committed { kind: "committed", sha: after };
     let first = run_gate(spec.dir, spec.gate);
     if (first.ok) {
-        return [done, root.machine.GatePassed { kind: "gate_passed" }];
+        return passed(spec, done);
     }
     //# One fix round, with the gate's output
     let fix = `${spec.bead}\n\nYour commit is on this branch, but the gate failed. Fix it and commit:\n${first.output}`;
@@ -192,7 +250,7 @@ function work_round(spec: RoundSpec) -> root.machine.Event[] throws never {
     save_report(spec.report_file, fixed);
     let second = run_gate(spec.dir, spec.gate);
     if (second.ok) {
-        [done, root.machine.GatePassed { kind: "gate_passed" }]
+        passed(spec, done)
     } else {
         [done, root.machine.GateFailedTwice { kind: "gate_failed_twice", errors: second.output }]
     }
@@ -224,7 +282,7 @@ function run_reviewer(spec: RoundSpec, diff: string) -> root.agents.Verdict {
         return root.agents.ReviewOnClaude(spec.bead, spec.report, diff);
     }
     let agent = ai.Agent.new(
-        client = root.agents.client_for(spec.model),
+        client = root.agents.client_for(spec.model, spec.base_url),
         max_steps = REVIEW_STEPS,
         on_event = event_log(spec.log_file),
     );
@@ -268,7 +326,7 @@ function review_round(spec: RoundSpec) -> root.machine.Event[] throws never {
 
 function run_researcher(spec: RoundSpec) -> root.agents.ResearchResult {
     let agent = ai.Agent.new(
-        client = root.agents.client_for(spec.model),
+        client = root.agents.client_for(spec.model, spec.base_url),
         max_steps = 40,
         on_event = event_log(spec.log_file),
     );
@@ -342,6 +400,9 @@ function spec_of(brief: string, note: string) -> RoundSpec throws never {
         id: "t-1",
         kind: root.world.RoundKind.Work,
         model: "m",
+        base_url: "",
+        precheck: "",
+        precheck_url: "",
         dir: ".",
         base: "main",
         bead: "BEAD",
@@ -387,4 +448,17 @@ test "a rejection carries the whole work order" {
     } else {
         assert.is_true(false);
     }
+}
+
+test "only a SEND BACK from the pre-check counts" {
+    let sent = precheck_outcome(root.agents.PrecheckVerdict { send_back: true, block: "SEND BACK: 2" });
+    assert.is_type<root.machine.PrecheckSentBack>(sent);
+    assert.equal(
+        precheck_outcome(root.agents.PrecheckVerdict { send_back: false, block: "PASS" }) == null,
+        true,
+    )
+}
+
+test "no pre-check model is no pre-check" {
+    assert.equal(precheck(spec_of("", "")) == null, true)
 }

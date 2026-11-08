@@ -36,6 +36,10 @@ class LiveWorld {
     /// `loop`: the title is `ID: TITLE`. `plain`: the bead's title and description alone.
     pr_style: string,
     merge_label: string,
+    /// Each provider's server, from `[providers.NAME]`.
+    urls: map<string, string>,
+    /// The pre-check model; empty is none.
+    precheck: string,
 
     /// gh, pointed at the PR's repo when that is not the checkout's own.
     function gh_args(self, args: string[]) -> string[] throws never {
@@ -286,6 +290,9 @@ class LiveWorld {
                 id: id,
                 kind: kind,
                 model: model,
+                base_url: self.urls.get(provider_of(model)) ?? "",
+                precheck: self.precheck,
+                precheck_url: self.urls.get(provider_of(self.precheck)) ?? "",
                 dir: self.worktree(id),
                 base: `${self.remote}/${self.base}`,
                 bead: self.bead_text(id),
@@ -958,4 +965,9 @@ test "a target takes its own beads and the repo leaves them alone" {
 test "a fork's owner comes from its remote" {
     assert.equal(github_owner("git@github.com:imkarrer/euclid.git"), "imkarrer");
     assert.equal(github_owner("https://github.com/imkarrer/euclid"), "imkarrer")
+}
+
+/// The server a model runs on: `devbox/coder` is `devbox`.
+function provider_of(model: string) -> string throws never {
+    model.split("/").at(0) ?? model
 }
