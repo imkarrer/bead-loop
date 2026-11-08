@@ -391,13 +391,37 @@ function response_of(reply: PageReply) -> baml.http.Response throws never {
     )
 }
 
+/// /api/insights: the insights, rebuilt when the last are five minutes old. `cached` holds
+/// the last answer and the second it was built.
+function insights_reply(
+    configs: root.supervisor.LoopConfig[],
+    cached: string[],
+) -> PageReply throws never {
+    let now = root.supervisor.unix_seconds();
+    let built = baml.json.decode<int>(cached.at(1) ?? "0") catch_all (e) {
+        _ => 0,
+    };
+    if ((cached.at(0) ?? "").length() == 0 || now - built > 300) {
+        let text = baml.json.stringify(insights_of(configs)) catch_all (e) {
+            _ => "{}",
+        };
+        cached[0] = text;
+        cached[1] = `${now}`;
+    }
+    PageReply { status: 200, content_type: "application/json", body: cached.at(0) ?? "{}" }
+}
+
 /// `bead-supervisor page --config_file ~/.config/bead-loop/config.toml --addr 127.0.0.1:4097`.
 /// Reads the configs once, and makes a token for this run that the page it serves carries.
 function page(config_file: string, addr: string = "127.0.0.1:4097") -> never {
     let configs = configs_of(config_file);
     let token = read_or_empty("/proc/sys/kernel/random/uuid").trim();
+    let cached: string[] = ["", "0"];
     let server = baml.http.Server.bind(addr);
     server.serve((req) -> {
+        if (path_of(req.url) == "/api/insights") {
+            return response_of(insights_reply(configs, cached));
+        }
         response_of(route(req.method, req.url, req.body, req.headers, configs, token, addr))
     })
 }
