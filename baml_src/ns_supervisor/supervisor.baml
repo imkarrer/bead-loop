@@ -356,10 +356,22 @@ function watch_prs(s: Supervisor) -> void throws never {
                 },
             };
             for (let event in seen) {
-                apply(s, b.id, event);
+                if (!idle_green(s.policy, event)) {
+                    apply(s, b.id, event);
+                }
             }
         }
     }
+}
+
+/// A green look that changes nothing: under pipeline or external merging, CI's merge
+/// step merges a green PR, not the loop. Logged, it was an event a tick per open PR.
+function idle_green(p: root.machine.Policy, e: root.machine.Event) -> bool throws never {
+    e is root.machine.ChecksGreen
+        && (
+            p.merge == root.machine.MergeMode.Pipeline
+                || p.merge == root.machine.MergeMode.External
+        )
 }
 
 function admit_tickets(s: Supervisor) -> void throws never {

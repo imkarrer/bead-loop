@@ -797,3 +797,14 @@ test "ftally records each round" {
     assert.equal(r2?.outcome, "rejected");
     assert.equal(r2?.words, "REJECT: x")
 }
+
+test "a green look is not logged where CI merges, and is where the loop does" {
+    let green = root.machine.ChecksGreen { kind: "checks_green" };
+    let p = policy();
+    p.merge = root.machine.MergeMode.Pipeline;
+    assert.is_true(idle_green(p, green));
+    p.merge = root.machine.MergeMode.Auto;
+    assert.is_true(!idle_green(p, green));
+    p.merge = root.machine.MergeMode.Pipeline;
+    assert.is_true(!idle_green(p, root.machine.PrMerged { kind: "pr_merged", url: "u" }))
+}

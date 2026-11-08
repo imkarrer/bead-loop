@@ -14,8 +14,9 @@ export DO_NOT_TRACK=1 BAML_CLI_ALLOW_DIRECT=1 BOUNDARY_API_KEY=local
 unset BEAD_LOOP_WORKTREE
 REAL_PATH=$PATH
 
-# setup [GATE]: a repo with one bead, t's own, labelled for the loop, on stages
-# fake/coder (worker) and fake/reviewer, one attempt each, merge auto.
+# setup [GATE]: a repo with one bead, t's own, labelled for the loop (MERGE=... for a
+# merge mode other than auto), on stages
+# fake/coder (worker) and fake/reviewer, one attempt each.
 setup() {
   T=$(cd "$(mktemp -d)" && pwd -P)
   export T E2E_CTRL=$T/ctrl E2E_ORIGIN=$T/origin.git HOME=$T/home
@@ -29,8 +30,8 @@ setup() {
     git checkout -q -b main
     echo base >README
     bd init --quiet --prefix t >/dev/null 2>&1
-    printf 'label = "delegate:local"\nbase = "main"\ngate = %s\nmerge = "auto"\nsandbox = false\n' \
-      "'${1:-true}'" >.bead-loop.toml   # a TOML literal string: a gate may quote, not use '
+    printf 'label = "delegate:local"\nbase = "main"\ngate = %s\nmerge = "%s"\nsandbox = false\n' \
+      "'${1:-true}'" "${MERGE:-auto}" >.bead-loop.toml   # a TOML literal string: a gate may quote, not use '
     git add -A && git commit -qm base && git push -q -u origin main
   )
   BEAD=$(cd "$REPO" && bd create "Do the thing" -d "Write work.txt" --acceptance "test -e work.txt" \

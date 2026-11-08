@@ -367,8 +367,11 @@ function opened(b: Bead, o: PrOpened, p: Policy) -> Step throws never {
     let n = b.at(Merging { kind: "merging", pr: o.url, adopted: false });
     n.pr = o.url;
     let effects: Effect[] = [Note { text: o.url }];
-    // Approved on the commit CI was red on: no new commit, so ask CI to run it again.
-    if (p.merge == MergeMode.Pipeline && b.charged_head == o.head) {
+    // Under pipeline the label is what merges the PR, and putting it on is what starts
+    // the build (it also asks CI again for a commit it was red on). Without it the PR
+    // sat green and unmerged: bl-dze.1's #242 logged checks_green 55 times (8 Nov), and
+    // every bead-loop PR since the cutover had been labelled by hand.
+    if (p.merge == MergeMode.Pipeline) {
         effects.push(Relabel {});
     }
     Step { bead: n, effects: effects }
