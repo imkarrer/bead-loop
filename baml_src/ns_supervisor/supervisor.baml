@@ -79,6 +79,7 @@ class Supervisor {
 function apply(s: Supervisor, id: string, event: root.machine.Event) -> void throws never {
     let current = s.bead(id) ?? root.machine.Bead.new(id);
     s.log.append(id, event);
+    log.info(`${root.supervisor.repo_name(s.group)}: ${id}: ${event_line(event)}`);
     let next = root.machine.step(current, event, s.policy);
     s.put(next.bead);
     for (let effect in next.effects) {
@@ -539,4 +540,44 @@ function recover(
         }
     }
     s
+}
+
+class KindOnly {
+    kind: string,
+    words: string?,
+    line: string?,
+    url: string?,
+}
+
+/// One line for the journal and the page: the event's kind and its words, short.
+function event_line(event: root.machine.Event) -> string throws never {
+    let json = baml.json.stringify(event) catch_all (e) {
+        _ => {
+            return "?";
+        },
+    };
+    let k = baml.json.decode<KindOnly>(json) catch_all (e) {
+        _ => {
+            return "?";
+        },
+    };
+    let said = (k.words ?? k.line ?? k.url ?? "").split("\n").at(0) ?? "";
+    let short = if (said.length() > 160) {
+        said.slice(0, 160)
+    } else {
+        said
+    };
+    if (short.length() > 0) {
+        `${k.kind} ${short}`
+    } else {
+        k.kind
+    }
+}
+
+test "an event's journal line is its kind and first words" {
+    assert.equal(event_line(root.machine.Picked { kind: "picked" }), "picked");
+    assert.equal(
+        event_line(root.machine.Rejected { kind: "rejected", line: "REJECT: x", text: "t" }),
+        "rejected REJECT: x",
+    )
 }
