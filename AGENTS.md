@@ -26,7 +26,9 @@ bash -c "$(sed -n 's/^gate = "\(.*\)"$/\1/p' .bead-loop.toml)"   # the whole gat
 Run the parts on their own while iterating:
 - `baml-cli --agent-skill-check off test` for the loop;
 - `test/lint-skills.sh` for `skills/` and `agents/` (frontmatter, under 700 words);
-- `scripts/pack.sh target/bead-supervisor` for the binary the unit execs.
+- `scripts/pack.sh target/bead-supervisor` for the binary the unit execs, then
+  `test/e2e/run.sh [CASE...]` for the end-to-end cases on it (`KEEP=1` keeps a passing
+  case's directory; a failing one is always kept).
 - `node scripts/page-html.mjs` after editing `ui/index.html`: the binary serves the page from
   the BAML constant it writes; `node test/ui-onclicks.js test/ui-state.json` checks its levers.
 
@@ -34,7 +36,13 @@ Run the parts on their own while iterating:
 
 - **A test in `baml_src/`:** the shape of a prompt, a note, a queue order, a transition
   the state machine makes. Every row of the outcome table in `docs/state-machine.md`
-  has one.
+  has one. These run against `FakeWorld`, so they never touch git, bd, gh, a model
+  server or a gate.
+- **A case in `test/e2e/run.sh`:** anything that crosses into the world: a call to git,
+  bd, gh or `claude`, what a round sends a model and reads back, the gate's environment,
+  a lever pulled with `tell`. The packed binary runs one tick per process against real
+  git, bd and a gate; `test/e2e/bin/gh`, `test/e2e/bin/claude` and `test/e2e/model.mjs`
+  are scripted. A change to the World or a round ships with a case here.
 
 Every change ships with its test.
 

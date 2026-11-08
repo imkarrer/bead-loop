@@ -1,0 +1,97 @@
+#!/usr/bin/env bash
+# gh for the end-to-end suite: PRs are rows of $E2E_CTRL/gh/prs.json, every call is a line
+# of $E2E_CTRL/gh/calls. The branch a PR is opened from must be on the bare origin
+# ($E2E_ORIGIN), as GitHub would refuse it otherwise; its head is read from there.
+#   $E2E_CTRL/gh/checks.json    statusCheckRollup a new PR gets (default: one green check)
+#   $E2E_CTRL/gh/required.json  what `pr checks --required` prints (default: [])
+#   $E2E_CTRL/gh/login          the account gh is signed in as (default: loop-bot)
+set -euo pipefail
+G=$E2E_CTRL/gh
+mkdir -p "$G"
+[ -e "$G/prs.json" ] || echo '[]' >"$G/prs.json"
+printf '%s\n' "$*" >>"$G/calls"
+login=$(cat "$G/login" 2>/dev/null || echo loop-bot)
+repo=owner/repo
+
+# A --json/--jq pair over a value on stdin: --jq when given, else the value as it is.
+out() {
+  local jqx=$1
+  if [ -n "$jqx" ]; then jq -r "$jqx"; else cat; fi
+}
+save() {
+  local tmp; tmp=$(mktemp "$G/prs.XXXXXX")
+  jq "$@" "$G/prs.json" >"$tmp" && mv "$tmp" "$G/prs.json"
+}
+# The PR a selector names: its URL, its number, or its head branch.
+pick() {
+  jq --arg s "$1" '[.[] | select(.url==$s or (.number|tostring)==$s or .headRefName==$s)] | last'
+}
+
+cmd="${1:-} ${2:-}"
+shift 2 || true
+jqx=
+args=()
+while [ $# -gt 0 ]; do
+  case $1 in
+    --jq) jqx=$2; shift ;;
+    --json) shift ;;   # every field is always there
+    *) args+=("$1") ;;
+  esac
+  shift
+done
+set -- "${args[@]+"${args[@]}"}"
+
+case $cmd in
+  "api user") jq -n --arg l "$login" '{login:$l}' | out "$jqx" ;;
+  "repo view") jq -n --arg r "$repo" '{nameWithOwner:$r}' | out "$jqx" ;;
+  "auth status") echo "Logged in as $login" ;;
+  "pr list")
+    head='' state=''
+    while [ $# -gt 0 ]; do
+      case $1 in --head) head=$2; shift ;; --state) state=$2; shift ;; esac
+      shift
+    done
+    jq --arg h "$head" --arg s "$state" \
+      '[.[] | select(($h=="" or .headRefName==$h) and ($s=="" or $s=="all" or (.state|ascii_downcase)==($s|ascii_downcase)))]' \
+      "$G/prs.json" | out "$jqx" ;;
+  "pr create")
+    head='' base='' title='' body=''
+    while [ $# -gt 0 ]; do
+      case $1 in
+        --head) head=$2; shift ;; --base) base=$2; shift ;;
+        --title) title=$2; shift ;; --body) body=$2; shift ;;
+      esac
+      shift
+    done
+    sha=$(git -C "$E2E_ORIGIN" rev-parse -q --verify "refs/heads/$head") || {
+      echo "pull request create failed: no branch $head on the remote" >&2; exit 1; }
+    n=$(( $(jq length "$G/prs.json") + 1 ))
+    url=https://github.com/$repo/pull/$n
+    checks=$(cat "$G/checks.json" 2>/dev/null || echo '[{"__typename":"StatusContext","context":"ci","state":"SUCCESS"}]')
+    save --argjson n "$n" --arg u "$url" --arg h "$head" --arg b "$base" --arg t "$title" \
+      --arg body "$body" --arg sha "$sha" --arg l "$login" --argjson c "$checks" \
+      '. + [{number:$n, url:$u, headRefName:$h, baseRefName:$b, title:$t, body:$body,
+             state:"OPEN", mergeable:"MERGEABLE", mergeStateStatus:"CLEAN", headRefOid:$sha,
+             statusCheckRollup:$c, author:{login:$l}, labels:[], reviews:[], comments:[]}]'
+    echo "$url" ;;
+  "pr view")
+    pick "${1:-}" <"$G/prs.json" | out "$jqx" ;;
+  "pr checks")
+    cat "$G/required.json" 2>/dev/null || echo '[]' ;;
+  "pr merge")
+    sel=${1:-}
+    save --arg s "$sel" '(.[] | select(.url==$s or (.number|tostring)==$s or .headRefName==$s) | select(.state=="OPEN")) |= (.state="MERGED")' ;;
+  "pr edit")
+    sel=${1:-}; shift || true
+    while [ $# -gt 0 ]; do
+      case $1 in
+        --add-label) save --arg s "$sel" --arg l "$2" '(.[] | select(.url==$s or (.number|tostring)==$s or .headRefName==$s)) |= (.labels += [{name:$l}])'; shift ;;
+        --remove-label) save --arg s "$sel" --arg l "$2" '(.[] | select(.url==$s or (.number|tostring)==$s or .headRefName==$s)) |= (.labels -= [{name:$l}])'; shift ;;
+        --body|--title) shift ;;
+      esac
+      shift
+    done ;;
+  "pr update-branch") : ;;
+  "pr comment") : ;;
+  *) echo "stub gh: unknown: $cmd $*" >&2; exit 2 ;;
+esac
