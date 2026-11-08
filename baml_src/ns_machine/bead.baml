@@ -92,6 +92,9 @@ class Bead {
     last_note: string?,
     /// The researcher's brief; absent means research has not run yet.
     brief: string?,
+    /// Harness holds in a row with nothing else between: a broken harness is retried, not
+    /// forever (pw-xl2, 8 Nov: the same CLI error, picked again every three minutes all night).
+    harness_streak: int,
 
     function new(id: string) -> Bead throws never {
         Bead {
@@ -108,6 +111,7 @@ class Bead {
             rerun_head: null,
             last_note: null,
             brief: null,
+            harness_streak: 0,
         }
     }
 
@@ -126,6 +130,7 @@ class Bead {
             rerun_head: self.rerun_head,
             last_note: self.last_note,
             brief: self.brief,
+            harness_streak: self.harness_streak,
         }
     }
 

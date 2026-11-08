@@ -555,3 +555,39 @@ test "a round that died with no result is lost and started again, uncharged" {
     assert.equal(s.bead("t-1")?.failures, 0);
     assert.equal(starts(w, "start_round Work devbox/coder"), 2)
 }
+
+test "the bead in bd says what the loop is doing: in_progress, blocked, open again" {
+    let w = one_bead([no_commit(), no_commit(), no_commit()], [], []);
+    let s = Supervisor.new(w, MemoryLog.new(), policy());
+    turns(s, w, 6);
+    assert.is_type<root.machine.Parked>(place_of(s));
+    assert.is_true(w.calls.includes("status t-1 in_progress"));
+    assert.is_true(w.calls.includes("status t-1 blocked"));
+    w.inbox_now = [root.world.Mail { id: "t-1", event: root.machine.Reopened { kind: "reopened" } }];
+    tick(s);
+    assert.is_true(w.calls.includes("status t-1 open"))
+}
+
+test "a status is written on a move, not on every event" {
+    let ready = root.machine.Ready { kind: "ready" };
+    let working = root.machine.Working { kind: "working", committed: false };
+    let parked = root.machine.Parked { kind: "parked", question: "q" };
+    assert.equal(status_change(ready, working), "in_progress");
+    assert.equal(status_change(working, ready) == null, true);
+    assert.equal(status_change(working, parked), "blocked");
+    assert.equal(status_change(parked, parked) == null, true);
+    assert.equal(status_change(parked, ready), "open");
+    assert.equal(status_change(working, root.machine.Closed { kind: "closed" }) == null, true)
+}
+
+test "a bead waiting for review that left bd waits where it is" {
+    let w = one_bead([committed()], [approved()], [green(), merged()]);
+    let s = Supervisor.new(w, MemoryLog.new(), policy());
+    w.calls = [];
+    tick(s);
+    w.tickets_now = [];
+    w.finish();
+    turn(s, w);
+    assert.is_type<root.machine.InReview>(place_of(s));
+    assert.equal(starts(w, "start_round Review acbox/reviewer"), 0)
+}

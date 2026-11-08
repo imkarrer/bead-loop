@@ -126,7 +126,11 @@ function event_log(path: string) -> (ai.events.Event) -> void throws never {
 
 function run_worker(spec: RoundSpec, task: string) -> root.agents.Report {
     if (root.agents.uses_claude(spec.model)) {
-        return root.agents.WorkOnClaude(task);
+        let agent = ai.Agent.new(
+            client = root.agents.claude_client(spec.model, spec.dir, spec.log_file, true),
+            max_steps = 2,
+        );
+        return agent.run(root.agents.WorkOnClaude@spec(task)).value;
     }
     root.runner.run_compacted(
         root.agents.client_for(spec.model, spec.base_url),
@@ -136,8 +140,24 @@ function run_worker(spec: RoundSpec, task: string) -> root.agents.Report {
     )
 }
 
-function failed_session(e: unknown) -> root.machine.Event throws never {
-    let limit = limit_hit(`${e}`);
+/// What a failed session said: the error, and for a Claude round what the CLI itself
+/// said, since "exited with code 1" alone names no cause.
+function session_said(spec: RoundSpec, e: unknown) -> string throws never {
+    let said = if (root.agents.uses_claude(spec.model)) {
+        root.agents.claude_said(spec.log_file)
+    } else {
+        ""
+    };
+    if (said.length() == 0) {
+        `${e}`
+    } else {
+        `${e}: ${said}`
+    }
+}
+
+function failed_session(spec: RoundSpec, e: unknown) -> root.machine.Event throws never {
+    let said = session_said(spec, e);
+    let limit = limit_hit(said);
     if let held: root.machine.Event = limit {
         return held;
     }
@@ -154,7 +174,7 @@ function failed_session(e: unknown) -> root.machine.Event throws never {
         let x: ai.errors.ToolFailedError => {
             root.machine.WorkerCrashed { kind: "worker_crashed", words: x.message }
         },
-        _ => infra_harness(`${e}`),
+        _ => infra_harness(said),
     }
 }
 
@@ -228,7 +248,7 @@ function work_round(spec: RoundSpec) -> root.machine.Event[] throws never {
     let failed: root.machine.Event? = null;
     let report = run_worker(spec, task) catch_all (e) {
         _ => {
-            let out: root.machine.Event[] = [failed_session(e)];
+            let out: root.machine.Event[] = [failed_session(spec, e)];
             return out;
         },
     };
@@ -250,7 +270,7 @@ function work_round(spec: RoundSpec) -> root.machine.Event[] throws never {
     let fix = `${spec.bead}\n\nYour commit is on this branch, but the gate failed. Fix it and commit:\n${first.output}`;
     let fixed = run_worker(spec, fix) catch_all (e) {
         _ => {
-            let out: root.machine.Event[] = [done, failed_session(e)];
+            let out: root.machine.Event[] = [done, failed_session(spec, e)];
             return out;
         },
     };
@@ -289,7 +309,11 @@ function review_outcome(v: root.agents.Verdict) -> root.machine.Event throws nev
 
 function run_reviewer(spec: RoundSpec, diff: string) -> root.agents.Verdict {
     if (root.agents.uses_claude(spec.model)) {
-        return root.agents.ReviewOnClaude(spec.bead, spec.report, diff);
+        let agent = ai.Agent.new(
+            client = root.agents.claude_client(spec.model, spec.dir, spec.log_file, false),
+            max_steps = 2,
+        );
+        return agent.run(root.agents.ReviewOnClaude@spec(spec.bead, spec.report, diff)).value;
     }
     let agent = ai.Agent.new(
         client = root.agents.client_for(spec.model, spec.base_url),
@@ -301,8 +325,9 @@ function run_reviewer(spec: RoundSpec, diff: string) -> root.agents.Verdict {
 
 /// No verdict is "nothing from the model": held, not charged. state-machine.md, and the
 /// t-1 e2e that charged a worker because the reviewer ran out of steps.
-function review_failed_session(e: unknown) -> root.machine.Event throws never {
-    let limit = limit_hit(`${e}`);
+function review_failed_session(spec: RoundSpec, e: unknown) -> root.machine.Event throws never {
+    let said = session_said(spec, e);
+    let limit = limit_hit(said);
     if let held: root.machine.Event = limit {
         return held;
     }
@@ -313,7 +338,7 @@ function review_failed_session(e: unknown) -> root.machine.Event throws never {
         let x: ai.errors.ParseFailed => {
             infra_harness("the reviewer returned no verdict: it did not parse")
         },
-        _ => infra_harness(`${e}`),
+        _ => infra_harness(said),
     }
 }
 
@@ -331,7 +356,7 @@ function review_round(spec: RoundSpec) -> root.machine.Event[] throws never {
     };
     let verdict = run_reviewer(spec, diff.stdout.to_string()) catch_all (e) {
         _ => {
-            let out: root.machine.Event[] = [review_failed_session(e)];
+            let out: root.machine.Event[] = [review_failed_session(spec, e)];
             return out;
         },
     };
@@ -481,7 +506,7 @@ test "no pre-check model is no pre-check" {
 /// limit, not the model's failure, however many turns the session spent first (bl-boc.5).
 /// It holds the bead, and the supervisor holds every claude round while it lasts.
 function limit_hit(said: string) -> root.machine.Event? throws never {
-    if (said.includes("hit your") && said.includes("limit")) {
+    if ((said.includes("hit your") && said.includes("limit")) || said.includes("usage limit reached")) {
         root.machine.Infra {
             kind: "infra",
             what: root.machine.Trouble.SignedOut,
@@ -495,6 +520,7 @@ function limit_hit(said: string) -> root.machine.Event? throws never {
 test "a usage limit is the provider's, not the worker's" {
     let e = limit_hit("claude: You've hit your session limit · resets 7:40am (UTC)");
     assert.is_type<root.machine.Infra>(e);
+    assert.is_type<root.machine.Infra>(limit_hit("Claude AI usage limit reached|1794120000"));
     assert.equal(limit_hit("there is a limit on how much I can help") == null, true)
 }
 

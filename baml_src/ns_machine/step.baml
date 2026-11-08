@@ -3,7 +3,27 @@
 //
 // `match (b.place)` is exhaustive, so a new Place does not build until it has its arms.
 
+/// How many harness holds in a row park a bead. A usage limit is not one (it is SignedOut).
+const HARNESS_STREAK: int = 5;
+
 function step(b: Bead, e: Event, p: Policy) -> Step throws never {
+    let s = step_at(b, e, p);
+    // Anything but a hold, its end, a pick or a lost round is the harness working.
+    let waiting = e is Infra
+        || e is HoldCleared
+        || e is Picked
+        || e is ReviewPicked
+        || e is ResearchPicked
+        || e is RoundLost;
+    if (!waiting && s.bead.harness_streak > 0) {
+        let n = s.bead.copy();
+        n.harness_streak = 0;
+        return Step { bead: n, effects: s.effects };
+    }
+    s
+}
+
+function step_at(b: Bead, e: Event, p: Policy) -> Step throws never {
     match (b.place) {
         let x: Ready => on_ready(b, e, p),
         let x: Researching => on_researching(b, e, p),
@@ -50,6 +70,14 @@ function held(b: Bead, i: Infra) -> Step throws never {
     let same = b.hold?.words == i.words;
     let n = b.copy();
     n.hold = Hold { what: `${i.what}`, words: i.words };
+    if (i.what == Trouble.Harness) {
+        n.harness_streak = b.harness_streak + 1;
+        if (n.harness_streak >= HARNESS_STREAK && !(b.place is Merging)) {
+            n.hold = null;
+            n.harness_streak = 0;
+            return park(n, `held ${HARNESS_STREAK} times in a row: ${i.words}`);
+        }
+    }
     if (same) {
         stay(n)
     } else {

@@ -65,6 +65,14 @@ Every model call a round makes is recorded by the BAML runtime under the repo's
 kind and log). `baml-cli query --local` reads them with SQL. A round's own tool calls are
 in `logs/<id>.<pid>.<kind>.jsonl`.
 
+A Claude round is one Claude Code turn, so it has no BAML tool calls of its own. It runs
+the CLI through `logs/<id>.<pid>.<kind>.jsonl.sh`, a wrapper the round writes, which adds
+what Claude may run without asking (the worker: Read, Edit, Write, Glob, Grep and Bash; a
+reviewer: reading tools and git's reading commands) and tees Claude Code's own
+`stream-json` into the same log, its stderr beside it in `.err`. The page shows those tool
+calls like any other round's. When the CLI fails, the round reads what it said there: a
+usage limit holds every claude round, anything else is held with the CLI's own words.
+
 ## Stop, restart, recover
 
 A round is its own detached process, and the unit has `KillMode=process`, so `systemctl

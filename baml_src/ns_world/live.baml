@@ -191,20 +191,22 @@ class LiveWorld {
             .trim()
     }
 
+    function bd_rows(self, args: string[]) -> BdRow[] throws root.machine.Infra {
+        let text = self.tool(root.machine.Trouble.Bd, "bd", args, self.beads);
+        baml.json.decode<BdRow[]>(text) catch_all (e) {
+            _ => {
+                self.refuse(root.machine.Trouble.Bd, `bd ${args.at(0) ?? ""}: ${e}`)
+            },
+        }
+    }
+
     implements World {
         function tickets(self) -> Ticket[] throws root.machine.Infra {
-            let text = self.tool(
-                root.machine.Trouble.Bd,
-                "bd",
-                ["ready", "-l", self.label, "--json", "-n", "0"],
-                self.beads,
-            );
-            let rows = baml.json.decode<BdRow[]>(text) catch_all (e) {
-                _ => {
-                    self.refuse(root.machine.Trouble.Bd, `bd ready: ${e}`)
-                },
-            };
-            rows
+            let ready = self.bd_rows(["ready", "-l", self.label, "--json", "-n", "0"]);
+            // What the loop already carries: it set them in_progress when it picked them,
+            // so `bd ready` no longer lists them (docs/state-machine.md, The bead in bd).
+            let carried = self.bd_rows(["list", "-l", self.label, "--status", "in_progress", "--json", "-n", "0"]);
+            ticket_rows(ready, carried)
                 .filter((r) -> {
                     takes(r.labels ?? [], self.only, self.skip)
                 })
@@ -554,6 +556,10 @@ class LiveWorld {
 
         function note(self, id: string, text: string) -> void throws root.machine.Infra {
             let _ = self.tool(root.machine.Trouble.Bd, "bd", ["note", id, `bead-loop: ${text}`], self.beads);
+        }
+
+        function set_status(self, id: string, status: string) -> void throws root.machine.Infra {
+            let _ = self.tool(root.machine.Trouble.Bd, "bd", ["update", id, "--status", status], self.beads);
         }
 
         function close_bead(self, id: string, url: string?) -> void throws root.machine.Infra {
@@ -1266,4 +1272,32 @@ test "a timeout charges a worker, holds a reviewer, and frees a researcher" {
     assert.is_type<root.machine.RoundTimedOut>(timed_out(RoundKind.Work, 1));
     assert.is_type<root.machine.Infra>(timed_out(RoundKind.Review, 1));
     assert.is_type<root.machine.BriefWritten>(timed_out(RoundKind.Research, 1));
+}
+
+/// The beads the loop may work: what `bd ready` lists, then what it already carries.
+function ticket_rows(ready: BdRow[], carried: BdRow[]) -> BdRow[] throws never {
+    let out = ready;
+    let ids = ready.map((r) -> {
+        r.id
+    });
+    for (let r in carried) {
+        if (!ids.includes(r.id)) {
+            out.push(r);
+        }
+    }
+    out
+}
+
+test "the queue is the ready beads and the ones the loop carries, each once" {
+    let a = BdRow { id: "t-1", title: "a", description: null, acceptance_criteria: null, labels: null };
+    let b = BdRow { id: "t-2", title: "b", description: null, acceptance_criteria: null, labels: null };
+    let rows = ticket_rows([a], [a, b]);
+    assert.equal(
+        rows
+            .map((r) -> {
+                r.id
+            })
+            .join(","),
+        "t-1,t-2",
+    )
 }

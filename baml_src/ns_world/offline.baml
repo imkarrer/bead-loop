@@ -255,6 +255,9 @@ class OfflineWorld {
             }
         }
 
+        /// No bd offline: the bench's beads have no status to keep.
+        function set_status(self, id: string, status: string) -> void throws never {}
+
         function close_bead(self, id: string, url: string?) -> void throws root.machine.Infra {
             let _ = baml.fs.write(`${self.state}/beads/${id}/closed`, url ?? "bench") catch_all (e) {
                 _ => {

@@ -44,7 +44,8 @@ class Mail {
 }
 
 interface World {
-    /// Beads with the loop's label and no open blocker.
+    /// Beads with the loop's label it may work: those with no open blocker, and those it
+    /// already carries (bd status in_progress).
     function tickets(self) -> Ticket[] throws root.machine.Infra;
     function prepare_worktree(self, id: string, resume: bool) -> void throws root.machine.Infra;
     function remove_branch(self, id: string) -> void throws root.machine.Infra;
@@ -73,6 +74,8 @@ interface World {
     function relabel(self, id: string) -> void throws root.machine.Infra;
     function delete_remote_branch(self, id: string) -> void throws root.machine.Infra;
     function note(self, id: string, text: string) -> void throws root.machine.Infra;
+    /// The bead's status in bd: what the loop is doing with it, kept on the bead itself.
+    function set_status(self, id: string, status: string) -> void throws root.machine.Infra;
     function close_bead(self, id: string, url: string?) -> void throws root.machine.Infra;
     function write_park_brief(self, id: string, because: string) -> void throws root.machine.Infra;
     /// Open PRs on `bead/*` branches, which the loop takes into its merge queue.
