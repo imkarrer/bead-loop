@@ -207,6 +207,19 @@ class Escalated {
     kind: "escalated",
 }
 
+/// You: the work is done; push the branch and stop at a PR for you to open. A parked bead
+/// whose branch holds work (pw-xl2, 8 Nov: committed and gated, then a false BLOCKED).
+class Published {
+    kind: "published",
+}
+
+/// You: open the PR for a pushed branch, with this title and body (the page's Open PR).
+class PrRequested {
+    kind: "pr_requested",
+    title: string,
+    body: string,
+}
+
 // The loop.
 class RoundLost {
     kind: "round_lost",
@@ -242,6 +255,8 @@ type Event = ModelOutcome
     | Answered
     | Reopened
     | Escalated
+    | Published
+    | PrRequested
     | RoundLost
     | HoldCleared;
 
@@ -269,7 +284,10 @@ class WriteParkBrief {
     because: string,
 }
 
+/// Push and open the PR; with a title, the one you gave, else the bead's.
 class PushAndOpenPr {
+    title: string?,
+    body: string?,
 }
 
 /// open_pr = "ask": push the branch and stop short of a PR, for you to open.

@@ -1,0 +1,530 @@
+{
+  "now": 1794151282,
+  "service": {
+    "available": true,
+    "active": "active",
+    "since": "Sun 2026-11-08 15:02:54 UTC",
+    "result": "success"
+  },
+  "timer": {
+    "available": true,
+    "active": "active",
+    "since": "Sun 2026-11-08 15:02:54 UTC",
+    "result": "success"
+  },
+  "doctor": [],
+  "stats": {
+    "now": 1794151282,
+    "since": 1794111894,
+    "windows": {
+      "all": {
+        "span_s": 39388,
+        "landed": 0,
+        "landed_first_try": 0,
+        "landed_local": 0,
+        "rounds_per_landed": {
+          "median": null,
+          "mean": null
+        },
+        "time_to_land_s": {
+          "median": null,
+          "mean": null
+        },
+        "answers": 0,
+        "escalations": 0,
+        "holds": 24,
+        "send_backs": {
+          "total": 6,
+          "by_reason": {
+            "round_timed_out": 3,
+            "rejected": 2,
+            "worker_blocked": 1
+          },
+          "by_model": {
+            "devbox/coder": {
+              "total": 2,
+              "by_reason": {
+                "round_timed_out": 2
+              }
+            },
+            "acbox/reviewer": {
+              "total": 2,
+              "by_reason": {
+                "rejected": 2
+              }
+            },
+            "claude/sonnet": {
+              "total": 2,
+              "by_reason": {
+                "round_timed_out": 1,
+                "worker_blocked": 1
+              }
+            }
+          }
+        },
+        "model_time": {
+          "worker_usd": 0.0,
+          "review_usd": 0.0,
+          "worker_s": 0,
+          "review_s": 0,
+          "worker_rounds": 23,
+          "review_rounds": 2,
+          "empty_rounds": 0
+        },
+        "precheck": {
+          "sent_back": 0,
+          "passed": 0,
+          "skipped": 0
+        },
+        "rebases": 0,
+        "interrupted": 0,
+        "closed_by_hand": 0,
+        "closed_unmerged": 0,
+        "landed_by": {},
+        "by_repo": {},
+        "avoided": {
+          "input_tokens": 0,
+          "output_tokens": 0,
+          "cache_read_tokens": 0,
+          "usd": null
+        }
+      }
+    },
+    "finished": [],
+    "repos": [
+      "preservation-workbench",
+      "preservation-workbench → euclid",
+      "preservation-workbench → euclids-elements-lektor",
+      "inquire-platform",
+      "bead-loop",
+      "home-arcade",
+      "cvscc-website",
+      "fugazy-publish",
+      "fanout",
+      "library-ai-lab"
+    ]
+  },
+  "log": [
+    {
+      "t": 1794066308,
+      "msg": "15:45:08 fugazy-publish: claude.2: nothing queued for this lane"
+    },
+    {
+      "t": 1794066308,
+      "msg": "15:45:08 inquire-platform: cpu: nothing queued for this lane"
+    },
+    {
+      "t": 1794066308,
+      "msg": "15:45:08 cvscc-website: claude: nothing queued for this lane"
+    },
+    {
+      "t": 1794066308,
+      "msg": "15:45:08 fanout: claude.2: nothing queued for this lane"
+    },
+    {
+      "t": 1794066308,
+      "msg": "15:45:08 fugazy-publish: claude: nothing queued for this lane"
+    }
+  ],
+  "repos": [
+    {
+      "repo": "/state/repo/baml",
+      "slug": "preservation-workbench",
+      "label": "delegate:local",
+      "base": "main",
+      "merge": "manual",
+      "on_exhaust": "park",
+      "attach": true,
+      "stages": [
+        {
+          "worker": "devbox/coder",
+          "reviewer": "acbox/reviewer",
+          "failures": 2
+        },
+        {
+          "worker": "claude/sonnet",
+          "reviewer": "claude/sonnet",
+          "failures": 1
+        }
+      ],
+      "research_model": "acbox/coder",
+      "precheck_model": "acbox/utility",
+      "conflict_worker": "",
+      "lanes": {
+        "devbox": {
+          "id": "t-run",
+          "title": ".agents/skills: euclid-fidelity and euclid-verify — Nelson's rules and how to prove a change, in the form the bead-loop worker reads",
+          "failures": 2,
+          "stage": {
+            "index": 2,
+            "worker": "claude/sonnet",
+            "reviewer": "claude/sonnet"
+          },
+          "research": "done",
+          "held": null,
+          "since": 1794117081,
+          "history": [
+            {
+              "round": 0,
+              "model": "devbox/coder",
+              "stage": 1,
+              "when": "",
+              "note": "infra: StepBudgetExceeded { steps: 40 }",
+              "logs": []
+            },
+            {
+              "round": 0,
+              "model": "devbox/coder",
+              "stage": 1,
+              "when": "2026-11-08T04:34:26",
+              "note": "research_blocked: BLOCKED: The bead claims two SKILL.md files can be written to pass lint-skills.sh, but does not provide the required frontmatter format (name, description) nor the exact lint rules. ",
+              "logs": []
+            }
+          ],
+          "notes": "",
+          "url": null,
+          "merge_mode": null,
+          "awaiting_since": null,
+          "adopted": false,
+          "red": false,
+          "parked": null,
+          "open_cmd": "cd /state/repo/baml/wt/pw-xl2 && claude",
+          "waiting": [],
+          "proposal": null,
+          "step": "work",
+          "tail": [
+            "read_file src/a.ts",
+            "run npm test"
+          ],
+          "where": null,
+          "why": null,
+          "has_work": true
+        }
+      },
+      "lane_names": [
+        "devbox",
+        "acbox",
+        "claude"
+      ],
+      "queues": {
+        "dev": [
+          {
+            "id": "t-dev",
+            "title": "a \"quoted\" title",
+            "failures": 2,
+            "stage": {
+              "index": 2,
+              "worker": "claude/sonnet",
+              "reviewer": "claude/sonnet"
+            },
+            "research": "done",
+            "held": null,
+            "since": 1794117081,
+            "history": [
+              {
+                "round": 0,
+                "model": "devbox/coder",
+                "stage": 1,
+                "when": "",
+                "note": "infra: StepBudgetExceeded { steps: 40 }",
+                "logs": []
+              },
+              {
+                "round": 0,
+                "model": "devbox/coder",
+                "stage": 1,
+                "when": "2026-11-08T04:34:26",
+                "note": "research_blocked: BLOCKED: The bead claims two SKILL.md files can be written to pass lint-skills.sh, but does not provide the required frontmatter format (name, description) nor the exact lint rules. ",
+                "logs": []
+              }
+            ],
+            "notes": "",
+            "url": null,
+            "merge_mode": null,
+            "awaiting_since": null,
+            "adopted": false,
+            "red": false,
+            "parked": null,
+            "open_cmd": "cd /state/repo/baml/wt/pw-xl2 && claude",
+            "waiting": [],
+            "proposal": null,
+            "step": null,
+            "tail": [],
+            "where": null,
+            "why": null,
+            "has_work": true
+          }
+        ],
+        "review": [
+          {
+            "id": "t-rq",
+            "title": ".agents/skills: euclid-fidelity and euclid-verify — Nelson's rules and how to prove a change, in the form the bead-loop worker reads",
+            "failures": 2,
+            "stage": {
+              "index": 2,
+              "worker": "claude/sonnet",
+              "reviewer": "claude/sonnet"
+            },
+            "research": "done",
+            "held": null,
+            "since": 1794117081,
+            "history": [
+              {
+                "round": 0,
+                "model": "devbox/coder",
+                "stage": 1,
+                "when": "",
+                "note": "infra: StepBudgetExceeded { steps: 40 }",
+                "logs": []
+              },
+              {
+                "round": 0,
+                "model": "devbox/coder",
+                "stage": 1,
+                "when": "2026-11-08T04:34:26",
+                "note": "research_blocked: BLOCKED: The bead claims two SKILL.md files can be written to pass lint-skills.sh, but does not provide the required frontmatter format (name, description) nor the exact lint rules. ",
+                "logs": []
+              }
+            ],
+            "notes": "",
+            "url": null,
+            "merge_mode": null,
+            "awaiting_since": null,
+            "adopted": false,
+            "red": false,
+            "parked": null,
+            "open_cmd": "cd /state/repo/baml/wt/pw-xl2 && claude",
+            "waiting": [],
+            "proposal": null,
+            "step": null,
+            "tail": [],
+            "where": null,
+            "why": null,
+            "has_work": true
+          }
+        ],
+        "merge": [
+          {
+            "id": "t-pr",
+            "title": ".agents/skills: euclid-fidelity and euclid-verify — Nelson's rules and how to prove a change, in the form the bead-loop worker reads",
+            "failures": 2,
+            "stage": {
+              "index": 2,
+              "worker": "claude/sonnet",
+              "reviewer": "claude/sonnet"
+            },
+            "research": "done",
+            "held": null,
+            "since": 1794117081,
+            "history": [
+              {
+                "round": 0,
+                "model": "devbox/coder",
+                "stage": 1,
+                "when": "",
+                "note": "infra: StepBudgetExceeded { steps: 40 }",
+                "logs": []
+              },
+              {
+                "round": 0,
+                "model": "devbox/coder",
+                "stage": 1,
+                "when": "2026-11-08T04:34:26",
+                "note": "research_blocked: BLOCKED: The bead claims two SKILL.md files can be written to pass lint-skills.sh, but does not provide the required frontmatter format (name, description) nor the exact lint rules. ",
+                "logs": []
+              }
+            ],
+            "notes": "",
+            "url": "https://github.com/o/r/pull/7",
+            "merge_mode": "manual",
+            "awaiting_since": 1794117081,
+            "adopted": false,
+            "red": false,
+            "parked": null,
+            "open_cmd": "cd /state/repo/baml/wt/pw-xl2 && claude",
+            "waiting": [],
+            "proposal": null,
+            "step": null,
+            "tail": [],
+            "where": null,
+            "why": null,
+            "has_work": true
+          }
+        ]
+      },
+      "ready_to_publish": [
+        {
+          "id": "t-pub",
+          "title": ".agents/skills: euclid-fidelity and euclid-verify — Nelson's rules and how to prove a change, in the form the bead-loop worker reads",
+          "failures": 2,
+          "stage": {
+            "index": 2,
+            "worker": "claude/sonnet",
+            "reviewer": "claude/sonnet"
+          },
+          "research": "done",
+          "held": null,
+          "since": 1794117081,
+          "history": [
+            {
+              "round": 0,
+              "model": "devbox/coder",
+              "stage": 1,
+              "when": "",
+              "note": "infra: StepBudgetExceeded { steps: 40 }",
+              "logs": []
+            },
+            {
+              "round": 0,
+              "model": "devbox/coder",
+              "stage": 1,
+              "when": "2026-11-08T04:34:26",
+              "note": "research_blocked: BLOCKED: The bead claims two SKILL.md files can be written to pass lint-skills.sh, but does not provide the required frontmatter format (name, description) nor the exact lint rules. ",
+              "logs": []
+            }
+          ],
+          "notes": "",
+          "url": null,
+          "merge_mode": null,
+          "awaiting_since": null,
+          "adopted": false,
+          "red": false,
+          "parked": null,
+          "open_cmd": "cd /state/repo/baml/wt/pw-xl2 && claude",
+          "waiting": [],
+          "proposal": {
+            "compare_url": "https://github.com/o/r/compare/main...bead/t-pub",
+            "title": "t-pub: it",
+            "body": "done"
+          },
+          "step": null,
+          "tail": [],
+          "where": null,
+          "why": null,
+          "has_work": true
+        }
+      ],
+      "parked": [
+        {
+          "id": "pw-xl2",
+          "title": ".agents/skills: euclid-fidelity and euclid-verify — Nelson's rules and how to prove a change, in the form the bead-loop worker reads",
+          "failures": 2,
+          "stage": {
+            "index": 2,
+            "worker": "claude/sonnet",
+            "reviewer": "claude/sonnet"
+          },
+          "research": "done",
+          "held": null,
+          "since": 1794117081,
+          "history": [
+            {
+              "round": 0,
+              "model": "devbox/coder",
+              "stage": 1,
+              "when": "",
+              "note": "infra: StepBudgetExceeded { steps: 40 }",
+              "logs": []
+            },
+            {
+              "round": 0,
+              "model": "devbox/coder",
+              "stage": 1,
+              "when": "2026-11-08T04:34:26",
+              "note": "research_blocked: BLOCKED: The bead claims two SKILL.md files can be written to pass lint-skills.sh, but does not provide the required frontmatter format (name, description) nor the exact lint rules. ",
+              "logs": []
+            }
+          ],
+          "notes": "",
+          "url": null,
+          "merge_mode": null,
+          "awaiting_since": null,
+          "adopted": false,
+          "red": false,
+          "parked": {
+            "reason": "blocked",
+            "question": "held 5 times in a row: InvalidRequest { provider: \"claude-code\", status_code: null, detail: \"the Claude Code CLI exited with code 1\", raw_body: null }",
+            "when": "2026-11-08T05:51:21",
+            "stage": {
+              "index": 1,
+              "worker": "devbox/coder",
+              "reviewer": "acbox/reviewer"
+            },
+            "brief": "WHAT HAPPENED:\nBLOCKED: x\nQUESTION:\nWhat should the next round know?",
+            "brief_model": null,
+            "stopped_on": null
+          },
+          "open_cmd": "cd /state/repo/baml/wt/pw-xl2 && claude",
+          "waiting": [],
+          "proposal": null,
+          "step": null,
+          "tail": [],
+          "where": null,
+          "why": null,
+          "has_work": true
+        }
+      ],
+      "held": [
+        {
+          "id": "t-dev",
+          "title": ".agents/skills: euclid-fidelity and euclid-verify — Nelson's rules and how to prove a change, in the form the bead-loop worker reads",
+          "failures": 2,
+          "stage": {
+            "index": 2,
+            "worker": "claude/sonnet",
+            "reviewer": "claude/sonnet"
+          },
+          "research": "done",
+          "held": null,
+          "since": 1794117081,
+          "history": [
+            {
+              "round": 0,
+              "model": "devbox/coder",
+              "stage": 1,
+              "when": "",
+              "note": "infra: StepBudgetExceeded { steps: 40 }",
+              "logs": []
+            },
+            {
+              "round": 0,
+              "model": "devbox/coder",
+              "stage": 1,
+              "when": "2026-11-08T04:34:26",
+              "note": "research_blocked: BLOCKED: The bead claims two SKILL.md files can be written to pass lint-skills.sh, but does not provide the required frontmatter format (name, description) nor the exact lint rules. ",
+              "logs": []
+            }
+          ],
+          "notes": "",
+          "url": null,
+          "merge_mode": null,
+          "awaiting_since": null,
+          "adopted": false,
+          "red": false,
+          "parked": null,
+          "open_cmd": "cd /state/repo/baml/wt/pw-xl2 && claude",
+          "waiting": [],
+          "proposal": null,
+          "step": null,
+          "tail": [],
+          "where": "dev",
+          "why": "setup failed",
+          "has_work": true
+        }
+      ],
+      "decisions": [],
+      "worktrees": [],
+      "providers": {
+        "devbox": {
+          "cost": "local"
+        },
+        "acbox": {
+          "cost": "local"
+        },
+        "claude": {
+          "cost": "metered"
+        }
+      }
+    }
+  ]
+}

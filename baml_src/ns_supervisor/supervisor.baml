@@ -82,12 +82,16 @@ function apply(s: Supervisor, id: string, event: root.machine.Event) -> void thr
     log.info(`${root.supervisor.repo_name(s.group)}: ${id}: ${event_line(event)}`);
     let next = root.machine.step(current, event, s.policy);
     s.put(next.bead);
-    if let status: string = status_change(current.place, next.bead.place) {
-        // The bead says what the loop is doing with it. A bd that refuses is said in the
-        // journal and the loop goes on: the next transition writes it again.
-        let _ = s.world.set_status(id, status) catch (e) {
+    // The bead in bd says where it is: every move is written to it, its status and its
+    // place as a loop:* label. A bd that refuses is said in the journal and the loop goes
+    // on: the next move writes it again.
+    let status = status_change(current.place, next.bead.place) ?? "";
+    let was = place_label(current.place);
+    let now = place_label(next.bead.place);
+    if (status.length() > 0 || was != now) {
+        let _ = s.world.mark(id, status, was, now) catch (e) {
             root.machine.Infra => {
-                log.warn(`${id}: bd status ${status}: ${e.words}`);
+                log.warn(`${id}: bd update: ${e.words}`);
             },
         };
     }
@@ -101,6 +105,22 @@ function apply(s: Supervisor, id: string, event: root.machine.Event) -> void thr
         for (let f in follow) {
             apply(s, id, f);
         }
+    }
+}
+
+/// A place as the label the bead carries in bd while it is there: `bd list -l loop:ready-for-pr`
+/// is what waits for you to open a PR. Closed carries none.
+function place_label(p: root.machine.Place) -> string throws never {
+    match (p) {
+        let x: root.machine.Ready => "loop:ready",
+        let x: root.machine.Researching => "loop:research",
+        let x: root.machine.Working => "loop:work",
+        let x: root.machine.InReview => "loop:review-queue",
+        let x: root.machine.Reviewing => "loop:review",
+        let x: root.machine.Publishable => "loop:ready-for-pr",
+        let x: root.machine.Merging => "loop:merging",
+        let x: root.machine.Parked => "loop:parked",
+        let x: root.machine.Closed => "",
     }
 }
 
@@ -123,8 +143,10 @@ function status_change(
     if (before is root.machine.Parked) {
         return if (after is root.machine.Closed) {
             null
-        } else {
+        } else if (after is root.machine.Ready) {
             "open"
+        } else {
+            "in_progress"
         };
     }
     if (
@@ -181,7 +203,7 @@ function perform(
             none
         },
         let x: root.machine.PushAndOpenPr => {
-            let opened: root.machine.Event = s.world.push_and_open_pr(id);
+            let opened: root.machine.Event = s.world.push_and_open_pr(id, x.title, x.body);
             [opened]
         },
         let x: root.machine.PushBranch => {

@@ -66,7 +66,13 @@ interface World {
         id: string,
         pr: string,
     ) -> root.machine.Event[] throws root.machine.Infra;
-    function push_and_open_pr(self, id: string) -> root.machine.PrOpened throws root.machine.Infra;
+    /// With a title, the PR you asked for; else the bead's, in pr_style.
+    function push_and_open_pr(
+        self,
+        id: string,
+        title: string?,
+        body: string?,
+    ) -> root.machine.PrOpened throws root.machine.Infra;
     /// Push the branch, open no PR, and say where one would be opened.
     function push_branch(self, id: string) -> root.machine.BranchPushed throws root.machine.Infra;
     function merge_pr(self, id: string) -> void throws root.machine.Infra;
@@ -74,8 +80,15 @@ interface World {
     function relabel(self, id: string) -> void throws root.machine.Infra;
     function delete_remote_branch(self, id: string) -> void throws root.machine.Infra;
     function note(self, id: string, text: string) -> void throws root.machine.Infra;
-    /// The bead's status in bd: what the loop is doing with it, kept on the bead itself.
-    function set_status(self, id: string, status: string) -> void throws root.machine.Infra;
+    /// The bead in bd says where it is: its status (empty: as it is), and its place as a
+    /// `loop:*` label, `drop` taken off and `label` put on (either empty: none).
+    function mark(
+        self,
+        id: string,
+        status: string,
+        drop: string,
+        label: string,
+    ) -> void throws root.machine.Infra;
     function close_bead(self, id: string, url: string?) -> void throws root.machine.Infra;
     function write_park_brief(self, id: string, because: string) -> void throws root.machine.Infra;
     /// Open PRs on `bead/*` branches, which the loop takes into its merge queue.

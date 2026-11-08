@@ -187,7 +187,14 @@ function run(config_file: string, ticks: int = 0) -> int {
 }
 
 /// What `tell` turns into an event: `answer` (with the text), `reopen`, or `escalate`.
-function told(what: string, text: string) -> root.machine.Event? throws never {
+/// A word you tell the loop, as its event. `open_pr` takes the PR's title as well.
+function told(what: string, text: string, title: string = "") -> root.machine.Event? throws never {
+    if (what == "publish") {
+        return root.machine.Published { kind: "published" };
+    }
+    if (what == "open_pr") {
+        return root.machine.PrRequested { kind: "pr_requested", title: title, body: text };
+    }
     if (what == "answer") {
         root.machine.Answered { kind: "answered", text: text }
     } else {
@@ -206,8 +213,14 @@ function told(what: string, text: string) -> root.machine.Event? throws never {
 /// `bead-supervisor tell --config_file REPO/.bead-loop.toml --id ID --what answer --text T`:
 /// leaves the event in the repo's inbox, which the running loop takes on its next tick.
 /// A parked bead takes all three; anything else is refused there, with a note.
-function tell(config_file: string, id: string, what: string, text: string = "") -> string {
-    let event = told(what, text);
+function tell(
+    config_file: string,
+    id: string,
+    what: string,
+    text: string = "",
+    title: string = "",
+) -> string {
+    let event = told(what, text, title = title);
     if let e: root.machine.Event = event {
         let c = load_config(config_file);
         let configs: LoopConfig[] = [c];
@@ -224,14 +237,22 @@ function tell(config_file: string, id: string, what: string, text: string = "") 
         let here = config_for(configs, rows.at(0)?.labels ?? []) ?? c;
         mail_to(here.state, id, e)
     } else {
-        `unknown: ${what} (answer, reopen or escalate)`
+        `unknown: ${what} (answer, reopen, escalate, publish or open_pr)`
     }
 }
 
-test "tell knows its three words and nothing else" {
+test "tell knows its five words and nothing else" {
     assert.is_type<root.machine.Answered>(told("answer", "x"));
     assert.is_type<root.machine.Reopened>(told("reopen", ""));
     assert.is_type<root.machine.Escalated>(told("escalate", ""));
+    assert.is_type<root.machine.Published>(told("publish", ""));
+    let pr = told("open_pr", "the body", title = "the title");
+    if let x: root.machine.PrRequested = pr {
+        assert.equal(x.title, "the title");
+        assert.equal(x.body, "the body");
+    } else {
+        assert.is_true(false);
+    }
     assert.equal(told("merge", "") == null, true)
 }
 

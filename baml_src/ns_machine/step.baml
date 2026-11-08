@@ -244,8 +244,12 @@ function on_working(b: Bead, w: Working, e: Event, p: Policy) -> Step throws nev
             let sent = charge(b, x);
             if (on_last_stage(p, b.failures)) {
                 let parked = park(sent.bead, x.line);
-                parked.effects
-                    = [Note { text: x.line }, WriteParkBrief { because: x.line }, RemoveBranch {}];
+                // Work an earlier round committed and gated stays on its branch: you may
+                // still want it (pw-xl2, 8 Nov, lost its passing commit to a false BLOCKED).
+                parked.effects = [Note { text: x.line }, WriteParkBrief { because: x.line }];
+                if (!sent.bead.kept) {
+                    parked.effects.push(RemoveBranch {});
+                }
                 parked
             } else {
                 sent
@@ -320,7 +324,7 @@ function on_reviewing(b: Bead, e: Event, p: Policy) -> Step throws never {
             let effects: Effect[] = if (p.ask_before_pr) {
                 [PushBranch {}]
             } else {
-                [PushAndOpenPr {}]
+                [PushAndOpenPr { title: null, body: null }]
             };
             Step { bead: b, effects: effects }
         },
@@ -348,6 +352,12 @@ function opened(b: Bead, o: PrOpened, p: Policy) -> Step throws never {
 function on_publishable(b: Bead, e: Event, p: Policy) -> Step throws never {
     match (e) {
         let x: PrOpened => opened(b, x, p),
+        let x: PrRequested => {
+            Step {
+                bead: b,
+                effects: [Note { text: "you opened the PR" }, PushAndOpenPr { title: x.title, body: x.body }],
+            }
+        },
         _ => elsewhere(b, e),
     }
 }
@@ -454,6 +464,21 @@ function on_parked(b: Bead, e: Event, p: Policy) -> Step throws never {
         let x: Escalated => {
             back.failures = last_stage_start(p);
             stay(back)
+        },
+        let x: Published => {
+            Step {
+                bead: b,
+                effects: [
+                    Note { text: "ready for PR: pushing the branch" },
+                    PrepareWorktree { resume: true },
+                    PushBranch {},
+                ],
+            }
+        },
+        let x: BranchPushed => {
+            let n = b.at(Publishable { kind: "publishable", compare_url: x.compare_url });
+            n.kept = true;
+            stay(n)
         },
         let x: MergedOutside => closed(b, x.url),
         _ => elsewhere(b, e),

@@ -823,3 +823,17 @@ test "a usage limit is waited out however long, and work between holds resets th
     let worked = step(step(c, Picked { kind: "picked" }, p).bead, Committed { kind: "committed", sha: "s" }, p).bead;
     assert.equal(worked.harness_streak, 0)
 }
+
+test "a BLOCKED on the last stage parks, keeping a branch that holds gated work" {
+    let b = bead(working(), failures = 2);
+    b.kept = true;
+    let s = step(b, WorkerBlocked { kind: "worker_blocked", line: "BLOCKED: x" }, policy());
+    assert.is_true(s.bead.place is Parked);
+    assert.is_true(!removes(s));
+    let fresh = step(
+        bead(working(), failures = 2),
+        WorkerBlocked { kind: "worker_blocked", line: "BLOCKED: x" },
+        policy(),
+    );
+    assert.is_true(removes(fresh))
+}

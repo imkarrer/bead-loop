@@ -591,3 +591,46 @@ test "a bead waiting for review that left bd waits where it is" {
     assert.is_type<root.machine.InReview>(place_of(s));
     assert.equal(starts(w, "start_round Review acbox/reviewer"), 0)
 }
+
+test "every move is on the bead in bd as its loop label" {
+    let w = one_bead([committed()], [approved()], [green(), merged()]);
+    let s = Supervisor.new(w, MemoryLog.new(), policy());
+    turns(s, w, 6);
+    assert.is_type<root.machine.Closed>(place_of(s));
+    for (let l in ["loop:work", "loop:review-queue", "loop:review", "loop:merging"]) {
+        assert.is_true(w.calls.includes(`label t-1 ${l}`));
+    }
+    assert.equal(
+        place_label(root.machine.Publishable { kind: "publishable", compare_url: "u" }),
+        "loop:ready-for-pr",
+    )
+}
+
+test "a parked bead with its work done is pushed, then opened as the PR you asked for" {
+    let w = one_bead([no_commit(), no_commit(), no_commit()], [], []);
+    let s = Supervisor.new(w, MemoryLog.new(), policy());
+    turns(s, w, 6);
+    assert.is_type<root.machine.Parked>(place_of(s));
+    w.inbox_now
+        = [root.world.Mail { id: "t-1", event: root.machine.Published { kind: "published" } }];
+    tick(s);
+    assert.is_type<root.machine.Publishable>(place_of(s));
+    assert.is_true(w.calls.includes("label t-1 loop:ready-for-pr"));
+    assert.equal(
+        status_change(
+            root.machine.Parked { kind: "parked", question: "q" },
+            root.machine.Publishable { kind: "publishable", compare_url: "u" },
+        ),
+        "in_progress",
+    );
+    w.inbox_now
+        = [
+            root.world.Mail {
+                id: "t-1",
+                event: root.machine.PrRequested { kind: "pr_requested", title: "T", body: "B" },
+            },
+        ];
+    tick(s);
+    assert.is_type<root.machine.Merging>(place_of(s));
+    assert.is_true(w.calls.includes("push_and_open_pr"))
+}
