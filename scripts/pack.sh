@@ -11,4 +11,4 @@ export DO_NOT_TRACK=1 BAML_CLI_ALLOW_DIRECT=1
 export BOUNDARY_API_KEY=${BOUNDARY_API_KEY:-local}
 mkdir -p "$(dirname "$out")"
 baml-cli --agent-skill-check off pack -o "$out" \
-  -f supervisor.run -f rounds.round -f page.page
+  -f supervisor.run -f supervisor.lint -f supervisor.tell -f rounds.round -f page.page
