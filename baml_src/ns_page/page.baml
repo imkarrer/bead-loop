@@ -233,7 +233,8 @@ function page(config_file: string, addr: string = "127.0.0.1:4097") -> never {
 }
 
 // No `${` and no backtick inside: this is a BAML backtick string, so the script below
-// joins its strings with `+`.
+// joins its strings with `+`. No backslash either: the string eats it (`\/` became `/`
+// and broke the script).
 const PAGE_HTML: string = `
     <!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>bead-loop</title>
     <style>
@@ -251,7 +252,7 @@ const PAGE_HTML: string = `
     <script>
     var MAP={'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'};
     function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){return MAP[c];});}
-    function link(u){return u&&u.indexOf('http')===0?'<a href="'+esc(u)+'" target="_blank" rel="noopener">'+esc(u.replace(/^https:\/\/github.com\//,''))+'</a>':esc(u);}
+    function link(u){return u&&u.indexOf('http')===0?'<a href="'+esc(u)+'" target="_blank" rel="noopener">'+esc(u.split('https://github.com/').join(''))+'</a>':esc(u);}
     async function tell(state,id,what){var t=document.getElementById('t-'+id);var r=await fetch('/api/tell',{method:'POST',body:JSON.stringify({state:state,id:id,what:what,text:t?t.value:''})});alert(await r.text());load();}
     function button(r,b,what,label){return '<button data-state="'+esc(r.state)+'" data-id="'+esc(b.id)+'" data-what="'+what+'">'+label+'</button>';}
     function row(r,b){
@@ -318,4 +319,14 @@ test "a repo's view is a fold of its log, closed beads counted not listed" {
     assert.equal(v.beads.length(), 1);
     assert.equal(v.beads.at(0)?.place, "working");
     assert.equal(v.closed, 1)
+}
+
+test "the page's script parses as served" {
+    let parts = PAGE_HTML.split("<script>");
+    let script = (parts.at(1) ?? "").split("</script>").at(0) ?? "";
+    let path = "/tmp/bead-loop-page-script.js";
+    baml.fs.write(path, script);
+    let out = baml.sys.run("node", args = ["--check", path], capture_output = true);
+    assert.equal(out.stderr.to_string(), "");
+    assert.equal(out.exit_code, 0)
 }
