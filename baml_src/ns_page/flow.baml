@@ -353,22 +353,29 @@ function fwindow(tallies: root.supervisor.FTally[], since: int, span: int) -> FW
             let had = w.by_repo.get(t.slug)?.landed ?? 0;
             let _ = w.by_repo.set(t.slug, FRepoLanded { landed: had + 1 });
         }
-        w.answers = w.answers + count_in(t.answers, since);
-        w.escalations = w.escalations + count_in(t.escalations, since);
-        w.holds = w.holds + count_in(t.holds, since);
-        w.rebases = w.rebases + count_in(t.rebases, since);
-        w.closed_unmerged = w.closed_unmerged + count_in(t.closed_unmerged, since);
-        w.precheck.sent_back = w.precheck.sent_back + count_in(t.prechecks, since);
-        w.model_time.worker_rounds = w.model_time.worker_rounds + count_in(t.worker_rounds, since);
-        w.model_time.review_rounds = w.model_time.review_rounds + count_in(t.review_rounds, since);
-        for (let s in t.send_backs) {
-            if (in_window(s.at, since)) {
+        w.answers = w.answers + count_in(root.supervisor.marks_of(t, "answer"), since);
+        w.escalations = w.escalations + count_in(root.supervisor.marks_of(t, "escalation"), since);
+        w.holds = w.holds + count_in(root.supervisor.marks_of(t, "hold"), since);
+        w.rebases = w.rebases + count_in(root.supervisor.marks_of(t, "rebase"), since);
+        w.closed_unmerged
+            = w.closed_unmerged + count_in(root.supervisor.marks_of(t, "closed_unmerged"), since);
+        w.precheck.sent_back
+            = w.precheck.sent_back + count_in(root.supervisor.marks_of(t, "precheck"), since);
+        w.model_time.worker_rounds
+            = w.model_time.worker_rounds
+                + count_in(root.supervisor.marks_of(t, "worker_round"), since);
+        w.model_time.review_rounds
+            = w.model_time.review_rounds
+                + count_in(root.supervisor.marks_of(t, "review_round"), since);
+        for (let s in t.marks) {
+            if (s.kind == "send_back" && in_window(s.at, since)) {
                 let sb = w.send_backs;
+                let kind = s.what ?? "";
                 sb.total = sb.total + 1;
-                let _ = sb.by_reason.set(s.kind, (sb.by_reason.get(s.kind) ?? 0) + 1);
+                let _ = sb.by_reason.set(kind, (sb.by_reason.get(kind) ?? 0) + 1);
                 let m = sb.by_model.get(s.model) ?? FModelLoss { total: 0, by_reason: {} };
                 m.total = m.total + 1;
-                let _ = m.by_reason.set(s.kind, (m.by_reason.get(s.kind) ?? 0) + 1);
+                let _ = m.by_reason.set(kind, (m.by_reason.get(kind) ?? 0) + 1);
                 let _ = sb.by_model.set(s.model, m);
             }
         }
@@ -412,8 +419,8 @@ function fstats(
                     } else {
                         null
                     },
-                    escalated: t.escalations.length() > 0,
-                    answers: t.answers.length(),
+                    escalated: root.supervisor.marks_of(t, "escalation").length() > 0,
+                    answers: root.supervisor.marks_of(t, "answer").length(),
                 },
             );
         }

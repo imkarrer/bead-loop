@@ -798,6 +798,27 @@ test "ftally records each round" {
     assert.equal(r2?.words, "REJECT: x")
 }
 
+test "a tally is one timeline of marks" {
+    let timed: TimedEvent[] = [
+        TimedEvent { at: 100, event: root.machine.Picked { kind: "picked" } },
+        TimedEvent { at: 160, event: root.machine.Committed { kind: "committed", sha: "s" } },
+        TimedEvent { at: 170, event: root.machine.GatePassed { kind: "gate_passed" } },
+        TimedEvent { at: 400, event: root.machine.ReviewPicked { kind: "review_picked" } },
+        TimedEvent {
+            at: 500,
+            event: root.machine.Rejected { kind: "rejected", line: "REJECT: x", text: "REJECT: x" },
+        },
+    ];
+    let t = ftally("t-1", "t-1", timed, policy());
+    assert.equal(marks_of(t, "worker_round"), [100]);
+    assert.equal(marks_of(t, "review_round"), [400]);
+    let send_backs = t.marks.filter((m) -> {
+        m.kind == "send_back"
+    });
+    assert.equal(send_backs.length(), 1);
+    assert.equal(send_backs.at(0)?.at, 500)
+}
+
 test "a green look is not logged where CI merges, and is where the loop does" {
     let green = root.machine.ChecksGreen { kind: "checks_green" };
     let p = policy();
