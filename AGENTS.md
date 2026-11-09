@@ -43,6 +43,9 @@ Run the parts on their own while iterating:
   a lever pulled with `tell`. The packed binary runs one tick per process against real
   git, bd and a gate; `test/e2e/bin/gh`, `test/e2e/bin/claude` and `test/e2e/model.mjs`
   are scripted. A change to the World or a round ships with a case here.
+- **A case the Rust suite had:** [test/e2e/parity.md](test/e2e/parity.md) lists all 148
+  and where each stands. Before you fix a behaviour the Rust loop had, find its row;
+  when you port the case, change the row.
 
 Every change ships with its test.
 

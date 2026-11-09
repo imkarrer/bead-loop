@@ -44,6 +44,8 @@ case ${1:-} in
     shellcheck -S warning -x install.sh scripts/*.sh test/lint-skills.sh test/package.sh bin/bead-loop-ui test/e2e/*.sh test/e2e/cases/*.sh test/e2e/bin/*
     echo "--- :memo: skills and agents"
     test/lint-skills.sh
+    echo "--- :clipboard: the Rust parity list"
+    test/e2e/parity.sh
     echo "--- :spider_web: the page"
     node scripts/page-html.mjs --check
     node test/ui-onclicks.js test/ui-state.json
