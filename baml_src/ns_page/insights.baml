@@ -1,5 +1,5 @@
 // Insights: what the loop's own record says to change. Each is a small table with a
-// level and one line saying what to do about it. Two sources: the BAML traces under each
+// level and one line saying what to do. Two sources: the BAML traces under each
 // repo's .baml/btel, read with `baml-cli query --format json`, and the tallies each
 // supervisor writes into STATE/view.json (each bead's rounds, from its event log).
 // The page asks /api/insights, which this builds at most once every five minutes.
@@ -204,12 +204,136 @@ function holds_by_cause(tallies: root.supervisor.FTally[]) -> Insight throws nev
 
 /// 5. How long a bead waits for a free lane.
 function lane_wait(tallies: root.supervisor.FTally[]) -> Insight throws never {
-    empty_insight(
-        "lane_wait",
-        "Waiting for a lane",
-        "from a bead being ready to its round starting, by model server",
-        ["server", "rounds", "median wait", "longest wait"],
-    )
+    // Collect all round logs from tallies
+    let round_logs: root.supervisor.FRoundRec[] = [];
+    for (let tally in tallies) {
+        for (let log in tally.round_log) {
+            round_logs.push(log);
+        }
+    }
+
+    // Group round logs by provider
+    let grouped: map<string, root.supervisor.FRoundRec[]> = {};
+    for (let log in round_logs) {
+        let provider = root.supervisor.provider_of(log.model);
+        let logs = grouped.get(provider) ?? [];
+        logs.push(log);
+        grouped.set(provider, logs);
+    }
+
+    // Calculate stats for each provider
+    let rows: string[][] = [];
+    let level = "ok";
+    for (let provider in grouped.keys()) {
+        let logs = grouped.get(provider) ?? [];
+        let rounds = logs.length();
+        let waits: int[] = [];
+        for (let log in logs) {
+            waits.push(log.waited_s);
+        }
+        waits.sort();
+        let median_wait = if (waits.length() == 0) {
+            0
+        } else if (waits.length() % 2 == 1) {
+            waits[waits.length() / 2]
+        } else {
+            let left = waits[waits.length() / 2 - 1];
+            let right = waits[waits.length() / 2];
+            (left + right) / 2
+        };
+        let longest_wait = if (waits.length() == 0) {
+            0
+        } else {
+            waits[waits.length() - 1]
+        };
+
+        // Format wait times
+        let median_str = format_wait(median_wait);
+        let longest_str = format_wait(longest_wait);
+
+        rows.push([provider, `${rounds}`, median_str, longest_str]);
+
+        // Check if median wait is over 600 seconds
+        if (median_wait > 600) {
+            level = "warn";
+        }
+    }
+
+    // Sort by median wait, longest first
+    let sort_key = (row: string[]) -> int {
+        let wait_str = row[2];
+        let wait_seconds = parse_wait(wait_str);
+        -wait_seconds
+    };
+    rows.sort_by_key(sort_key);
+
+    // Build hint if there's a warning
+    let hint = if (level == "warn") {
+        let warn_row = rows[0] ?? [];
+        let median = warn_row[2] ?? "0s";
+        let server = warn_row[0] ?? "unknown";
+        `beads wait a median ${median} for ${server}: raise its [providers.${server}] parallel or move a stage off it`
+    } else {
+        ""
+    };
+
+    Insight {
+        key: "lane_wait",
+        title: "Waiting for a lane",
+        about: "from a bead being ready to its round starting, by model server",
+        columns: ["server", "rounds", "median wait", "longest wait"],
+        rows: rows,
+        level: level,
+        hint: hint,
+    }
+}
+
+/// Format wait time as "45s", "12m" or "2h05"
+function format_wait(seconds: int) -> string throws never {
+    if (seconds < 90) {
+        `${seconds}s`
+    } else if (seconds < 90 * 60) {
+        let minutes = (seconds + 30) / 60; // Round to nearest minute
+        `${minutes}m`
+    } else {
+        let hours = seconds / 3600;
+        let mins = (seconds % 3600 + 30) / 60; // Round to nearest minute
+        `${hours}h${mins}`
+    }
+}
+
+/// Parse formatted wait time back to seconds
+function parse_wait(formatted: string) -> int throws never {
+    if (formatted.ends_with("s")) {
+        baml.json.decode<int>(formatted.slice(0, formatted.length() - 1)) catch_all (e) {
+            _ => 0
+        }
+    } else if (formatted.ends_with("m")) {
+        let mins = baml.json.decode<int>(formatted.slice(0, formatted.length() - 1)) catch_all (e) {
+            _ => 0
+        };
+        mins * 60
+    } else {
+        // Format is "hmm" or "hhmm"
+        let parts = formatted.split("h");
+        if (parts.length() == 2) {
+            let hours = baml.json.decode<int>(parts[0] ?? "") catch_all (e) {
+                _ => 0
+            };
+            let mins = baml.json.decode<int>(parts[1] ?? "") catch_all (e) {
+                _ => 0
+            };
+            hours * 3600 + mins * 60
+        } else {
+            // Try to parse as "hhmm"
+            let num = baml.json.decode<int>(formatted) catch_all (e) {
+                _ => 0
+            };
+            let hours = num / 100;
+            let mins = num % 100;
+            hours * 3600 + mins * 60
+        }
+    }
 }
 
 /// Every insight, from the configs' views and their repos' traces.
@@ -278,4 +402,40 @@ test "model calls name the server and flag slow ones" {
     assert.equal(row.at(2) ?? "", "6");
     assert.equal(i.level, "warn");
     assert.is_true(i.hint.includes("895.2"))
+}
+
+test "lane wait is the median by server" {
+    let i = lane_wait(
+        [
+            root.supervisor.tally_of(
+                "t-1",
+                [
+                    root.supervisor.round_rec("review", "acbox/reviewer", "approved", waited_s = 60),
+                    root.supervisor.round_rec(
+                        "review",
+                        "acbox/reviewer",
+                        "approved",
+                        waited_s = 900,
+                    ),
+                    root.supervisor.round_rec(
+                        "review",
+                        "acbox/reviewer",
+                        "approved",
+                        waited_s = 1200,
+                    ),
+                    root.supervisor.round_rec("work", "devbox/coder", "gate_passed", waited_s = 30),
+                ],
+            ),
+        ],
+    );
+    assert.equal(i.rows.length(), 2);
+    assert.equal(i.rows[0][0], "acbox");
+    assert.equal(i.rows[0][1], "3");
+    assert.equal(i.rows[0][2], "15m");
+    assert.equal(i.rows[0][3], "20m");
+    assert.equal(i.rows[1][0], "devbox");
+    assert.equal(i.rows[1][1], "1");
+    assert.equal(i.rows[1][2], "30s");
+    assert.equal(i.rows[1][3], "30s");
+    assert.equal(i.level, "warn");
 }
