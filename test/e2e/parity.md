@@ -10,22 +10,22 @@ change it to `dropped` and say where the drop is written down. `test/e2e/parity.
 checks that every row is here and that each `e2e` or `changed` row names a case
 `test/e2e/cases` defines. The Rust cases are in git: `git show 8907dfa:test/run.sh`.
 
-The rows were read from the code at 7a60b31 on 9 Nov 2026, after the bl-lkb ports
-(#251 to #267). Line numbers drift.
+The rows were read from the code on 9 Nov 2026, after the bl-lkb ports (#251 to #271,
+#274, #275). Line numbers drift.
 
 ## Where it stands
 
 | status | rows | meaning |
 | --- | --- | --- |
-| `e2e` | 57 | a case in `test/e2e/cases` proves it against real git, bd and a gate |
+| `e2e` | 69 | a case in `test/e2e/cases` proves it against real git, bd and a gate |
 | `changed` | 2 | a case keeps the Rust name but asserts what the BAML loop does instead |
-| `core` | 21 | the loop does it, but only a FakeWorld test proves it; 14 of these cross the world, which FakeWorld cannot see |
-| `untested` | 12 | the code is there, and no test covers it |
-| `missing` | 19 | the loop does not do it |
+| `core` | 13 | the loop does it, but only a FakeWorld test proves it; 9 of these cross the world, which FakeWorld cannot see |
+| `untested` | 10 | the code is there, and no test covers it |
+| `missing` | 17 | the loop does not do it |
 | `dropped` | 27 | removed on purpose: opencode, aider, stamps, stats, bench, `[[lanes]]`, seats ([config.md](../../docs/config.md#not-read)) |
 | `moot` | 10 | the design makes the failure impossible |
 
-That leaves 54 rows to prove, build or decide: 7 are P1, 29 P2 and 18 P3. `port` is P1
+That leaves 42 rows to prove, build or decide: 3 are P1, 22 P2 and 17 P3. `port` is P1
 when the live config uses the behaviour and getting it wrong wastes rounds, loses work,
 or merges the wrong thing. P2 means it is used but cheap to notice. P3 is an edge case,
 or unused. `seam` is yes when the behaviour crosses git, bd, gh, Claude, a model server,
@@ -69,8 +69,9 @@ These differ from the Rust loop today, and each one was checked in the code.
    Ready (`supervisor.baml:389`). [state-machine.md](../../docs/state-machine.md) says
    only the loop's own are picked.
 
-The other P1 rows are proven only against FakeWorld, or not at all: 15 (a gate fixed by
-the revision round), 100 and 102 (targets), and 105 (`open_pr = ask`).
+Two bugs found while porting are fixed: a bead ready to publish counts toward
+`max_inflight` (row 107, bl-lkb.8), and a stage with no reviewer goes straight to the PR
+(row 26, bl-lkb.11).
 
 These smaller differences came up while classifying the rows. The e2e file headers
 confirm the slug, the blind second opinion and the fixed park brief; the rest were not
@@ -80,8 +81,7 @@ each re-checked:
 - The research second opinion sees only the bead, not the first answer's BLOCK
   (`round.baml:456`).
 - A `bead/ID-slug` PR is adopted with the slug inside the id (`live.baml:1208`).
-- A stage with no worker or no reviewer runs on the Devbox default client
-  (`clients.baml:36`).
+- A stage with no worker runs on the Devbox default client (`clients.baml:36`).
 - An unknown `work:NAME` is skipped without a word, and a bead with two `work:` labels is
   taken by both targets.
 - A publishable bead does not count toward `max_inflight`.
@@ -99,16 +99,16 @@ each re-checked:
 | 3 | `case_plain_pr` | pr_style plain: bead title, no id prefix, verify section, bead marker | untested | yes | P2 | live.baml:495-505; body is the description alone: no "How to verify", no `<!-- bead: -->` |
 | 4 | `case_actor_from_env` | BEADS_ACTOR beats the label as the bd assignee | missing | yes | P3 | mark_args (live.baml:1507) writes only status and labels; no assignee is ever set |
 | 5 | `case_blocked` | BLOCKED at last stage parks, line noted, model brief in worktree, nothing pushed | core | yes | P2 | step_test.baml:227, :882; brief is static text (live.baml:642); ParkBriefAgent never called |
-| 6 | `case_no_commit` | no commit is noted, nothing pushed | core | yes | P2 | step_test.baml:239 "No commit"; round.baml:556 |
+| 6 | `case_no_commit` | no commit is noted, nothing pushed | e2e | yes | - | case_no_commit (sendbacks.sh) |
 | 7 | `case_postmortem` | after a failed round the precheck model writes a post-mortem into the note | missing | yes | P2 | no post-mortem call in baml_src; note is note_of alone ("worker made no commit"); README:52 still describes it |
 | 8 | `case_postmortem_unavailable` | post-mortem error: note is the tail alone, one failure, no hold | moot | yes | - | no post-mortem call exists to fail; charge as in step_test.baml:239 |
 | 9 | `case_precheck_pass` | precheck PASS sits between worker and reviewer, in the worktree, logged | e2e | yes | - | case_precheck_pass (precheck.sh) |
 | 10 | `case_precheck_sendback` | SEND BACK charges one failure, work order noted, reviewer skipped | e2e | yes | - | case_precheck_sendback (precheck.sh) |
 | 11 | `case_precheck_unavailable` | precheck server error or crash falls through to review, uncharged | e2e | yes | - | case_precheck_unavailable (precheck.sh); one path now: the pre-check is a call inside the round |
 | 12 | `case_diff_checks` | diff_checks catches placeholder tests before review | dropped | yes | - | config.md Not read; nothing raises DiffProblems (precheck.sh header) |
-| 13 | `case_uncommitted_is_settled` | loop commits a done worker's leftovers, then pushes | core | yes | P2 | round.baml:698 (real git); subject is `ID: summary`, not `ID: title` |
-| 14 | `case_gate_fails_twice` | gate red, one fix round fed its output, then charged, nothing pushed | e2e | yes | - | case_red_gate_parks; gate output in the fix prompt (round.baml:351) not asserted |
-| 15 | `case_gate_fixed_on_revision` | gate red then fixed by the revision round: reviewed, pushed, two commits | untested | yes | P1 | round.baml:350-366, second gate pass → passed(); no BAML or e2e test |
+| 13 | `case_uncommitted_is_settled` | loop commits a done worker's leftovers, then pushes | e2e | yes | - | case_uncommitted_is_settled (sendbacks.sh); the subject is `ID: summary`, not `ID: title` |
+| 14 | `case_gate_fails_twice` | gate red, one fix round fed its output, then charged, nothing pushed | e2e | yes | - | case_gate_fails_twice (sendbacks.sh), and case_red_gate_parks |
+| 15 | `case_gate_fixed_on_revision` | gate red then fixed by the revision round: reviewed, pushed, two commits | e2e | yes | - | case_gate_fixed_on_revision (sendbacks.sh) |
 | 16 | `case_reject_then_approve` | REJECT work order fed to next round on the kept branch; lands | e2e | yes | - | case_reject_then_approve; missing: 2nd review never sees prior work order; not told branch holds commit |
 | 17 | `case_stamps_every_session` | one stamps.jsonl line per session | dropped | yes | - | #225: stamps not carried over; telemetry is the BAML trace store |
 | 18 | `case_reject_until_parked` | rejects use up the stages → parked, history, model brief from logs | e2e | yes | - | case_reject_until_parked (escalation.sh); the park brief is fixed text, not built from the round logs |
@@ -119,7 +119,7 @@ each re-checked:
 | 23 | `case_bench_freeze` | bench freeze writes case.json from the merge commit | dropped | yes | - | #225: bench freeze not carried over (offline.baml runs cases, no freeze) |
 | 24 | `case_bench_freeze_hidden` | bench freeze cuts hidden tests by name | dropped | yes | - | #225: bench freeze not carried over |
 | 25 | `case_rows_reverted` | stats rows flag landings reverted after 14 days | dropped | yes | - | #225: stats --rows not carried over |
-| 26 | `case_no_reviewer` | a stage with no reviewer goes straight to PR | missing | no | P3 | empty reviewer still starts a review round (supervisor.baml:639); client_for("") is the env Devbox (clients.baml:36) |
+| 26 | `case_no_reviewer` | a stage with no reviewer goes straight to PR | e2e | no | - | case_no_reviewer (last-stage.sh); bl-lkb.11 made a stage with no reviewer go straight to the PR (step.baml) |
 | 27 | `case_two_seats_both_approve` | every seat reviews; all approve → push; PR body lists both | dropped | yes | - | config.md Not read: seat lists (`approvals`) |
 | 28 | `case_two_seats_first_reject_sends_back` | "all" rule: the first seat's reject decides | dropped | no | - | config.md Not read: seat lists |
 | 29 | `case_seats_any_rule` | "any" rule: one approve is enough | dropped | yes | - | config.md Not read: `approvals` |
@@ -140,17 +140,17 @@ each re-checked:
 | 44 | `case_merge_pipeline_label_missing` | label refused: noted, still tracked, nobody merges on green | untested | yes | P2 | not ported: the gh stub cannot refuse a label (merge.sh header); supervisor.baml:104 holds on a failed relabel |
 | 45 | `case_behind_then_closed_unmerged` | behind: update-branch, no merge; closed unmerged: parked, noted, untracked | e2e | yes | - | case_behind_then_closed_unmerged (merge.sh) |
 | 46 | `case_inflight_limits_tick` | max_inflight = 1: no new bead picked while a PR is open | e2e | no | - | case_inflight_limits_tick (lanes.sh) |
-| 47 | `case_inflight_limits_per_target` | max_inflight counts per target: a full target queue spares the default | core | no | P2 | one Supervisor per target (main.baml:86); config.baml:518. Targets no longer inherit the repo's max_inflight (config.baml:495) |
+| 47 | `case_inflight_limits_per_target` | max_inflight counts per target: a full target queue spares the default | e2e | no | - | case_inflight_limits_per_target (targets-lanes.sh); targets no longer inherit the repo's max_inflight (config.baml:495) |
 | 48 | `case_nothing_ready` | a bead without the queue label is never picked | e2e | yes | - | case_nothing_ready (queue.sh) |
 | 49 | `case_lock_skips` | a held state lock makes a tick a clean no-op | missing | yes | P3 | not ported: no lock file by design (resident.sh header); a second `run` on one state dir starts every round twice |
 | 50 | `case_config_layers` | global stages serve repos, repo stages win, ~ in repos, bad TOML dies | core | no | P1 | config.baml:331, :343; repo-wins untested; unparseable TOML is read as empty, not a stop (config.baml:201) |
-| 51 | `case_a_stage_with_no_worker_stops` | a stage with no worker, or no stages, stops the run loudly | missing | no | P2 | worker "" runs on the Devbox default client (clients.baml:36); no stages parks every pick (step.baml:166) |
+| 51 | `case_a_stage_with_no_worker_stops` | a stage with no worker, or no stages, stops the run loudly | missing | no | P2 | not ported: the stages are never checked (last-stage.sh header); a stage with no worker runs on the default client (clients.baml:36) |
 | 52 | `case_escalation_stages` | failures walk fast×2 then slow×1, then park; parked bead not retried | e2e | no | - | case_escalation_stages (escalation.sh); the notes leave out the round, the model and the park count |
 | 53 | `case_same_reject_twice_escalates` | the same REJECT twice jumps to the next stage's worker, noted | e2e | no | - | case_same_reject_twice_escalates (escalation.sh) |
 | 54 | `case_different_rejects_do_not_escalate` | two different REJECTs stay on the current stage | e2e | no | - | case_different_rejects_do_not_escalate (escalation.sh) |
 | 55 | `case_repeat_cycles` | on_exhaust = repeat cycles the stages; bead stays queued | core | no | P3 | step_test:617; not ported: no e2e case sets on_exhaust = "repeat" (escalation.sh header) |
-| 56 | `case_blocked_at_last_stage_parks` | BLOCKED goes on at the first stage, parks at the last, even under repeat | core | no | P2 | step_test:220, :227; not ported with 55 (escalation.sh header); under repeat, any BLOCKED after one cycle parks |
-| 57 | `case_claude_stage_after_local_ones` | a failed local round escalates to Claude, whose prompt carries the note | e2e | yes | - | covered by case_stage_label_starts_there and case_usage_limit_ends_at_its_reset (escalation.sh header); only the last note reaches Claude |
+| 56 | `case_blocked_at_last_stage_parks` | BLOCKED goes on at the first stage, parks at the last, even under repeat | e2e | no | - | case_blocked_at_last_stage_parks (last-stage.sh), under on_exhaust = "repeat" |
+| 57 | `case_claude_stage_after_local_ones` | a failed local round escalates to Claude, whose prompt carries the note | e2e | yes | - | case_claude_stage_after_local_ones (last-stage.sh); only the last note reaches Claude |
 | 58 | `case_aider_stage` | aider harness: provider from opencode.json, gate as lint, edit committed | dropped | yes | - | aider is gone (#225 Not ported); config.md Not read: `harness` |
 | 59 | `case_command_harness` | a harness = "command" provider runs sh -c with BEAD_* env | dropped | yes | - | config.md Not read: provider keys `harness`, `command` |
 | 60 | `case_harness_label` | a harness:* label overrides the stage's harness | dropped | no | - | config.md Not read: "The label `harness:*` is ignored too" |
@@ -190,18 +190,18 @@ each re-checked:
 | 94 | `case_claude_signed_out_beads_wait` | Claude signed out: its beads wait uncharged, others run, escalate is refused | missing | yes | P2 | not ported: no sign-in check (limits.sh header); each round is held, and five holds park the bead (step.baml:75) |
 | 95 | `case_provider_probe_down_beads_wait` | A failing probe: rounds wait, with no round, no failure and no hold | dropped | - | - | state-machine.md Not built; not ported (limits.sh header): a down server is found one round at a time |
 | 96 | `case_conflicting_pr_rebased_by_the_last_stage` | A CONFLICTING PR gets an uncharged rebase round (last stage or conflict_worker); same PR updated | e2e | yes | - | case_conflicting_pr_rebased_by_the_last_stage (merge.sh); conflict_worker is not asserted |
-| 97 | `case_feedback_review_sends_back_to_same_pr` | A CHANGES_REQUESTED review sends the bead back on the same PR, once | core | yes | P2 | step_test.baml:825; live.baml:1408, :1413 (watermark; own and bot comments ignored); supervisor.baml:592 |
+| 97 | `case_feedback_review_sends_back_to_same_pr` | A CHANGES_REQUESTED review sends the bead back on the same PR, once | e2e | yes | - | case_feedback_review_sends_back_to_same_pr (levers.sh) |
 | 98 | `case_conflict_pr_closed_parks` | A conflict round whose PR closed, with the branch matching main, parks once | missing | yes | P1 | not ported: the rebase round starts without reading the PR (merge.sh header); a PR closed meanwhile gets a new one |
 | 99 | `case_mergeable_unknown_is_pending_not_nocheck` | Mergeable UNKNOWN with an empty rollup is pending, not the no-checks hold | missing | yes | P3 | not ported: UNKNOWN falls through to the no-checks path (merge.sh header) |
-| 100 | `case_target` | A work:NAME bead is worked in the target checkout, pushed to the fork, PR on pr_repo, closed | core | yes | P1 | config.baml:518; live.baml:1300 (takes), :1307 (fork owner in the head) |
-| 101 | `case_target_skills` | The repo's .agents skills are linked into the target worktree and excluded once | missing | yes | P3 | nothing links skills (no .agents/ anywhere in baml_src); BAML rounds load no skills at all |
-| 102 | `case_target_external_merge_mode` | The target's external merge mode beats the repo's auto; the PR is not merged | core | no | P1 | config.baml:518 (target policy External); step_test.baml:434, :440 |
-| 103 | `case_target_unknown` | An unknown work:NAME is held with the reason, no failure, no worktree | missing | no | P2 | skipped by the repo and by every target (takes, live.baml:1281): silent, never held; Trouble.NoSuchTarget is never raised |
-| 104 | `case_target_review_lane` | The reviewer's diff is taken against base_remote/base (upstream/main) | untested | yes | P2 | live.baml:348 sets spec.base = remote/base; config.baml:518 tests only that remote is upstream |
-| 105 | `case_ask_holds_the_pr` | open_pr = ask pushes the branch, opens no PR, waits for publish | core | yes | P1 | supervisor_test.baml:442; step_test.baml:378; push_branch is e2e via case_ready_for_pr_then_open_pr |
-| 106 | `case_publish` | Publish opens the proposed PR with a title override; the merge closes the bead | e2e | yes | - | case_ready_for_pr_then_open_pr (title and body); case_lands (merge closes the bead) |
-| 107 | `case_ask_counts_inflight` | A proposed (ask) bead takes one max_inflight slot | missing | no | P2 | inflight counts Merging beads only (own_pr, supervisor.baml:574); Publishable is not counted |
-| 108 | `case_recover_leaves_a_proposed_bead` | A restart leaves a proposed bead waiting, not reopened | e2e | yes | - | case_ready_for_pr_then_open_pr: the bead stays publishable across tick processes, each one a recovery |
+| 100 | `case_target` | A work:NAME bead is worked in the target checkout, pushed to the fork, PR on pr_repo, closed | e2e | yes | - | case_target (targets-merge.sh) |
+| 101 | `case_target_skills` | The repo's .agents skills are linked into the target worktree and excluded once | missing | yes | P3 | not ported: nothing links skills into a worktree (targets-lanes.sh header) |
+| 102 | `case_target_external_merge_mode` | The target's external merge mode beats the repo's auto; the PR is not merged | e2e | no | - | case_target_external_merge_mode (targets-merge.sh) |
+| 103 | `case_target_unknown` | An unknown work:NAME is held with the reason, no failure, no worktree | missing | no | P2 | not ported: an unknown work:NAME is dropped silently by takes() (targets-merge.sh header); never held |
+| 104 | `case_target_review_lane` | The reviewer's diff is taken against base_remote/base (upstream/main) | e2e | yes | - | case_target_review_lane (targets-lanes.sh) |
+| 105 | `case_ask_holds_the_pr` | open_pr = ask pushes the branch, opens no PR, waits for publish | e2e | yes | - | case_ask_holds_the_pr (levers.sh) |
+| 106 | `case_publish` | Publish opens the proposed PR with a title override; the merge closes the bead | e2e | yes | - | case_publish (levers.sh); the body is the bead's description (#234) |
+| 107 | `case_ask_counts_inflight` | A proposed (ask) bead takes one max_inflight slot | e2e | no | - | case_ask_counts_inflight (levers.sh); bl-lkb.8 made a bead ready to publish count (supervisor.baml's inflight) |
+| 108 | `case_recover_leaves_a_proposed_bead` | A restart leaves a proposed bead waiting, not reopened | e2e | yes | - | case_recover_leaves_a_proposed_bead (levers.sh) |
 | 109 | `case_git_refusing_the_worktree_holds` | git refusing the worktree holds the bead uncharged; it is worked once the obstacle goes | e2e | yes | - | case_git_refusing_the_worktree_holds (holds-world.sh) |
 | 110 | `case_setup_failure_is_held` | A failing setup holds the bead uncharged; it is skipped while the hold is young, then retried | e2e | yes | - | case_setup_failure_is_held (holds-world.sh) |
 | 111 | `case_harness_down_is_held` | A down harness holds worker or reviewer uncharged; a timeout is still a failure | e2e | yes | - | case_harness_down_is_held (holds-harness.sh); the timeout charge is not asserted |
