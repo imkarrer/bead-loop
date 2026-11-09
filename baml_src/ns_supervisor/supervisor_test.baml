@@ -362,6 +362,20 @@ test "max_inflight pauses the dev lane while a PR is in the queue" {
     assert.is_true(dev_paused(s))
 }
 
+test "a bead ready to publish counts toward max_inflight" {
+    let w = two_beads();
+    let s = Supervisor.new(w, MemoryLog.new(), policy());
+    s.max_inflight = 1;
+    s.put(
+        root.machine.Bead.new("t-1").at(
+            root.machine.Publishable { kind: "publishable", compare_url: "compare/t-1" },
+        ),
+    );
+    assert.equal(inflight(s), 1);
+    tick(s);
+    assert.equal(starts(w, "start_round Work devbox/coder"), 0)
+}
+
 test "max_open_prs counts the PRs elsewhere in the group" {
     let w = two_beads();
     let s = Supervisor.new(w, MemoryLog.new(), policy());

@@ -561,12 +561,15 @@ function lane_free(s: Supervisor, busy: string[], model: string) -> bool throws 
     used < (s.capacity.get(p) ?? s.lanes)
 }
 
-/// PRs this supervisor has in the merge queue. An adopted PR is someone else's and
-/// does not count, as in the Rust loop.
+/// What this supervisor has out toward a PR: its own PRs in the merge queue, and beads
+/// ready to publish (`open_pr = "ask"`), whose PR is one lever away. Under
+/// `max_inflight = 1` a target holds one thing at a time, published or not
+/// (design-targets.md). An adopted PR is someone else's and does not count, as in the
+/// Rust loop.
 function inflight(s: Supervisor) -> int throws never {
     s.beads
         .filter((b) -> {
-            own_pr(b)
+            own_pr(b) || b.place is root.machine.Publishable
         })
         .length()
 }
