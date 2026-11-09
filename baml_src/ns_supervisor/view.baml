@@ -322,15 +322,12 @@ function history_of(
     out
 }
 
-/// One bead's life for the scoreboard.
-function ftally(
-    slug: string,
-    id: string,
-    timed: TimedEvent[],
-    p: root.machine.Policy,
-) -> FTally throws never {
-    let t = FTally {
-        slug: slug,
+/// A tally holding only `recs`, every other field empty: what a test of something that
+/// reads `round_log` builds (the Insights beads, 9 Nov: a 30B wrote FTally by hand,
+/// missed twenty fields, and spent a round on the compile errors).
+function tally_of(id: string, recs: FRoundRec[]) -> FTally throws never {
+    FTally {
+        slug: id,
         id: id,
         title: "",
         first_at: 0,
@@ -349,8 +346,40 @@ function ftally(
         review_rounds: [],
         prechecks: [],
         send_backs: [],
-        round_log: [],
-    };
+        round_log: recs,
+    }
+}
+
+/// One round record for a test: its kind ("work", "review" or "research"), its model,
+/// what ended it (an event kind: "gate_passed", "rejected", "infra", ...), and
+/// optionally its words and how long it waited for a lane, in seconds.
+function round_rec(
+    kind: string,
+    model: string,
+    outcome: string,
+    words: string = "",
+    waited_s: int = 0,
+) -> FRoundRec throws never {
+    FRoundRec {
+        kind: kind,
+        model: model,
+        picked_at: 0,
+        ended_at: 0,
+        outcome: outcome,
+        words: words,
+        waited_s: waited_s,
+    }
+}
+
+/// One bead's life for the scoreboard.
+function ftally(
+    slug: string,
+    id: string,
+    timed: TimedEvent[],
+    p: root.machine.Policy,
+) -> FTally throws never {
+    let t = tally_of(id, []);
+    t.slug = slug;
     let b = root.machine.Bead.new(id);
     let open: FRoundRec? = null;
     let prev_at: int? = null;
