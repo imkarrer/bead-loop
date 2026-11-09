@@ -174,12 +174,82 @@ function model_calls(tables: TraceTable[]) -> Insight throws never {
 
 /// 2. What rounds came to, by kind and model.
 function round_outcomes(tallies: root.supervisor.FTally[]) -> Insight throws never {
-    empty_insight(
-        "round_outcomes",
-        "Round outcomes",
-        "what each kind of round came to, by model",
-        ["kind", "model", "rounds", "good", "sent back", "held", "top reason"],
-    )
+    let round_logs: root.supervisor.FRoundRec[] = [];
+    for (let tally in tallies) {
+        for (let log in tally.round_log) {
+            round_logs.push(log);
+        }
+    }
+
+    let grouped: map<string, root.supervisor.FRoundRec[]> = {};
+    for (let log in round_logs) {
+        let key = `${log.kind}|${log.model}`;
+        let logs = grouped.get(key) ?? [];
+        logs.push(log);
+        grouped.set(key, logs);
+    }
+
+    let rows: string[][] = [];
+    let level = "ok";
+    let hint = "";
+    for (let key in grouped.keys()) {
+        let logs = grouped.get(key) ?? [];
+        let kind = key.split("|").at(0) ?? "";
+        let model = key.split("|").at(1) ?? "";
+        let rounds = logs.length();
+        let good = 0;
+        let sent_back = 0;
+        let held = 0;
+        let reasons: map<string, int> = {};
+        for (let log in logs) {
+            let is_good = (kind == "work" && (log.outcome == "gate_passed" || log.outcome == "rebutted"))
+                || (kind == "review" && log.outcome == "approved")
+                || (kind == "research" && log.outcome == "brief_written");
+            let is_held = log.outcome == "infra" || log.outcome == "round_lost";
+            if (is_good) {
+                good = good + 1;
+            } else if (is_held) {
+                held = held + 1;
+            } else {
+                sent_back = sent_back + 1;
+                let c = reasons.get(log.outcome) ?? 0;
+                reasons.set(log.outcome, c + 1);
+            }
+        }
+        let top_reason = "";
+        let top_count = 0;
+        for (let reason in reasons.keys()) {
+            let c = reasons.get(reason) ?? 0;
+            if (c > top_count) {
+                top_count = c;
+                top_reason = reason;
+            }
+        }
+        rows.push([kind, model, `${rounds}`, `${good}`, `${sent_back}`, `${held}`, top_reason]);
+        if (level != "warn" && rounds >= 4 && good * 2 < rounds) {
+            level = "warn";
+            hint
+                = `${model}'s ${kind} rounds came good ${good} of ${rounds}; most went back as ${top_reason}`;
+        }
+    }
+
+    let sort_key = (row: string[]) -> int {
+        let n = baml.json.decode<int>(row[2] ?? "0") catch_all (e) {
+            _ => 0
+        };
+        -n
+    };
+    rows.sort_by_key(sort_key);
+
+    Insight {
+        key: "round_outcomes",
+        title: "Round outcomes",
+        about: "what each kind of round came to, by model",
+        columns: ["kind", "model", "rounds", "good", "sent back", "held", "top reason"],
+        rows: rows,
+        level: level,
+        hint: hint,
+    }
 }
 
 /// 3. Rejections a worker rebutted, and what the second review said.
@@ -437,5 +507,24 @@ test "lane wait is the median by server" {
     assert.equal(i.rows[1][1], "1");
     assert.equal(i.rows[1][2], "30s");
     assert.equal(i.rows[1][3], "30s");
+    assert.equal(i.level, "warn");
+}
+
+test "round outcomes count good, sent back and held by model" {
+    let i = round_outcomes(
+        [
+            root.supervisor.tally_of(
+                "t-1",
+                [
+                    root.supervisor.round_rec("work", "devbox/coder", "gate_passed"),
+                    root.supervisor.round_rec("work", "devbox/coder", "no_commit"),
+                    root.supervisor.round_rec("work", "devbox/coder", "no_commit"),
+                    root.supervisor.round_rec("work", "devbox/coder", "infra"),
+                ],
+            ),
+        ],
+    );
+    assert.equal(i.rows.length(), 1);
+    assert.equal(i.rows[0], ["work", "devbox/coder", "4", "1", "2", "1", "no_commit"]);
     assert.equal(i.level, "warn");
 }
