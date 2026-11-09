@@ -264,6 +264,17 @@ function on_working(b: Bead, w: Working, e: Event, p: Policy) -> Step throws nev
         let x: GatePassed => {
             let n = b.at(InReview { kind: "in_review" });
             n.kept = true;
+            // A stage with no reviewer goes straight to the PR (docs/config.md), as the
+            // Rust loop did; before bl-lkb.11 it started a review round on no model.
+            if ((stage_for(p, b.failures)?.reviewer ?? "-") == "") {
+                let approved = on_reviewing(n.at(Reviewing { kind: "reviewing" }), Approved { kind: "approved" }, p);
+                let effects: Effect[] = [Note { text: "no reviewer on this stage: straight to the PR" }];
+                for (let effect in approved.effects) {
+                    effects.push(effect);
+                }
+                approved.effects = effects;
+                return approved;
+            }
             stay(n)
         },
         let x: Rebutted => {

@@ -303,6 +303,28 @@ test "Gate passes" {
     assert.is_true(s.bead.kept)
 }
 
+test "Gate passes on a stage with no reviewer: straight to the PR" {
+    let p = policy();
+    p.stages = [Stage { name: "local", worker: "devbox/coder", reviewer: "", attempts: 1 }];
+    let s = step(bead(committed_work()), GatePassed { kind: "gate_passed" }, p);
+    assert.is_type<Reviewing>(s.bead.place);
+    assert.is_true(s.bead.kept);
+    assert.is_true(
+        s.effects.some((e) -> {
+            e is PushAndOpenPr
+        }),
+    );
+    let o = step(s.bead, PrOpened { kind: "pr_opened", url: "pr/1", head: "h" }, p);
+    assert.is_type<Merging>(o.bead.place);
+    p.ask_before_pr = true;
+    let a = step(bead(committed_work()), GatePassed { kind: "gate_passed" }, p);
+    assert.is_true(
+        a.effects.some((e) -> {
+            e is PushBranch
+        }),
+    );
+}
+
 test "Gate passes, diff checks find a problem" {
     let s = step(bead(committed_work()), DiffProblems { kind: "diff_problems", problems: "p" }, policy());
     assert.equal(s.bead.failures, 1);
