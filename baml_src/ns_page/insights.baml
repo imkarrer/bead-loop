@@ -311,14 +311,89 @@ function overturned(tallies: root.supervisor.FTally[]) -> Insight throws never {
     }
 }
 
-/// 4. Holds by their cause.
+/// A hold's cause: the first word of its words, up to a space or a "{"
+/// ("ParseFailed { provider ..." is ParseFailed, "usage limit on claude: ..." is usage).
+function hold_cause(words: string) -> string throws never {
+    let word = (words.trim().split(" ").at(0) ?? "").split("{").at(0) ?? "";
+    if (word.length() == 0) {
+        "unknown"
+    } else {
+        word
+    }
+}
+
+/// 4. Holds by their cause: every round that ended in `infra`, one row per cause.
 function holds_by_cause(tallies: root.supervisor.FTally[]) -> Insight throws never {
-    empty_insight(
-        "holds",
-        "Holds by cause",
-        "rounds held without a charge: the harness, a server, git, gh or bd",
-        ["cause", "holds", "beads", "last words"],
-    )
+    let holds: map<string, int> = {};
+    let beads: map<string, string[]> = {};
+    let last_at: map<string, int> = {};
+    let last_words: map<string, string> = {};
+    for (let tally in tallies) {
+        for (let log in tally.round_log) {
+            if (log.outcome != "infra") {
+                continue;
+            }
+            let cause = hold_cause(log.words);
+            holds.set(cause, (holds.get(cause) ?? 0) + 1);
+            let ids = beads.get(cause) ?? [];
+            if (!ids.includes(tally.id)) {
+                ids.push(tally.id);
+            }
+            beads.set(cause, ids);
+            if (log.ended_at >= (last_at.get(cause) ?? 0)) {
+                last_at.set(cause, log.ended_at);
+                let words = if (log.words.length() > 100) {
+                    log.words.slice(0, 100)
+                } else {
+                    log.words
+                };
+                last_words.set(cause, words);
+            }
+        }
+    }
+
+    let rows: string[][] = [];
+    for (let cause in holds.keys()) {
+        rows.push(
+            [
+                cause,
+                `${holds.get(cause) ?? 0}`,
+                `${(beads.get(cause) ?? []).length()}`,
+                last_words.get(cause) ?? "",
+            ],
+        );
+    }
+    let most_first = (row: string[]) -> int {
+        let n = baml.json.decode<int>(row[1] ?? "0") catch_all (e) {
+            _ => 0
+        };
+        -n
+    };
+    rows.sort_by_key(most_first);
+
+    let level = "ok";
+    let hint = "";
+    let top = rows.at(0);
+    if let row: string[] = top {
+        let n = baml.json.decode<int>(row[1] ?? "0") catch_all (e) {
+            _ => 0
+        };
+        if (n >= 3) {
+            level = "warn";
+            hint
+                = `${row[0] ?? ""} held ${row[1] ?? ""} rounds across ${row[2] ?? ""} beads: the rounds do no work while it lasts`;
+        }
+    }
+
+    Insight {
+        key: "holds",
+        title: "Holds by cause",
+        about: "rounds held without a charge: the harness, a server, git, gh or bd",
+        columns: ["cause", "holds", "beads", "last words"],
+        rows: rows,
+        level: level,
+        hint: hint,
+    }
 }
 
 /// 5. How long a bead waits for a free lane.
@@ -576,6 +651,73 @@ test "round outcomes count good, sent back and held by model" {
     assert.equal(i.rows.length(), 1);
     assert.equal(i.rows[0], ["work", "devbox/coder", "4", "1", "2", "1", "no_commit"]);
     assert.equal(i.level, "warn");
+}
+
+test "holds group by their cause" {
+    let i = holds_by_cause(
+        [
+            root.supervisor.tally_of(
+                "t-1",
+                [
+                    root.supervisor.round_rec(
+                        "work",
+                        "devbox/coder",
+                        "infra",
+                        words = "ParseFailed { a",
+                    ),
+                    root.supervisor.round_rec(
+                        "work",
+                        "devbox/coder",
+                        "infra",
+                        words = "ParseFailed { b",
+                    ),
+                ],
+            ),
+            root.supervisor.tally_of(
+                "t-2",
+                [
+                    root.supervisor.round_rec(
+                        "work",
+                        "devbox/coder",
+                        "infra",
+                        words = "NetworkFailure { c",
+                    ),
+                ],
+            ),
+        ],
+    );
+    assert.equal(i.rows.length(), 2);
+    assert.equal(i.rows[0], ["ParseFailed", "2", "1", "ParseFailed { b"]);
+    assert.equal(i.rows[1], ["NetworkFailure", "1", "1", "NetworkFailure { c"]);
+    assert.equal(i.level, "ok");
+}
+
+test "a cause that holds three rounds warns, and only holds count" {
+    let limit = "usage limit on claude: You've hit your session limit · resets 12:40am (UTC)";
+    let i = holds_by_cause(
+        [
+            root.supervisor.tally_of(
+                "t-1",
+                [
+                    root.supervisor.round_rec("work", "claude/sonnet", "infra", words = limit),
+                    root.supervisor.round_rec("work", "claude/sonnet", "gate_passed"),
+                ],
+            ),
+            root.supervisor.tally_of(
+                "t-2",
+                [
+                    root.supervisor.round_rec("work", "claude/sonnet", "infra", words = limit),
+                    root.supervisor.round_rec("review", "claude/sonnet", "infra", words = limit),
+                ],
+            ),
+        ],
+    );
+    assert.equal(i.rows.length(), 1);
+    assert.equal(i.rows[0][0] ?? "", "usage");
+    assert.equal(i.rows[0][1] ?? "", "3");
+    assert.equal(i.rows[0][2] ?? "", "2");
+    assert.equal(i.level, "warn");
+    assert.equal(i.hint, "usage held 3 rounds across 2 beads: the rounds do no work while it lasts");
 }
 
 test "a disputed rejection shows its tiebreak" {
