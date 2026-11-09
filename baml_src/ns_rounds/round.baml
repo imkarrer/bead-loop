@@ -527,6 +527,8 @@ test "a research BLOCK with nothing read is no brief, and one after reading stan
 /// the tools take paths relative to it.
 function round(spec_file: string) -> string {
     let spec = baml.json.decode<RoundSpec>(baml.fs.read(spec_file));
+    // The probe count is this round's alone: from zero, and gone when it ends.
+    root.tools.edited();
     let events = if (spec.kind == root.world.RoundKind.Work) {
         work_round(spec)
     } else {
@@ -536,6 +538,7 @@ function round(spec_file: string) -> string {
             research_round(spec)
         }
     };
+    root.tools.forget_probes();
     let done = root.world.RoundDone { id: spec.id, kind: spec.kind, events: events };
     let _ = baml.fs.write(spec.result_file, baml.json.stringify(done));
     spec.result_file
