@@ -7,6 +7,23 @@ class Ticket {
     title: string,
     description: string,
     acceptance: string,
+    /// The stage a `stage:NAME` label starts it on; null without one.
+    stage: string?,
+}
+
+/// The stage a bead's labels name with `stage:NAME`, or null.
+function stage_label(labels: string[]) -> string? throws never {
+    for (let l in labels) {
+        if (l.starts_with("stage:")) {
+            return l.split("stage:").at(1);
+        }
+    }
+    null
+}
+
+test "a stage label names its stage" {
+    assert.equal(stage_label(["delegate:local", "stage:frontier"]) ?? "", "frontier");
+    assert.equal(stage_label(["delegate:local"]) == null, true)
 }
 
 enum RoundKind {

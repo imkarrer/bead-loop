@@ -242,6 +242,7 @@ class LiveWorld {
                         title: r.title,
                         description: r.description ?? "",
                         acceptance: r.acceptance_criteria ?? "",
+                        stage: stage_label(r.labels ?? []),
                     }
                 })
         }

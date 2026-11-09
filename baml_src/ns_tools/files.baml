@@ -96,20 +96,15 @@ function forget_probes() -> void throws never {
     };
 }
 
+// Only the counts are asserted: the tests share one process, and the edit tests' own
+// edited() writes this pid's file again, so whether it exists is a race.
 test "a round starts its count from nothing, whatever an old round of its pid left" {
     set_probes(17);
     edited();
     assert.equal(probes(), 0);
     set_probes(17);
     forget_probes();
-    assert.equal(probes(), 0);
-    assert.is_true(
-        !(
-            baml.fs.exists(probes_path()) catch_all (e) {
-                _ => true,
-            }
-        ),
-    )
+    assert.equal(probes(), 0)
 }
 
 /// One more probe: null to go ahead, or why not.

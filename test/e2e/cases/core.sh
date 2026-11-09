@@ -183,3 +183,16 @@ case_read_research_block_stands() {
   until_place parked 90 || bad "not parked: $(events)"
   assert_match "$(events)" "research_blocked research_picked research_blocked" "the BLOCK and its second opinion"
 }
+
+# A `stage:NAME` label in bd starts the bead on that stage: here the Claude stage, with
+# no round on the local model first (bl-lkb's stage:frontier beads queued for devbox).
+case_stage_label_starts_there() {
+  STAGES="$(stage local fake/coder fake/reviewer 2)"$'\n'"$(stage frontier claude/sonnet claude/sonnet 1)" setup 'test -e work.txt'
+  (cd "$REPO" && bd label add "$BEAD" stage:frontier >/dev/null)
+  claude_reply 001 --arg b "$BEAD" '{sh:("echo done > work.txt && git add -A && git commit -qm \""+$b+": work\""), result:"{\"outcome\":\"done\",\"summary\":\"ok\"}"}'
+  claude_reply 002 '{result:"{\"decision\":\"Approve\",\"reason\":\"ok\",\"work_order\":null}"}'
+  until_event pr_merged 90 || bad "never merged: $(events)"
+  assert_match "$(events)" "^stage_labelled picked" "the label, then the round"
+  [ -e "$E2E_CTRL/claude/argv-001" ] && ok || bad "no Claude round"
+  [ -z "$(ls "$E2E_CTRL"/requests 2>/dev/null)" ] && ok || bad "a round on the local model"
+}

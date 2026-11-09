@@ -80,6 +80,19 @@ function stage_for(policy: Policy, failures: int) -> Stage? throws never {
 }
 
 /// The lowest failure count that lands on the last stage.
+/// The lowest failure count that lands on the stage named `name`; null when no stage
+/// has that name.
+function stage_start(policy: Policy, name: string) -> int? throws never {
+    let count = 0;
+    for (let s in policy.stages) {
+        if (s.name == name) {
+            return count;
+        }
+        count = count + s.attempts;
+    }
+    null
+}
+
 function last_stage_start(policy: Policy) -> int throws never {
     let last = policy.stages.at(policy.stages.length() - 1);
     if let s: Stage = last {
