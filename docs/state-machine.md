@@ -139,6 +139,7 @@ is **lost**: back to where it was picked from, uncharged.
 | The harness held five times in a row (the same broken CLI) | **parked** with its words, no failure | as it was |
 | Gate fails twice (one fix round with its output) | +1 failure; ready | removed |
 | Gate passes, pre-check passes (or cannot answer) | in review | kept |
+| Gate passes on a stage with no reviewer | approved: straight to the PR (or the push, under `open_pr = "ask"`), noted | kept |
 | Pre-check SEND BACK | +1 failure; ready, the block as the note | kept |
 | Reviewer rejects | +1 failure; ready, the work order as the note. The reviewer reads the gate's command and output, and a claim that something breaks must quote the output that shows it | kept |
 | The same rejection twice running | +1, and the count jumps to the next stage with another worker; parked if there is none | kept |
