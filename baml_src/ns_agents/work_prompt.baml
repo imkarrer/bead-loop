@@ -30,8 +30,19 @@ const WORK_CHARTER: string = `
     6. When the work is committed, or you are blocked, stop calling tools and give your report.
 
     Every path is relative to the worktree. Stay in it: do not clone, download or write anywhere
-    else.
+    else, /tmp included: other rounds run beside you.
+
+    Run each command in the foreground and wait for its output. Never start one in the
+    background to poll for later, and never use pgrep -f or pkill -f: a loop whose command
+    line names the pattern finds itself and never ends. Do not run the whole gate yourself.
 `;
+
+test "the charter keeps a round's commands in the foreground and in its worktree" {
+    assert.contains(WORK_CHARTER, "foreground");
+    assert.contains(WORK_CHARTER, "pgrep -f");
+    assert.contains(WORK_CHARTER, "/tmp included");
+    assert.contains(WORK_CHARTER, "Do not run the whole gate yourself")
+}
 
 function Work(bead: string) -> Report {
     client: Devbox
