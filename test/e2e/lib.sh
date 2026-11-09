@@ -105,6 +105,19 @@ until_event() {
   return 1
 }
 bd_field() { (cd "$REPO" && bd show "$BEAD" --json | jq -r ".[0].$1"); }
+# events_of ID, until_event_of ID KIND [SECONDS]: events/until_event, for a bead other
+# than $BEAD.
+events_of() { jq -r .kind "$(STATE)/beads/$1/events.jsonl" 2>/dev/null | tr '\n' ' ' | sed 's/ $//'; }
+until_event_of() {
+  local id=$1 want=$2 limit=${3:-60} start=$SECONDS
+  while [ $((SECONDS - start)) -lt "$limit" ]; do
+    tick 1
+    events_of "$id" | grep -qw -- "$want" && return 0
+  done
+  return 1
+}
+# commit_for ID: commit(), for a round on a bead other than $BEAD.
+commit_for() { printf '{"tool":"run","args":{"command":"git add -A && git commit -q -m \\"%s: work\\""}}' "$1"; }
 
 # ---- assertions -----------------------------------------------------------------
 PASS=0 FAIL=0

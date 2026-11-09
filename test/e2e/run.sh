@@ -14,6 +14,15 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 # shellcheck source=test/e2e/lib.sh
 . "$HERE/lib.sh"
 
+# Every case file is sourced into this one shell, so a helper two files define is the
+# last file's in both: targets-merge.sh's target_bead once labelled targets-lanes.sh's
+# beads for a target that did not exist, and its cases failed on main. Give each its own.
+twice=$(grep -ho '^[a-zA-Z_][a-zA-Z0-9_]*()' "$HERE/lib.sh" "$HERE"/cases/*.sh | sort | uniq -d | tr '\n' ' ')
+if [ -n "$twice" ]; then
+  echo "test/e2e: defined in more than one file (they share one shell): $twice" >&2
+  exit 2
+fi
+
 for f in "$HERE"/cases/*.sh; do
   # shellcheck source=/dev/null
   . "$f"

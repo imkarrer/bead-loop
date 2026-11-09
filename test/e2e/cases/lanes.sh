@@ -11,22 +11,11 @@
 #   case_lane_with_two_slots: its "pause stub" half is not ported (no lane to pause); the
 #   rest — two slots from one provider's `parallel = 2`, one bead each, at once — is.
 
-# bd_field_of ID FIELD, events_of ID, view_of ID FILTER: lib.sh's bd_field/events/view_bead,
-# parametrised, for a second bead this file's cases need alongside $BEAD.
+# bd_field_of ID FIELD, view_of ID FILTER: lib.sh's bd_field/view_bead, parametrised, for
+# a second bead this file's cases need alongside $BEAD (events_of, until_event_of and
+# commit_for are lib.sh's).
 bd_field_of() { (cd "$REPO" && bd show "$1" --json | jq -r ".[0].$2"); }
-events_of() { jq -r .kind "$(STATE)/beads/$1/events.jsonl" 2>/dev/null | tr '\n' ' ' | sed 's/ $//'; }
 view_of() { jq -r --arg id "$1" ".beads[] | select(.id==\$id) | $2" "$(STATE)/view.json"; }
-# until_event_of ID KIND [SECONDS]: until_event, for a second bead.
-until_event_of() {
-  local id=$1 want=$2 limit=${3:-60} start=$SECONDS
-  while [ $((SECONDS - start)) -lt "$limit" ]; do
-    tick 1
-    events_of "$id" | grep -qw -- "$want" && return 0
-  done
-  return 1
-}
-# commit_for ID: commit(), for a round on a bead other than $BEAD.
-commit_for() { printf '{"tool":"run","args":{"command":"git add -A && git commit -q -m \\"%s: work\\""}}' "$1"; }
 # set_parallel PROVIDER N: rewrites that provider's `parallel` in the global config lib.sh
 # already wrote, once its url (and so its table) exists.
 set_parallel() {
