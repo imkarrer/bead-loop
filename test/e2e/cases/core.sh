@@ -196,3 +196,19 @@ case_stage_label_starts_there() {
   [ -e "$E2E_CTRL/claude/argv-001" ] && ok || bad "no Claude round"
   [ -z "$(ls "$E2E_CTRL"/requests 2>/dev/null)" ] && ok || bad "a round on the local model"
 }
+
+# A usage limit holds the provider until the reset Claude states, not a fixed half hour:
+# one whose reset has passed is tried again on the next tick, and the bead lands (the
+# bl-lkb beads met a limit that reset at 00:40 and waited to 01:06).
+case_usage_limit_ends_at_its_reset() {
+  STAGES=$(stage frontier claude/sonnet claude/sonnet 1) setup 'test -e work.txt'
+  local passed
+  passed=$(date -u -d '-2 min' '+%-I:%M%P')
+  claude_reply 001 --arg r "$passed" '{exit:1, stderr:("You'"'"'ve hit your session limit · resets "+$r+" (UTC)")}'
+  claude_reply 002 --arg b "$BEAD" '{sh:("echo done > work.txt && git add -A && git commit -qm \""+$b+": work\""), result:"{\"outcome\":\"done\",\"summary\":\"ok\"}"}'
+  claude_reply 003 '{result:"{\"decision\":\"Approve\",\"reason\":\"ok\",\"work_order\":null}"}'
+  until_event infra 60 || bad "no hold: $(events)"
+  assert_match "$(jq -r 'select(.kind=="infra") | .words' "$(STATE)/beads/$BEAD/events.jsonl")" "usage limit on claude" "the hold's words"
+  until_event pr_merged 45 || bad "still held after its reset: $(events)"
+  assert_eq "$(bd_field status)" closed "bd status"
+}

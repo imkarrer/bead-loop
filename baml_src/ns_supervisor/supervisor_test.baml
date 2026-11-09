@@ -829,3 +829,28 @@ test "a stage label starts the bead on that stage, and a devbox round does not h
     assert.is_true(w.calls.includes("start_round Work claude/sonnet"));
     assert.is_true(!w.calls.includes("start_round Work devbox/coder"))
 }
+
+test "a usage limit is held until the reset it states" {
+    // 00:36:31 UTC, 9 Nov: the limit bl-lkb.1 met.
+    let now = 1794184591;
+    let words = "usage limit on claude: You've hit your session limit · resets 12:40am (UTC)";
+    assert.equal(reset_left(words, now), 269);
+    // 00:42: it has passed, so the bead goes now.
+    assert.equal(reset_left(words, now + 330), 0);
+    // A reset five hours on is still ahead.
+    assert.equal(reset_left("usage limit on claude: resets 5:30am (UTC)", now), 17669);
+    assert.equal(
+        reset_left("usage limit on claude: Claude AI usage limit reached|1794184700", now),
+        169,
+    );
+    // No time, another zone, or a dated reset: the half-hour retry.
+    assert.equal(reset_left("usage limit on claude: You've hit your limit", now) == null, true);
+    assert.equal(
+        reset_left("usage limit on claude: resets 3pm (America/New_York)", now) == null,
+        true,
+    );
+    assert.equal(reset_left("usage limit on claude: resets Nov 12, 3pm (UTC)", now) == null, true);
+    assert.equal(clock_seconds("3pm"), 54000);
+    assert.equal(clock_seconds("12:05am"), 300);
+    assert.equal(clock_seconds("13:00pm") == null, true)
+}
