@@ -87,6 +87,16 @@ class FRoundRec {
     waited_s: int,
 }
 
+/// One mark on a bead's timeline: an answer, an escalation, a hold, a rebase, a
+/// worker or review round picked, a precheck sent back, a PR closed unmerged, or a
+/// send-back (whose outcome kind sits in `what`, as FSend.kind once did).
+class FMark {
+    at: int,
+    kind: string,
+    model: string,
+    what: string?,
+}
+
 /// One bead's life, as the scoreboard counts it.
 class FTally {
     slug: string,
@@ -99,23 +109,9 @@ class FTally {
     local: bool,
     worker: string,
     rounds: int,
-    answers: int[],
-    escalations: int[],
-    holds: int[],
-    rebases: int[],
-    closed_unmerged: int[],
-    worker_rounds: int[],
-    review_rounds: int[],
-    prechecks: int[],
-    send_backs: FSend[],
+    marks: FMark[],
     /// Its rounds in order; filled by `ftally`.
     round_log: FRoundRec[],
-}
-
-class FSend {
-    at: int,
-    kind: string,
-    model: string,
 }
 
 /// STATE/view.json.
@@ -337,15 +333,7 @@ function tally_of(id: string, recs: FRoundRec[]) -> FTally throws never {
         local: true,
         worker: "",
         rounds: 0,
-        answers: [],
-        escalations: [],
-        holds: [],
-        rebases: [],
-        closed_unmerged: [],
-        worker_rounds: [],
-        review_rounds: [],
-        prechecks: [],
-        send_backs: [],
+        marks: [],
         round_log: recs,
     }
 }
@@ -436,32 +424,40 @@ function ftally(
             t.first_at = e.at;
         }
         if (ev is root.machine.Picked) {
-            t.worker_rounds.push(e.at);
+            t.marks.push(
+                FMark { at: e.at, kind: "worker_round", model: st?.worker ?? "", what: null },
+            );
             t.worker = st?.worker ?? t.worker;
             if ((st?.worker ?? "").starts_with("claude/")) {
                 t.local = false;
             }
         }
         if (ev is root.machine.ReviewPicked) {
-            t.review_rounds.push(e.at);
+            t.marks.push(
+                FMark { at: e.at, kind: "review_round", model: st?.reviewer ?? "", what: null },
+            );
         }
         if (ev is root.machine.Answered) {
-            t.answers.push(e.at);
+            t.marks.push(FMark { at: e.at, kind: "answer", model: st?.worker ?? "", what: null });
         }
         if (ev is root.machine.Escalated) {
-            t.escalations.push(e.at);
+            t.marks.push(
+                FMark { at: e.at, kind: "escalation", model: st?.worker ?? "", what: null },
+            );
         }
         if (ev is root.machine.Infra) {
-            t.holds.push(e.at);
+            t.marks.push(FMark { at: e.at, kind: "hold", model: st?.worker ?? "", what: null });
         }
         if (ev is root.machine.Conflicting) {
-            t.rebases.push(e.at);
+            t.marks.push(FMark { at: e.at, kind: "rebase", model: st?.worker ?? "", what: null });
         }
         if (ev is root.machine.PrClosed) {
-            t.closed_unmerged.push(e.at);
+            t.marks.push(
+                FMark { at: e.at, kind: "closed_unmerged", model: st?.worker ?? "", what: null },
+            );
         }
         if (ev is root.machine.PrecheckSentBack) {
-            t.prechecks.push(e.at);
+            t.marks.push(FMark { at: e.at, kind: "precheck", model: st?.worker ?? "", what: null });
         }
         if (ev is root.machine.PrOpened || ev is root.machine.PrAdopted) {
             t.url = v.text;
@@ -472,7 +468,7 @@ function ftally(
             } else {
                 st?.worker ?? ""
             };
-            t.send_backs.push(FSend { at: e.at, kind: v.kind, model: model });
+            t.marks.push(FMark { at: e.at, kind: "send_back", model: model, what: v.kind });
             if (t.landed_at == 0) {
                 t.charged = true;
             }
@@ -496,6 +492,17 @@ function ftally(
     }
     t.rounds = b.rounds;
     t
+}
+
+/// The times of one kind of mark on a tally's timeline.
+function marks_of(t: FTally, kind: string) -> int[] throws never {
+    t.marks
+        .filter((m) -> {
+            m.kind == kind
+        })
+        .map((m) -> {
+            m.at
+        })
 }
 
 // ---- a round's tool calls -----------------------------------------------------------
