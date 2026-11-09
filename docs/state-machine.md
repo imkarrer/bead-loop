@@ -152,7 +152,7 @@ is **lost**: back to where it was picked from, uncharged.
 | CI green, `merge = "manual"` | **held**: yours to merge | PR left open |
 | CI green, `merge = "external"` | waits for the maintainer, no hold | PR left open |
 | CI red | +1 failure; ready | kept; the next push updates the PR |
-| CI red again on the commit already charged | not charged again: relabelled under `pipeline`, else held | unchanged |
+| CI red again on the commit already charged | under `pipeline`, relabelled once to run CI again, and the re-run's own red is charged; otherwise held | unchanged |
 | CI red, every failing required check killed, `pipeline` | no failure; CI re-run once on the same head | unchanged |
 | CI red only in checks the base does not require | no failure; waits | unchanged |
 | CI red on a PR from someone else (adopted) | **held** | left for whoever opened it |

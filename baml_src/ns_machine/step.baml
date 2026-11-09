@@ -489,11 +489,20 @@ function red(b: Bead, m: Merging, r: ChecksRed, p: Policy) -> Step throws never 
         return hold_for(b, "adopted", "CI red on a PR the loop did not open");
     }
     if (b.charged_head == r.head) {
-        return if (p.merge == MergeMode.Pipeline) {
-            Step { bead: b, effects: [Relabel {}] }
-        } else {
-            hold_for(b, "red", "CI still red on the commit already charged")
-        };
+        if (p.merge != MergeMode.Pipeline) {
+            return hold_for(b, "red", "CI still red on the commit already charged");
+        }
+        if (b.rerun_head != r.head) {
+            let n = b.copy();
+            n.rerun_head = r.head;
+            return Step {
+                bead: n,
+                effects: [
+                    Note { text: "CI still red on the commit already charged: running it again" },
+                    Relabel {},
+                ],
+            };
+        }
     }
     let sent = charge(b, r);
     sent.bead.charged_head = r.head;

@@ -160,6 +160,17 @@ case_ci_red_unchanged_head_reruns() {
   assert_match "$(cat "$E2E_CTRL/gh/calls")" "remove-label automerge" "the label comes off"
   assert_match "$(cat "$E2E_CTRL/gh/calls")" "add-label automerge" "and back on, to ask CI again"
   assert_eq "$(grep -c '^pr create' "$E2E_CTRL/gh/calls")" 0 "no second PR"
+  # The reopen's own relabel already asked CI again, and its still-FAILURE rollup
+  # already answered: both the reopen and that answer landed in the one tick that
+  # satisfied the wait above, so checks_red is already at 2 here, not 1.
+  assert_eq "$(events | tr ' ' '\n' | grep -cx checks_red)" 2 "CI runs once more"
+  assert_eq "$(view_bead .failures)" 1 "uncharged"
+  set_checks '[{"context":"ci","state":"PENDING"}]'
+  tick 1
+  assert_eq "$(view_bead .failures)" 1 "the re-run, pending, is not charged"
+  set_checks '[{"context":"ci","state":"FAILURE"}]'
+  until_count checks_red 3 30 || bad "no third red: $(events)"
+  assert_eq "$(view_bead .failures)" 2 "the re-run's own red is charged"
 }
 
 # The same no-commit fix round under merge = "auto": no label to re-run CI with, so the
