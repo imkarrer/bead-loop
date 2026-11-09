@@ -854,3 +854,19 @@ test "a usage limit is held until the reset it states" {
     assert.equal(clock_seconds("12:05am"), 300);
     assert.equal(clock_seconds("13:00pm") == null, true)
 }
+
+test "a test tally is its round records and nothing else" {
+    let t = tally_of(
+        "t-1",
+        [
+            round_rec("work", "devbox/coder", "gate_passed"),
+            round_rec("review", "acbox/reviewer", "rejected", words = "REJECT: x", waited_s = 230),
+        ],
+    );
+    assert.equal(t.id, "t-1");
+    assert.equal(t.round_log.length(), 2);
+    assert.equal(t.round_log.at(1)?.words, "REJECT: x");
+    assert.equal(t.round_log.at(1)?.waited_s, 230);
+    assert.equal(t.round_log.at(0)?.words, "");
+    assert.equal(t.rounds, 0)
+}
