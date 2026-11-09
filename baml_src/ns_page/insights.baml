@@ -235,16 +235,16 @@ function lane_wait(tallies: root.supervisor.FTally[]) -> Insight throws never {
         let median_wait = if (waits.length() == 0) {
             0
         } else if (waits.length() % 2 == 1) {
-            waits.at(waits.length() / 2)
+            waits[waits.length() / 2]
         } else {
-            let left = waits.at(waits.length() / 2 - 1);
-            let right = waits.at(waits.length() / 2);
+            let left = waits[waits.length() / 2 - 1];
+            let right = waits[waits.length() / 2];
             (left + right) / 2
         };
         let longest_wait = if (waits.length() == 0) {
             0
         } else {
-            waits.at(waits.length() - 1)
+            waits[waits.length() - 1]
         };
 
         // Format wait times
@@ -269,9 +269,9 @@ function lane_wait(tallies: root.supervisor.FTally[]) -> Insight throws never {
 
     // Build hint if there's a warning
     let hint = if (level == "warn") {
-        let warn_row = rows.at(0) ?? [];
-        let median = warn_row.at(2) ?? "0s";
-        let server = warn_row.at(0) ?? "unknown";
+        let warn_row = rows[0] ?? [];
+        let median = warn_row[2] ?? "0s";
+        let server = warn_row[0] ?? "unknown";
         `beads wait a median ${median} for ${server}: raise its [providers.${server}] parallel or move a stage off it`
     } else {
         ""
@@ -317,10 +317,10 @@ function parse_wait(formatted: string) -> int throws never {
         // Format is "hmm" or "hhmm"
         let parts = formatted.split("h");
         if (parts.length() == 2) {
-            let hours = baml.json.decode<int>(parts.at(0) ?? "") catch_all (e) {
+            let hours = baml.json.decode<int>(parts[0] ?? "") catch_all (e) {
                 _ => 0
             };
-            let mins = baml.json.decode<int>(parts.at(1) ?? "") catch_all (e) {
+            let mins = baml.json.decode<int>(parts[1] ?? "") catch_all (e) {
                 _ => 0
             };
             hours * 3600 + mins * 60
@@ -429,13 +429,13 @@ test "lane wait is the median by server" {
         ],
     );
     assert.equal(i.rows.length(), 2);
-    assert.equal(i.rows.at(0).at(0), "acbox");
-    assert.equal(i.rows.at(0).at(1), "3");
-    assert.equal(i.rows.at(0).at(2), "15m");
-    assert.equal(i.rows.at(0).at(3), "20m");
-    assert.equal(i.rows.at(1).at(0), "devbox");
-    assert.equal(i.rows.at(1).at(1), "1");
-    assert.equal(i.rows.at(1).at(2), "30s");
-    assert.equal(i.rows.at(1).at(3), "30s");
+    assert.equal(i.rows[0][0], "acbox");
+    assert.equal(i.rows[0][1], "3");
+    assert.equal(i.rows[0][2], "15m");
+    assert.equal(i.rows[0][3], "20m");
+    assert.equal(i.rows[1][0], "devbox");
+    assert.equal(i.rows[1][1], "1");
+    assert.equal(i.rows[1][2], "30s");
+    assert.equal(i.rows[1][3], "30s");
     assert.equal(i.level, "warn");
 }
