@@ -203,6 +203,12 @@ class Reopened {
     kind: "reopened",
 }
 
+/// The bead carries a `stage:NAME` label: it starts on that stage, as the Rust loop's did.
+class StageLabelled {
+    kind: "stage_labelled",
+    stage: string,
+}
+
 class Escalated {
     kind: "escalated",
 }
@@ -265,6 +271,7 @@ type Event = ModelOutcome
     | Answered
     | Reopened
     | Escalated
+    | StageLabelled
     | Published
     | Rebutted
     | PrRequested

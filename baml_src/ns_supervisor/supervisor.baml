@@ -389,6 +389,16 @@ function admit_tickets(s: Supervisor) -> void throws never {
         if (s.bead(t.id) == null) {
             s.put(root.machine.Bead.new(t.id));
         }
+        // A `stage:NAME` label starts a ready bead on that stage. bl-lkb's eight beads
+        // (8 Nov) carried stage:frontier and queued for devbox/coder behind the Insights
+        // beads, while Claude sat idle: the label was read by nothing.
+        if let name: string = t.stage {
+            let b = s.bead(t.id) ?? root.machine.Bead.new(t.id);
+            let start = root.machine.stage_start(s.policy, name) ?? 0;
+            if (b.place is root.machine.Ready && b.failures < start) {
+                apply(s, t.id, root.machine.StageLabelled { kind: "stage_labelled", stage: name });
+            }
+        }
     }
 }
 

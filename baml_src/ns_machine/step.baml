@@ -178,6 +178,19 @@ function on_ready(b: Bead, e: Event, p: Policy) -> Step throws never {
         },
         let x: PrAdopted => adopt(b, x, p),
         let x: MergedOutside => closed(b, x.url),
+        // Starting on a later stage is starting with that many failures, as Escalate is.
+        // Never backwards: a bead already past that stage stays where it is.
+        let x: StageLabelled => {
+            let at = stage_start(p, x.stage);
+            if let start: int = at {
+                if (b.failures < start) {
+                    let n = b.copy();
+                    n.failures = start;
+                    return stay(n);
+                }
+            }
+            stay(b)
+        },
         _ => elsewhere(b, e),
     }
 }

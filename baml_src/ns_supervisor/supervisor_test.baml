@@ -808,3 +808,24 @@ test "a green look is not logged where CI merges, and is where the loop does" {
     p.merge = root.machine.MergeMode.Pipeline;
     assert.is_true(!idle_green(p, root.machine.PrMerged { kind: "pr_merged", url: "u" }))
 }
+
+test "a stage label starts the bead on that stage, and a devbox round does not hold it" {
+    let w = one_bead([committed()], [approved()], [merged()]);
+    w.tickets_now
+        = [
+            root.world.Ticket {
+                id: "t-1",
+                title: "t",
+                description: "d",
+                acceptance: "a",
+                stage: "frontier",
+            },
+        ];
+    // devbox is busy with another repo's round: a frontier bead goes to Claude anyway.
+    let s = Supervisor.new(w, MemoryLog.new(), policy());
+    s.elsewhere = ["devbox/coder"];
+    turns(s, w, 6);
+    assert.is_type<root.machine.Closed>(place_of(s));
+    assert.is_true(w.calls.includes("start_round Work claude/sonnet"));
+    assert.is_true(!w.calls.includes("start_round Work devbox/coder"))
+}

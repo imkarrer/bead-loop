@@ -124,4 +124,5 @@ Keys from the Rust loop that the BAML loop ignores: `model` and `review_model` (
 `[[stages]]`), `[[lanes]]` (a lane is a provider), a stage's `timeout` and seat lists
 (`approvals`), `diff_checks`, `research = "every"`, `research_aider`, `stall_compactions`,
 `stall_steps`, `attach`, `[reference_rate]`, and the provider keys `harness`, `cost`,
-`via`, `command` and `model_flag`. The labels `stage:NAME` and `harness:*` are ignored too.
+`via`, `command` and `model_flag`. The label `harness:*` is ignored too. A `stage:NAME`
+label is read: the bead starts on the `[[stages]]` table with that `name`.

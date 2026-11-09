@@ -950,3 +950,17 @@ test "a worker's rebuttal goes back to review, uncharged, and a REJECT ends it" 
     assert.equal(r.bead.rebutted, false);
     assert.equal(r.bead.failures, 2)
 }
+
+test "a stage label moves a ready bead to that stage, never back" {
+    let s = step(bead(ready()), StageLabelled { kind: "stage_labelled", stage: "frontier" }, policy());
+    assert.equal(s.bead.failures, 2);
+    assert.is_type<Ready>(s.bead.place);
+    let past = step(
+        bead(ready(), failures = 3),
+        StageLabelled { kind: "stage_labelled", stage: "local" },
+        policy(),
+    );
+    assert.equal(past.bead.failures, 3);
+    let unknown = step(bead(ready()), StageLabelled { kind: "stage_labelled", stage: "nowhere" }, policy());
+    assert.equal(unknown.bead.failures, 0)
+}

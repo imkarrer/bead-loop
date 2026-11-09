@@ -179,6 +179,7 @@ is **lost**: back to where it was picked from, uncharged.
 | parked, its branch holding work | publish (Ready for PR) | the branch pushed, publishable: a compare link and Open PR for you | — |
 | publishable | open_pr TITLE BODY (Open PR) | the PR opened with your title and body, then the merge queue | — |
 | anything else | answer, reopen or escalate | refused, with a note saying why | — |
+| ready | label it `stage:NAME` in bd | ready at that stage's first attempt, as escalate does; never back to an earlier one | set |
 | a bead in bd | close it, block it, defer it, or take its label off | not picked or reviewed again: only what `bd ready` lists, and the loop's own `in_progress`, are. A round already running finishes | — |
 
 ## Not built
