@@ -407,13 +407,26 @@ function expire_holds(s: Supervisor) -> void throws never {
     for (let b in s.beads) {
         if (b.hold != null) {
             let n = (s.held_for.get(b.id) ?? 0) + 1;
-            // A usage limit resets in hours, not ticks: try it again every half hour.
-            let lasts = if ((b.hold?.words ?? "").starts_with("usage limit on ")) {
+            let words = b.hold?.words ?? "";
+            let limited = words.starts_with("usage limit on ");
+            // A usage limit that says when it resets is tried again then. One that does
+            // not resets in hours, not ticks: try it again every half hour.
+            let left = if (limited) {
+                reset_left(words, root.supervisor.unix_seconds())
+            } else {
+                null
+            };
+            let lasts = if (limited) {
                 s.hold_ticks * 12
             } else {
                 s.hold_ticks
             };
-            if (n >= lasts) {
+            let due = if let l: int = left {
+                l <= 0
+            } else {
+                n >= lasts
+            };
+            if (due) {
                 let _ = s.held_for.set(b.id, 0);
                 apply(s, b.id, root.machine.HoldCleared { kind: "hold_cleared" });
             } else {
@@ -421,6 +434,82 @@ function expire_holds(s: Supervisor) -> void throws never {
             }
         }
     }
+}
+
+/// A minute past the stated reset, in case the provider's clock is behind ours.
+const RESET_SLACK: int = 60;
+
+/// Seconds until a usage limit's stated reset (a minute past it), 0 once it has passed,
+/// or null when the words state none. Claude Code says `resets 12:40am (UTC)` or
+/// `usage limit reached|<unix seconds>`. A time of day is the next one within six hours
+/// (a session limit lasts five), so it reads the same after a restart: one more than
+/// six hours ahead is one that has just passed. The bl-lkb beads (9 Nov) met a limit that
+/// reset at 00:40 and were held to 01:06 by the fixed half hour.
+function reset_left(words: string, now: int) -> int? throws never {
+    if (words.includes("limit reached|")) {
+        let digits = (words.split("limit reached|").at(1) ?? "").split(" ").at(0) ?? "";
+        let at = baml.json.decode<int>(digits.trim()) catch_all (e) {
+            _ => {
+                return null;
+            },
+        };
+        let wait = at + RESET_SLACK - now;
+        return if (wait > 0) {
+            wait
+        } else {
+            0
+        };
+    }
+    let after = words.split("resets ").at(1) ?? "";
+    if (after.length() == 0 || !after.includes("(UTC)")) {
+        return null;
+    }
+    let of_day = clock_seconds(after.split(" ").at(0) ?? "");
+    if let t: int = of_day {
+        let day = 86400;
+        let ahead = ((t + RESET_SLACK - now % day) % day + day) % day;
+        if (ahead > 6 * 3600) {
+            0
+        } else {
+            ahead
+        }
+    } else {
+        null
+    }
+}
+
+/// "12:40am" or "3pm" as seconds since midnight; null when it is not a clock time.
+function clock_seconds(text: string) -> int? throws never {
+    let t = text.trim().to_lower_case();
+    let pm = t.ends_with("pm");
+    if (!pm && !t.ends_with("am")) {
+        return null;
+    }
+    let body = t.slice(0, t.length() - 2);
+    let parts = body.split(":");
+    let h = baml.json.decode<int>(parts.at(0) ?? "") catch_all (e) {
+        _ => {
+            return null;
+        },
+    };
+    let m = if (parts.length() > 1) {
+        baml.json.decode<int>(unpadded(parts.at(1) ?? "")) catch_all (e) {
+            _ => {
+                return null;
+            },
+        }
+    } else {
+        0
+    };
+    if (h < 1 || h > 12 || m < 0 || m > 59) {
+        return null;
+    }
+    let hour = if (pm) {
+        h % 12 + 12
+    } else {
+        h % 12
+    };
+    hour * 3600 + m * 60
 }
 
 /// Fewest failures first, so everything is tried once before anything is tried twice.
@@ -712,4 +801,13 @@ test "an event's journal line is its kind and first words" {
         event_line(root.machine.Rejected { kind: "rejected", line: "REJECT: x", text: "t" }),
         "rejected REJECT: x",
     )
+}
+
+/// "05" as "5": JSON, which decodes the number, refuses a leading zero.
+function unpadded(digits: string) -> string throws never {
+    if (digits.length() > 1 && digits.starts_with("0")) {
+        digits.slice(1, digits.length())
+    } else {
+        digits
+    }
 }
