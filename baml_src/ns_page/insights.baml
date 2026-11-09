@@ -254,12 +254,61 @@ function round_outcomes(tallies: root.supervisor.FTally[]) -> Insight throws nev
 
 /// 3. Rejections a worker rebutted, and what the second review said.
 function overturned(tallies: root.supervisor.FTally[]) -> Insight throws never {
-    empty_insight(
-        "overturned",
-        "Rejections disputed",
-        "a REJECT the worker rebutted, and whether the tiebreak review upheld it",
-        ["bead", "rejected by", "the REJECT", "tiebreak"],
-    )
+    let rows: string[][] = [];
+    let overturns: map<string, int> = {};
+    for (let t in tallies) {
+        let log = t.round_log;
+        let i = 0;
+        while (i < log.length()) {
+            if let rec: root.supervisor.FRoundRec = log.at(i) {
+                if (rec.outcome == "rebutted" && i > 0) {
+                    if let rejected: root.supervisor.FRoundRec = log.at(i - 1) {
+                        let tiebreak = if let next: root.supervisor.FRoundRec = log.at(i + 1) {
+                            if (next.outcome == "rejected") {
+                                "upheld"
+                            } else if (next.outcome == "approved") {
+                                "overturned"
+                            } else {
+                                "pending"
+                            }
+                        } else {
+                            "pending"
+                        };
+                        let words = if (rejected.words.length() > 120) {
+                            rejected.words.slice(0, 120)
+                        } else {
+                            rejected.words
+                        };
+                        rows.push([t.id, rejected.model, words, tiebreak]);
+                        if (tiebreak == "overturned") {
+                            let n = overturns.get(rejected.model) ?? 0;
+                            overturns.set(rejected.model, n + 1);
+                        }
+                    }
+                }
+            }
+            i = i + 1;
+        }
+    }
+    let level = "ok";
+    let hint = "";
+    for (let model in overturns.keys()) {
+        let n = overturns.get(model) ?? 0;
+        if (n > 0) {
+            level = "warn";
+            hint
+                = `${model} rejected work the tiebreak approved ${n} times: tighten its prompt or give review to another model`;
+        }
+    }
+    Insight {
+        key: "overturned",
+        title: "Rejections disputed",
+        about: "a REJECT the worker rebutted, and whether the tiebreak review upheld it",
+        columns: ["bead", "rejected by", "the REJECT", "tiebreak"],
+        rows: rows,
+        level: level,
+        hint: hint,
+    }
 }
 
 /// 4. Holds by their cause.
@@ -526,5 +575,28 @@ test "round outcomes count good, sent back and held by model" {
     );
     assert.equal(i.rows.length(), 1);
     assert.equal(i.rows[0], ["work", "devbox/coder", "4", "1", "2", "1", "no_commit"]);
+    assert.equal(i.level, "warn");
+}
+
+test "a disputed rejection shows its tiebreak" {
+    let i = overturned(
+        [
+            root.supervisor.tally_of(
+                "t-1",
+                [
+                    root.supervisor.round_rec(
+                        "review",
+                        "acbox/reviewer",
+                        "rejected",
+                        words = "REJECT: x",
+                    ),
+                    root.supervisor.round_rec("work", "devbox/coder", "rebutted"),
+                    root.supervisor.round_rec("review", "claude/sonnet", "approved"),
+                ],
+            ),
+        ],
+    );
+    assert.equal(i.rows.length(), 1);
+    assert.equal(i.rows[0], ["t-1", "acbox/reviewer", "REJECT: x", "overturned"]);
     assert.equal(i.level, "warn");
 }
