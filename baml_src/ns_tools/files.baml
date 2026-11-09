@@ -87,6 +87,31 @@ function edited() -> void throws never {
     set_probes(0);
 }
 
+/// A round's end: its count goes with it. Left behind, the box had 201 of these files on
+/// 8 Nov, and a round that drew a used pid started from that round's count: nudged or
+/// refused early, and a research BLOCK read as one after reading.
+function forget_probes() -> void throws never {
+    let _ = baml.fs.remove(probes_path()) catch_all (e) {
+        _ => null,
+    };
+}
+
+test "a round starts its count from nothing, whatever an old round of its pid left" {
+    set_probes(17);
+    edited();
+    assert.equal(probes(), 0);
+    set_probes(17);
+    forget_probes();
+    assert.equal(probes(), 0);
+    assert.is_true(
+        !(
+            baml.fs.exists(probes_path()) catch_all (e) {
+                _ => true,
+            }
+        ),
+    )
+}
+
 /// One more probe: null to go ahead, or why not.
 function probe() -> string? throws never {
     // Only a round is held to it (a hand run or a test has no worktree to stay in).
