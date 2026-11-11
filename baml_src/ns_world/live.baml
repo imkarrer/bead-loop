@@ -233,6 +233,9 @@ class LiveWorld {
             // What the loop already carries: it set them in_progress when it picked them,
             // so `bd ready` no longer lists them (docs/state-machine.md, The bead in bd).
             let carried = self.bd_rows(["list", "-l", self.label, "--status", "in_progress", "--json", "-n", "0"]);
+            let ready_ids = ready.map((r) -> {
+                r.id
+            });
             ticket_rows(ready, carried)
                 .filter((r) -> {
                     takes(r.labels ?? [], self.only, self.skip)
@@ -244,6 +247,10 @@ class LiveWorld {
                         description: r.description ?? "",
                         acceptance: r.acceptance_criteria ?? "",
                         stage: stage_label(r.labels ?? []),
+                        carried: !ready_ids.includes(r.id),
+                        marked: (r.labels ?? []).some((l) -> {
+                            l.starts_with("loop:")
+                        }),
                     }
                 })
         }

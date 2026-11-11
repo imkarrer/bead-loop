@@ -62,3 +62,22 @@ case_one_place_invariant() {
     "in the merge queue: not handed to dev whatever bd says"
   assert_eq "$(view_bead .place)" merge "still in the merge queue"
 }
+
+# A bead someone claimed by hand, in_progress with no `loop:` label and no record in the
+# loop's log, is never picked: admit_tickets (ns_supervisor/supervisor.baml) admits a
+# ticket `bd ready` has stopped listing only when the loop marked it or already has a
+# bead for it.
+case_in_progress_by_hand_is_not_picked() {
+  setup 'test -e work.txt'
+  reply coder "$(write_work)" "$(commit)" "$(done_report)"
+  reply reviewer "$(approve)"
+  (cd "$REPO" && bd update "$BEAD" --status in_progress >/dev/null)
+  local before
+  before=$(find "$E2E_CTRL/requests" -name '*.json' 2>/dev/null | wc -l)
+  tick 3
+  assert_eq "$(events)" "" "never picked"
+  assert_eq "$(find "$E2E_CTRL/requests" -name '*.json' 2>/dev/null | wc -l)" "$before" \
+    "no model request"
+  assert_eq "$(bd_field status)" in_progress "left in_progress"
+  assert_eq "$(view_bead .place)" "" "no place for the bead"
+}

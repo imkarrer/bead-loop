@@ -380,11 +380,17 @@ function admit_tickets(s: Supervisor) -> void throws never {
             return;
         },
     };
+    // A ticket `bd ready` no longer lists is the loop's own only when it is marked with a
+    // `loop:` label (the loop put it there) or the loop already has a bead for it: one a
+    // person claimed by hand carries neither, and is not admitted.
+    let kept = tickets.filter((t) -> {
+        !(t.carried ?? false) || (t.marked ?? false) || s.bead(t.id) != null
+    });
     s.ready
-        = tickets.map((t) -> {
+        = kept.map((t) -> {
             t.id
         });
-    for (let t in tickets) {
+    for (let t in kept) {
         let _ = s.known.set(t.id, t);
         if (s.bead(t.id) == null) {
             s.put(root.machine.Bead.new(t.id));
