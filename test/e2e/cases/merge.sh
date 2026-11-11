@@ -187,6 +187,9 @@ case_ci_red_unchanged_head_holds() {
   assert_eq "$(view_bead .failures)" 1 "the same red is not charged twice"
   assert_nomatch "$(cat "$E2E_CTRL/gh/calls")" "remove-label" "no label to take off under auto"
   assert_match "$(view_bead .why)" "already charged" "held, saying why"
+  tick 7
+  assert_eq "$(bd_field notes | grep -c 'held: CI still red on the commit already charged')" 1 \
+    "the hold noted once, not again at every clear"
 }
 
 # Under pipeline the loop labels the PR it opens, CI's own merge step merges it, and a

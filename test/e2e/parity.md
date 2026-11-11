@@ -124,7 +124,7 @@ each re-checked:
 | 32 | `case_ci_red_unchanged_head_reruns` | pipeline no-commit fix: relabel, old red not recharged, re-run's red charged | e2e | yes | - | case_ci_red_unchanged_head_reruns (merge.sh) |
 | 33 | `case_ci_killed_job_reruns_once` | killed required job re-run once by relabel, then charged | e2e | yes | - | case_ci_killed_job_reruns_once (merge.sh) |
 | 34 | `case_ci_red_unrequired_waits` | red only in unrequired checks waits; held after the CI timeout | e2e | yes | - | case_ci_red_unrequired_waits (merge.sh); the hold after the CI timeout is not asserted |
-| 35 | `case_ci_red_unchanged_head_holds` | auto: the same red is not charged twice, held saying why | e2e | yes | - | case_ci_red_unchanged_head_holds (merge.sh); the hold is noted again every 5 ticks |
+| 35 | `case_ci_red_unchanged_head_holds` | auto: the same red is not charged twice, held saying why | e2e | yes | - | case_ci_red_unchanged_head_holds (merge.sh) |
 | 36 | `case_ci_red_park_briefs_in_its_own_checkout` | a CI-red park's brief runs in a checkout of the bead branch | moot | yes | - | park brief is static text from the reason (live.baml:642); no model reads any checkout |
 | 37 | `case_external_green` | external: green is never merged or held; status shows awaiting | e2e | yes | - | case_external_green (adopt.sh) |
 | 38 | `case_external_nocheck` | external: a PR with no checks is not merged, held or noted | e2e | yes | - | case_external_nocheck (adopt.sh); "no note either" is not asserted |
@@ -205,7 +205,7 @@ each re-checked:
 | 113 | `case_hold_backs_off_exponentially_then_parks` | backoff doubles per hold; a bead held a day parks with its reason | changed | no | P2 | case_hold_backs_off_exponentially_then_parks (holds-harness.sh) asserts five holds then park (step.baml:7); Rust doubled the backoff and parked after a day |
 | 114 | `case_harness_error_is_held` | server error before the model answers: held, no failure, same stage retries | e2e | yes | - | case_harness_error_is_held (holds-harness.sh); the fix-round variant is not asserted |
 | 115 | `case_recover_reopens_an_interrupted_round` | round cut short by a stop: requeued uncharged, branch resumed, parked bead untouched | e2e | yes | - | case_recover_reopens_an_interrupted_round (holds-world.sh); a parked bead staying parked is not asserted |
-| 116 | `case_merge_queue_holds` | PR waiting (pipeline unmerged, pending, manual, refused, no checks): held, still polled | core | yes | P2 | github.baml:311,322; step_test:422,428,452,520. "Noted once" fails: a note every minute or every clear |
+| 116 | `case_merge_queue_holds` | PR waiting (pipeline unmerged, pending, manual, refused, no checks): held, still polled | core | yes | P2 | github.baml:311,322; step_test:422,428,452,520. noted once per kind while the PR waits (step_test: a waiting hold is noted once, however its words change); an infrastructure hold there, like a refused merge, is still noted after each clear |
 | 117 | `case_one_place_invariant` | merge-queue bead refuses answer/escalate; a bead reopened by hand in bd is not re-picked | e2e | yes | - | case_one_place_invariant (queue.sh) |
 | 118 | `case_priority_repo` | `priority REPO` marker puts that repo first; status shows it | missing | no | P3 | not ported: no priority command (queue.sh header); repos tick in config order (main.baml:180) |
 | 119 | `case_run_is_resident` | `run` stays up, wake starts a new bead at once, TERM exits 143 | e2e | yes | - | case_run_is_resident (resident.sh); a 30 s heartbeat replaces the bell |

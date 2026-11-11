@@ -85,11 +85,10 @@ function held(b: Bead, i: Infra) -> Step throws never {
     }
 }
 
-function hold_for(b: Bead, what: string, words: string) -> Step throws never {
-    let same = b.hold?.words == words;
-    let n = b.copy();
+function hold_for(b: Bead, m: Merging, what: string, words: string) -> Step throws never {
+    let n = b.at(Merging { kind: "merging", pr: m.pr, adopted: m.adopted, said: what });
     n.hold = Hold { what: what, words: words };
-    if (same) {
+    if (m.said == what) {
         stay(n)
     } else {
         Step { bead: n, effects: [Note { text: `held: ${words}` }] }
@@ -479,14 +478,14 @@ function on_merging(b: Bead, m: Merging, e: Event, p: Policy) -> Step throws nev
         let x: ChecksGreen => match (p.merge) {
             MergeMode.Auto => Step { bead: b, effects: [MergePr {}] },
             MergeMode.Pipeline => stay(b),
-            MergeMode.Manual => hold_for(b, "manual", "yours to merge"),
+            MergeMode.Manual => hold_for(b, m, "manual", "yours to merge"),
             MergeMode.External => stay(b),
         },
         let x: WaitedTooLong => {
             if (p.merge == MergeMode.External) {
                 stay(b)
             } else {
-                hold_for(b, "waiting", x.why)
+                hold_for(b, m, "waiting", x.why)
             }
         },
         _ => elsewhere(b, e),
@@ -495,11 +494,11 @@ function on_merging(b: Bead, m: Merging, e: Event, p: Policy) -> Step throws nev
 
 function red(b: Bead, m: Merging, r: ChecksRed, p: Policy) -> Step throws never {
     if (m.adopted) {
-        return hold_for(b, "adopted", "CI red on a PR the loop did not open");
+        return hold_for(b, m, "adopted", "CI red on a PR the loop did not open");
     }
     if (b.charged_head == r.head) {
         if (p.merge != MergeMode.Pipeline) {
-            return hold_for(b, "red", "CI still red on the commit already charged");
+            return hold_for(b, m, "red", "CI still red on the commit already charged");
         }
         if (b.rerun_head != r.head) {
             let n = b.copy();

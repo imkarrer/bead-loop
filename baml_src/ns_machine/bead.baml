@@ -34,6 +34,9 @@ class Merging {
     kind: "merging",
     pr: string,
     adopted: bool,
+    /// The kind (`what`) of the hold already noted while the PR waits in the queue: a
+    /// later hold of the same kind updates its words without a note.
+    said: string?,
 }
 
 class Parked {
