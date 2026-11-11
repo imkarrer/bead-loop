@@ -130,7 +130,7 @@ back to where it was picked from, uncharged.
 | Outcome | Bead | Branch / PR |
 | --- | --- | --- |
 | Researcher writes a brief | ready with the brief, **no failure** | the worktree stays for the worker |
-| Research runs out of time, or answers nothing that parses | ready with an empty brief: the worker goes without one | stays |
+| Research runs out of time, answers nothing that parses, or answers with nothing read | ready with an empty brief: the worker goes without one | stays |
 | Researcher blocked | noted, and back to the research queue for a **second opinion** (`brief_model`, else the researcher again) with the first reply in its prompt; it starts like any research round, on a free lane | stays |
 | … the second opinion writes a brief | ready, **no failure** | stays |
 | … the second opinion is blocked too | parked before any edit | removed |
