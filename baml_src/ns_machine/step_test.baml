@@ -1030,6 +1030,24 @@ test "a worker's rebuttal goes back to review, uncharged, and a REJECT ends it" 
     assert.equal(r.bead.failures, 2)
 }
 
+test "a lever with no work behind it is refused" {
+    let parked = step(
+        bead(working(), failures = 2),
+        WorkerBlocked { kind: "worker_blocked", line: "BLOCKED: x" },
+        policy(),
+    ).bead;
+    assert.is_type<Parked>(parked.place);
+    assert.is_true(!parked.kept);
+    let published = step(parked, Published { kind: "published" }, policy());
+    assert.is_true(refuses(published));
+    assert.equal(published.effects.length(), 1);
+    assert.is_type<Parked>(published.bead.place);
+    let requested = step(parked, PrRequested { kind: "pr_requested", title: "t", body: "b" }, policy());
+    assert.is_true(refuses(requested));
+    assert.equal(requested.effects.length(), 1);
+    assert.is_type<Parked>(requested.bead.place);
+}
+
 test "a stage label moves a ready bead to that stage, never back" {
     let s = step(bead(ready()), StageLabelled { kind: "stage_labelled", stage: "frontier" }, policy());
     assert.equal(s.bead.failures, 2);

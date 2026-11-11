@@ -654,10 +654,11 @@ test "every move is on the bead in bd as its loop label" {
 }
 
 test "a parked bead with its work done is pushed, then opened as the PR you asked for" {
-    let w = one_bead([no_commit(), no_commit(), no_commit()], [], []);
+    let w = one_bead([committed(), no_commit(), no_commit()], [rejected()], []);
     let s = Supervisor.new(w, MemoryLog.new(), policy());
-    turns(s, w, 6);
+    turns(s, w, 8);
     assert.is_type<root.machine.Parked>(place_of(s));
+    assert.is_true(s.bead("t-1")?.kept ?? false);
     w.inbox_now
         = [root.world.Mail { id: "t-1", event: root.machine.Published { kind: "published" } }];
     tick(s);
