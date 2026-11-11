@@ -5,6 +5,10 @@
 // A file is read whole where it can be. Handed part of one, the 30B re-reads the same
 // lines from the top, and telling it the next offset does not help (bl-gld, 7 Nov).
 const READ_LIMIT: int = 2000;
+// Below TOOL_BUDGET (ns_runner/session.baml): a read that filled every line of
+// READ_LIMIT could still be cut by compaction before the next call, and no
+// offset reaches the lines compaction kept whole (bl-gc1.2, 11 Nov).
+const READ_CHARS: int = 20000;
 const OUTPUT_LIMIT: int = 6000;
 
 /// Keeps the end of long output, where a compiler or test run says what happened.
@@ -167,9 +171,26 @@ function outside(path: string, tree: string) -> string? throws never {
     null
 }
 
-/// Read lines of a file. A file longer than the limit comes in parts: pass `offset`, the
-/// 1-based line to start from, for the next one. A second read of the same lines in this
-/// process returns a stub, so whole-file reads do not pile up (bl-b1a.1, 7 Nov).
+/// The end of the slice starting at `start` (exclusive), staying within `max_end` and
+/// within READ_CHARS of body text. Always at least one line past `start`.
+function char_limited_end(lines: string[], start: int, max_end: int) -> int throws never {
+    let end = start + 1;
+    let chars = (lines.at(start) ?? "").length();
+    while (end < max_end) {
+        let next_chars = chars + 1 + (lines.at(end) ?? "").length();
+        if (next_chars > READ_CHARS) {
+            return end;
+        }
+        chars = next_chars;
+        end = end + 1;
+    }
+    end
+}
+
+/// Read lines of a file. A file longer than the limit, or READ_CHARS of it, comes in
+/// parts: pass `offset`, the 1-based line to start from, for the next one. A second read
+/// of the same lines in this process returns a stub, so whole-file reads do not pile up
+/// (bl-b1a.1, 7 Nov).
 function read_file(path: string, offset: int = 1) -> string throws never {
     let stop = probe();
     if let why: string = stop {
@@ -194,17 +215,23 @@ function read_file(path: string, offset: int = 1) -> string throws never {
     if (start >= total) {
         return `${path} has only ${total} lines`;
     }
-    let end = if (start + READ_LIMIT < total) {
+    let line_end = if (start + READ_LIMIT < total) {
         start + READ_LIMIT
     } else {
         total
+    };
+    let end = char_limited_end(lines, start, line_end);
+    let header = if (end < total) {
+        `[${path}: lines ${start + 1}-${end} of ${total}; read on from offset ${end + 1}]`
+    } else {
+        `[${path}: lines ${start + 1}-${end} of ${total}]`
     };
     if (already_read(path, offset)) {
         return `${path} already read this session (lines ${start + 1}-${end} of ${total}). Use that text; do not read it again.`;
     }
     mark_read(path, offset);
     let body = lines.slice(start, end).join("\n");
-    `[${path}: lines ${start + 1}-${end} of ${total}]\n${body}`
+    `${header}\n${body}`
 }
 
 /// Create a file, or replace all of one.
@@ -456,6 +483,28 @@ test "read comes in parts" {
     let _ = baml.fs.write(p, lines.join("\n"));
     assert.contains(read_file(p), "lines 1-2000 of 2100");
     assert.contains(read_file(p, offset = 2001), "lines 2001-2100 of 2100");
+    let _ = baml.fs.remove(p);
+}
+
+test "a long file comes in parts that compaction keeps whole" {
+    let p = root.tools.scratch("read-long.txt");
+    let xs = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx";
+    let lines: string[] = [];
+    let i = 0;
+    while (i < 1000) {
+        lines.push(`row ${i} ${xs}`);
+        i = i + 1;
+    }
+    let _ = baml.fs.write(p, lines.join("\n"));
+    let first = read_file(p);
+    assert.is_true(first.length() < READ_CHARS + 200);
+    assert.contains(first, "row 0 x");
+    assert.contains(first, "lines 1-");
+    assert.contains(first, "read on from offset");
+    assert.is_true(!first.includes("row 999"));
+    let second = read_file(p, offset = 1000);
+    assert.contains(second, "row 999");
+    assert.contains(second, "lines 1000-1000 of 1000");
     let _ = baml.fs.remove(p);
 }
 
