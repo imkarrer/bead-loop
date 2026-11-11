@@ -130,6 +130,10 @@ function run_compacted<Out>(
     let sent = deliver(j, 0, on_event);
     let steps = 0;
     let repairs = 0;
+    // A fresh session's journal is new, but the read record at this pid may not be:
+    // bl-gc1.4, a revision session in the same process found its own README "already
+    // read this session" for a read it never made.
+    root.tools.forget_reads();
     while (steps < max_steps) {
         if (compact_journal(j)) {
             root.tools.forget_reads();

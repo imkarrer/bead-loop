@@ -64,3 +64,21 @@ case_gate_fixed_on_revision() {
   git -C "$E2E_ORIGIN" show-ref -q "refs/heads/bead/$BEAD" && ok || bad "no branch on origin"
   assert_eq "$(git -C "$E2E_ORIGIN" rev-list --count "main..bead/$BEAD")" 2 "the fix is a second commit"
 }
+
+# The revision session is a new session, not a continuation of the one the failed gate
+# cut short: a file it reads again must come back whole, not "already read this session"
+# for text the revision's own journal never held (bl-gc1.4).
+case_gate_revision_reads_afresh() {
+  setup '[ -e "$E2E_CTRL/gateok" ] || { touch "$E2E_CTRL/gateok"; false; }'
+  reply coder '{"tool":"read_file","args":{"path":"README"}}' "$(write_work)" "$(commit)" "$(done_report)" \
+    '{"tool":"read_file","args":{"path":"README"}}' \
+    '{"tool":"run","args":{"command":"echo more >> work.txt && git commit -qam more"}}' "$(done_report)"
+  reply reviewer "$(approve)"
+  until_event pr_opened 90 || bad "no PR: $(events)"
+  assert_eq "$(events)" "picked committed gate_passed review_picked approved pr_opened checks_green" \
+    "the gate's one revision, then review"
+  git -C "$E2E_ORIGIN" show-ref -q "refs/heads/bead/$BEAD" && ok || bad "no branch on origin"
+  assert_eq "$(git -C "$E2E_ORIGIN" rev-list --count "main..bead/$BEAD")" 2 "the fix is a second commit"
+  assert_nomatch "$(cat "$E2E_CTRL"/requests/*.json)" "already read this session" \
+    "the revision's read of README was not a stub"
+}
