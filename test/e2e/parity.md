@@ -18,14 +18,14 @@ The rows were read from the code on 9 Nov 2026, after the bl-lkb ports (#251 to 
 | status | rows | meaning |
 | --- | --- | --- |
 | `e2e` | 72 | a case in `test/e2e/cases` proves it against real git, bd and a gate |
-| `changed` | 2 | a case keeps the Rust name but asserts what the BAML loop does instead |
+| `changed` | 0 | a case keeps the Rust name but asserts what the BAML loop does instead; decide, then rename it and drop the row, or fix the loop |
 | `core` | 12 | the loop does it, but only a FakeWorld test proves it; 9 of these cross the world, which FakeWorld cannot see |
 | `untested` | 10 | the code is there, and no test covers it |
 | `missing` | 15 | the loop does not do it |
-| `dropped` | 27 | removed on purpose: opencode, aider, stamps, stats, bench, `[[lanes]]`, seats ([config.md](../../docs/config.md#not-read)) |
+| `dropped` | 29 | removed on purpose: opencode, aider, stamps, stats, bench, `[[lanes]]`, seats ([config.md](../../docs/config.md#not-read)), and the hold backoff (11 Nov) |
 | `moot` | 10 | the design makes the failure impossible |
 
-That leaves 39 rows to prove, build or decide: none is P1, 22 are P2 and 17 P3. `port` is P1
+That leaves 37 rows to prove or build: none is P1, 20 are P2 and 17 P3. `port` is P1
 when the live config uses the behaviour and getting it wrong wastes rounds, loses work,
 or merges the wrong thing. P2 means it is used but cheap to notice. P3 is an edge case,
 or unused. `seam` is yes when the behaviour crosses git, bd, gh, Claude, a model server,
@@ -35,22 +35,11 @@ the gate, a process or a restart.
 
 These differ from the Rust loop today, and each one was checked in the code.
 
-1. **Two cases now assert the new hold behaviour under the Rust names** (rows 112, 113,
-   and 94). A held bead is retried every 5 ticks and noted each time, and five holds in
-   a row park it (`step.baml:7`, `:75`). So a model server, or a signed-out Claude, that
-   is down for five retries parks every bead that tries it. Rust doubled the backoff,
-   noted once, and parked after a day. bl-lkb.15 asked the worker to report blocked
-   rather than port a case the loop fails; it rewrote the assertions instead, so the
-   gate now defends the change. Decide whether it is wanted: if it is, rename the cases
-   and say so in [state-machine.md](../../docs/state-machine.md); if not, it is a bug.
-2. **A merged bead keeps its worktree** (rows 2, 65). `closed()` deletes only the remote
+1. **A merged bead keeps its worktree** (rows 2, 65). `closed()` deletes only the remote
    branch (`step.baml:213`), so `wt/ID` and the local `bead/ID` stay. On 9 Nov,
    bead-loop's state held 27 worktrees and 220 MB, including bl-dze.1's a day after it
    merged.
-3. **A waiting PR's note repeats** (rows 35, 116). The waiting holds put the elapsed
-   minutes in their words (`github.baml:190`, `:226`), and `hold_for` writes a note
-   whenever the words change, so the bead gets a bd note on every look. Rust noted once.
-4. **A labelled bead someone else set in_progress is picked.** `tickets()` adds every
+2. **A labelled bead someone else set in_progress is picked.** `tickets()` adds every
    labelled `in_progress` bead (`live.baml:234`), and one the loop has never seen starts
    Ready (`supervisor.baml:389`). [state-machine.md](../../docs/state-machine.md) says
    only the loop's own are picked.
@@ -59,7 +48,13 @@ Fixed since the list was made: a red PR under the pipeline merge re-runs CI once
 charges the re-run's red (row 32, bl-lkb.23); a config that does not parse runs nothing,
 not defaults (row 50, bl-lkb.24); a PR closed during a rebase or feedback round parks the
 bead (row 98, bl-lkb.25); a bead ready to publish counts toward `max_inflight` (row 107,
-bl-lkb.8); and a stage with no reviewer goes straight to the PR (row 26, bl-lkb.11).
+bl-lkb.8); a stage with no reviewer goes straight to the PR (row 26, bl-lkb.11); and a
+waiting PR's hold is noted once per kind, not on every look (rows 35, 116, bl-lkb.26).
+
+Decided on 11 Nov: the hold behaviour stays as the BAML loop has it. A held bead is
+retried every 5 ticks and noted each time, and five harness holds in a row park it, where
+the Rust loop doubled a backoff and parked after a day. Rows 112 and 113 are dropped, and
+their cases are renamed for what they assert.
 
 These smaller differences came up while classifying the rows. The e2e file headers
 confirm the slug, the blind second opinion and the fixed park brief; the rest were not
@@ -193,8 +188,8 @@ each re-checked:
 | 109 | `case_git_refusing_the_worktree_holds` | git refusing the worktree holds the bead uncharged; it is worked once the obstacle goes | e2e | yes | - | case_git_refusing_the_worktree_holds (holds-world.sh) |
 | 110 | `case_setup_failure_is_held` | A failing setup holds the bead uncharged; it is skipped while the hold is young, then retried | e2e | yes | - | case_setup_failure_is_held (holds-world.sh) |
 | 111 | `case_harness_down_is_held` | A down harness holds worker or reviewer uncharged; a timeout is still a failure | e2e | yes | - | case_harness_down_is_held (holds-harness.sh); the timeout charge is not asserted |
-| 112 | `case_repeated_hold_restarts_backoff` | a re-hold for the same reason restarts the backoff clock, with no second note | changed | no | P2 | case_repeated_hold_restarts_backoff (holds-harness.sh) asserts a fixed 5-tick retry and a note on every hold; Rust restarted a backoff and noted once |
-| 113 | `case_hold_backs_off_exponentially_then_parks` | backoff doubles per hold; a bead held a day parks with its reason | changed | no | P2 | case_hold_backs_off_exponentially_then_parks (holds-harness.sh) asserts five holds then park (step.baml:7); Rust doubled the backoff and parked after a day |
+| 112 | `case_repeated_hold_restarts_backoff` | a re-hold for the same reason restarts the backoff clock, with no second note | dropped | no | - | kept by the owner on 11 Nov: a hold is retried every 5 ticks and noted each time, no backoff; case_a_hold_is_retried_on_a_fixed_pace (holds-harness.sh) asserts it |
+| 113 | `case_hold_backs_off_exponentially_then_parks` | backoff doubles per hold; a bead held a day parks with its reason | dropped | no | - | kept by the owner on 11 Nov: five harness holds in a row park the bead, no day-long backoff; case_five_harness_holds_in_a_row_park (holds-harness.sh) asserts it |
 | 114 | `case_harness_error_is_held` | server error before the model answers: held, no failure, same stage retries | e2e | yes | - | case_harness_error_is_held (holds-harness.sh); the fix-round variant is not asserted |
 | 115 | `case_recover_reopens_an_interrupted_round` | round cut short by a stop: requeued uncharged, branch resumed, parked bead untouched | e2e | yes | - | case_recover_reopens_an_interrupted_round (holds-world.sh); a parked bead staying parked is not asserted |
 | 116 | `case_merge_queue_holds` | PR waiting (pipeline unmerged, pending, manual, refused, no checks): held, still polled | core | yes | P2 | github.baml:311,322; step_test:422,428,452,520. noted once per kind while the PR waits (step_test: a waiting hold is noted once, however its words change); an infrastructure hold there, like a refused merge, is still noted after each clear |
