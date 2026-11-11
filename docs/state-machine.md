@@ -167,7 +167,7 @@ back to where it was picked from, uncharged.
 | An adopted PR conflicts | left alone | whoever opened it rebases |
 | An open `bead/ID` PR the loop is not carrying | merging; the loop's own if its account opened it (a PR left by the Rust loop), else adopted | labelled under `pipeline` |
 | A parked bead's `bead/ID` PR, opened or merged by hand | open: merging, as above; merged: closed, the bead closed in bd with the url | deleted |
-| PR merged | closed, the bead closed in bd with the url | deleted |
+| PR merged | closed, the bead closed in bd with the url | deleted, with the worktree and the local branch |
 | PR closed unmerged | parked, the url in the question | gone |
 | PR closed while a rebase or feedback round ran | parked once the round is approved, the url in the question; no new PR | gone |
 | Stages exhausted (`on_exhaust = "park"`) | parked | removed |

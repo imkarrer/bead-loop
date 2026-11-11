@@ -168,4 +168,6 @@ case_parked_bead_whose_pr_merged() {
   until_event merged_outside 30 || bad "the merge was not seen: $(events)"
   assert_eq "$(bd_field status)" closed "its PR merged: closed"
   assert_match "$(bd_field close_reason)" "$url" "the url in the reason"
+  [ -e "$(STATE)/wt/$BEAD" ] && bad "the worktree is still there" || ok
+  git -C "$REPO" show-ref -q "refs/heads/bead/$BEAD" && bad "the local branch is still there" || ok
 }

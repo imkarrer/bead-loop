@@ -213,7 +213,7 @@ function adopt(b: Bead, x: PrAdopted, p: Policy) -> Step throws never {
 function closed(b: Bead, url: string?) -> Step throws never {
     Step {
         bead: b.at(Closed { kind: "closed", url: url }),
-        effects: [CloseBead { url: url }, DeleteRemoteBranch {}],
+        effects: [CloseBead { url: url }, DeleteRemoteBranch {}, RemoveBranch {}],
     }
 }
 
