@@ -84,11 +84,11 @@ class Supervisor {
 function apply(s: Supervisor, id: string, event: root.machine.Event) -> void throws never {
     let current = s.bead(id) ?? root.machine.Bead.new(id);
     s.log.append(id, event);
-    log.info(`${root.supervisor.repo_name(s.group)}: ${id}: ${event_line(event)}`);
+    s.log.say("info", `${root.supervisor.repo_name(s.group)}: ${id}: ${event_line(event)}`);
     let next = root.machine.step(current, event, s.policy);
     s.put(next.bead);
     // The bead in bd says where it is: every move is written to it, its status and its
-    // place as a loop:* label. A bd that refuses is said in the journal and the loop goes
+    // place as a loop:* label. A bd that refuses is said in the loop log and the loop goes
     // on: the next move writes it again.
     let status = status_change(current.place, next.bead.place) ?? "";
     let was = place_label(current.place);
@@ -96,7 +96,7 @@ function apply(s: Supervisor, id: string, event: root.machine.Event) -> void thr
     if (status.length() > 0 || was != now) {
         let _ = s.world.mark(id, status, was, now) catch (e) {
             root.machine.Infra => {
-                log.warn(`${id}: bd update: ${e.words}`);
+                s.log.say("warn", `${id}: bd update: ${e.words}`);
             },
         };
     }
@@ -302,7 +302,7 @@ function carry_out(s: Supervisor, id: string, o: root.world.Order) -> void throw
         let x: root.world.NoteOrder => {
             let _ = s.world.note(id, `operator: ${x.text}`) catch (e) {
                 root.machine.Infra => {
-                    log.warn(`${id}: note: ${e.words}`);
+                    s.log.say("warn", `${id}: note: ${e.words}`);
                 },
             };
         },
@@ -738,8 +738,11 @@ function recover(
     world: root.world.World,
     log: Log,
     policy: root.machine.Policy,
+    group: string = "",
 ) -> Supervisor throws never {
     let s = Supervisor.new(world, log, policy);
+    // Set before the results are taken, so what recovery applies is logged with its repo.
+    s.group = group;
     for (let id in log.ids()) {
         s.put(root.machine.fold(id, log.load(id), policy));
     }

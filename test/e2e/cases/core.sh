@@ -15,6 +15,8 @@ case_lands() {
   assert_nomatch "$(bd_field labels)" "loop:" "a loop label left on a closed bead"
   assert_match "$(cat "$E2E_CTRL/gh/calls")" "pr create --head bead/$BEAD --base main" "the PR"
   assert_match "$(cat "$E2E_CTRL/gh/calls")" "pr merge bead/$BEAD --squash" "the merge"
+  assert_match "$(cat "$(STATE)/loop.log" 2>/dev/null)" "info repo: $BEAD: pr_merged" "the loop's own log has the bead's moves"
+  assert_match "$(cat "$(STATE)/loop.log" 2>/dev/null)" "info repo: $BEAD: committed" "a result taken at start names its repo too"
 }
 
 # While a round runs, bd says so: in_progress, and a label naming where it is.
