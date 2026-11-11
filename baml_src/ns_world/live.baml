@@ -1,5 +1,6 @@
 // The real world: bd, git and gh, and rounds as detached processes. Layout under `state`:
-// beads/ID/events.jsonl (ns_supervisor), rounds/ID.{spec,pid,result}.json, wt/ID, logs/.
+// beads/ID/events.jsonl (ns_supervisor), beads/ID/uncommitted.patch,
+// rounds/ID.{spec,pid,result}.json, wt/ID, logs/.
 
 class BdRow {
     id: string,
@@ -301,6 +302,7 @@ class LiveWorld {
         }
 
         function remove_branch(self, id: string) -> void throws never {
+            self.save_uncommitted(id);
             let dir = self.worktree(id);
             let _ = baml.sys.run(
                 "git",
@@ -688,6 +690,67 @@ class LiveWorld {
         function inbox(self) -> Mail[] throws never {
             read_inbox(self.state)
         }
+    }
+
+    /// What a round left uncommitted, saved before its worktree is removed: everything
+    /// staged, the diff written to beads/ID/uncommitted.patch over any earlier one, and a
+    /// note on the bead saying where. The park brief is written before the removal, so the
+    /// note says it. bl-lkb.24's round, 9 Nov, wrote a right fix, left it uncommitted
+    /// because one assertion could not pass, reported BLOCKED, and the park deleted it.
+    /// Nothing here may stop the removal: every failure is swallowed.
+    function save_uncommitted(self, id: string) -> void throws never {
+        let dir = self.worktree(id);
+        let there = baml.fs.exists(dir) catch_all (e) {
+            _ => false,
+        };
+        if (!there) {
+            return;
+        }
+        let status = baml.sys.run("git", args = ["status", "--porcelain"], cwd = dir, capture_output = true) catch_all (e) {
+            _ => {
+                return;
+            },
+        };
+        if (status.exit_code != 0 || status.stdout.to_string().trim().length() == 0) {
+            return;
+        }
+        let added = baml.sys.run("git", args = ["add", "-A"], cwd = dir, capture_output = true) catch_all (e) {
+            _ => {
+                return;
+            },
+        };
+        if (added.exit_code != 0) {
+            return;
+        }
+        let beads = `${self.state}/beads/${id}`;
+        let _ = baml.sys.run("mkdir", args = ["-p", beads]) catch_all (e) {
+            _ => null,
+        };
+        let patch = `${beads}/uncommitted.patch`;
+        let diffed = baml.sys.run(
+            "git",
+            args = [
+                "diff",
+                "--cached",
+                "--binary",
+                "--no-color",
+                "--no-ext-diff",
+                "--no-textconv",
+                `--output=${patch}`,
+            ],
+            cwd = dir,
+            capture_output = true,
+        ) catch_all (e) {
+            _ => {
+                return;
+            },
+        };
+        if (diffed.exit_code != 0) {
+            return;
+        }
+        let _ = self.note(id, `the round's uncommitted change was saved at ${patch}`) catch_all (e) {
+            _ => null,
+        };
     }
 
     function launch(self, id: string, spec: root.rounds.RoundSpec) -> void {
