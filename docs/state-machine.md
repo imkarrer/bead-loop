@@ -165,6 +165,7 @@ back to where it was picked from, uncharged.
 | PR conflicts with the base | **no failure**; ready with the rebase order, for `conflict_worker` | kept; the push updates the PR |
 | Review comments from someone else on the loop's PR | **no failure**; ready with the comments as the note, for `conflict_worker` | kept |
 | An adopted PR conflicts | left alone | whoever opened it rebases |
+| A dev-queue bead's PR merged outside the loop, before the loop picked it | closed, the bead closed in bd with the url | deleted |
 | An open `bead/ID` PR the loop is not carrying | merging; the loop's own if its account opened it (a PR left by the Rust loop), else adopted | labelled under `pipeline` |
 | A parked bead's `bead/ID` PR, opened or merged by hand | open: merging, as above; merged: closed, the bead closed in bd with the url | deleted |
 | PR merged | closed, the bead closed in bd with the url | deleted, with the worktree and the local branch |

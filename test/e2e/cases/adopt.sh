@@ -1,15 +1,7 @@
 # shellcheck shell=bash
 # merge = "external", and the PRs this loop did not open itself: a `bead/ID` branch
 # anyone pushes joins the merge queue (adopt, docs/config.md), green or not its own.
-# Ported from the Rust suite (`git show 8907dfa:test/run.sh`), minus one case the BAML
-# loop has no code path for:
-#
-#   case_closes_bead_merged_outside_the_loop: the Rust loop closed ANY bd issue whose
-#   bead/ID PR had merged, even one it never put in the merge queue (worked by hand, or
-#   by a subagent, with the loop never once ticking on it). adopt_prs (supervisor.baml)
-#   only ever raises MergedOutside for a bead its own state already has as Parked; an
-#   untouched bead is never looked at. case_parked_bead_whose_pr_merged below is the
-#   part of that Rust case the BAML loop does carry out.
+# Ported from the Rust suite (`git show 8907dfa:test/run.sh`).
 #
 # Also: a foreign PR's branch is always exactly `bead/ID` here (ns_world/live.baml's
 # `branch`); the Rust suite's `bead/t-9-some-slug` case of a slug suffix has nothing to
@@ -143,6 +135,27 @@ case_adopt_off() {
   tick 2
   assert_eq "$(jq -r --arg id "$other" '.beads[] | select(.id==$id) | .place' "$(STATE)/view.json")" "" "adopt = false: ignored"
   assert_eq "$(cd "$REPO" && bd show "$other" --json | jq -r '.[0].status')" open "adopt = false: the foreign bead untouched"
+}
+
+# A bead worked by hand or by a subagent, its PR merged before the loop ever ticked on
+# it: still open in bd and `bd ready` lists it, so it is closed, not picked (tick's
+# admit_tickets runs before adopt_prs, so the merged PRs are read against this tick's
+# `ready` list). Ported from the Rust suite's case_closes_bead_merged_outside_the_loop.
+case_closes_bead_merged_outside_the_loop() {
+  setup 'test -e work.txt'
+  local other
+  other=$(cd "$REPO" && bd create "Theirs" -d "z" --acceptance "true" -l delegate:local --json | jq -r .id)
+  jq -n --arg h1 "bead/$BEAD" --arg h2 "bead/$other" '[
+      {number:50, url:"https://github.com/owner/repo/pull/50", headRefName:$h1, state:"MERGED", author:{login:"someone-else"}, labels:[]},
+      {number:51, url:"https://github.com/owner/repo/pull/51", headRefName:$h2, state:"OPEN", mergeable:"MERGEABLE", mergeStateStatus:"CLEAN", headRefOid:"deadbeef", statusCheckRollup:[{"context":"ci","state":"PENDING"}], author:{login:"someone-else"}, labels:[]}
+    ]' >"$E2E_CTRL/gh/prs.json"
+  tick 1
+  assert_eq "$(bd_field status)" closed "merged outside the loop: closed"
+  assert_match "$(bd_field close_reason)" "https://github.com/owner/repo/pull/50" "the url in the reason"
+  assert_eq "$(events)" merged_outside "closed before any pick"
+  assert_eq "$(find "$E2E_CTRL/requests" -name '*.json' 2>/dev/null | wc -l)" 0 "no model request made"
+  assert_eq "$(cd "$REPO" && bd show "$other" --json | jq -r '.[0].status')" in_progress "the second bead adopted into the merge queue, not closed"
+  assert_nomatch "$(cat "$E2E_CTRL/gh/calls")" "pr merge " "no merge call"
 }
 
 # bl-tka.2, bl-tka.6, bl-3x2.3, bl-iej.2.3's lesson, carried over: a red charge on the

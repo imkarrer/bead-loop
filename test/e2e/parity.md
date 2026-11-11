@@ -17,15 +17,15 @@ The rows were read from the code on 9 Nov 2026, after the bl-lkb ports (#251 to 
 
 | status | rows | meaning |
 | --- | --- | --- |
-| `e2e` | 72 | a case in `test/e2e/cases` proves it against real git, bd and a gate |
+| `e2e` | 73 | a case in `test/e2e/cases` proves it against real git, bd and a gate |
 | `changed` | 0 | a case keeps the Rust name but asserts what the BAML loop does instead; decide, then rename it and drop the row, or fix the loop |
 | `core` | 12 | the loop does it, but only a FakeWorld test proves it; 9 of these cross the world, which FakeWorld cannot see |
 | `untested` | 10 | the code is there, and no test covers it |
-| `missing` | 15 | the loop does not do it |
+| `missing` | 14 | the loop does not do it |
 | `dropped` | 29 | removed on purpose: opencode, aider, stamps, stats, bench, `[[lanes]]`, seats ([config.md](../../docs/config.md#not-read)), and the hold backoff (11 Nov) |
 | `moot` | 10 | the design makes the failure impossible |
 
-That leaves 37 rows to prove or build: none is P1, 20 are P2 and 17 P3. `port` is P1
+That leaves 36 rows to prove or build: none is P1, 19 are P2 and 17 P3. `port` is P1
 when the live config uses the behaviour and getting it wrong wastes rounds, loses work,
 or merges the wrong thing. P2 means it is used but cheap to notice. P3 is an edge case,
 or unused. `seam` is yes when the behaviour crosses git, bd, gh, Claude, a model server,
@@ -140,7 +140,7 @@ each re-checked:
 | 61 | `case_adopts_foreign_bead_prs` | a green bead/ID-slug PR from elsewhere is merged, its bead closed; others ignored | e2e | yes | - | case_adopts_foreign_bead_prs (adopt.sh); a bead/ID-slug branch keeps the slug in the id (adopt.sh header) |
 | 62 | `case_adopted_prs_do_not_block_new_work` | an adopted PR pending CI is tracked but not counted toward max_inflight | e2e | no | - | case_adopted_prs_do_not_block_new_work (adopt.sh) |
 | 63 | `case_adopt_off` | adopt = false leaves other people's bead PRs alone | e2e | no | - | case_adopt_off (adopt.sh) |
-| 64 | `case_closes_bead_merged_outside_the_loop` | a ready bead whose PR merged outside the loop is closed with the url | missing | yes | P2 | not ported: only a parked bead's merged PR closes it (adopt.sh header, supervisor.baml:326); the bead is worked again |
+| 64 | `case_closes_bead_merged_outside_the_loop` | a ready bead whose PR merged outside the loop is closed with the url | e2e | yes | - | case_closes_bead_merged_outside_the_loop (adopt.sh) |
 | 65 | `case_parked_bead_whose_pr_merged` | a parked bead's open PR is not adopted; once merged, bead closed, branches gone | e2e | yes | - | case_parked_bead_whose_pr_merged (adopt.sh) |
 | 66 | `case_status_lists_worktree_sessions` | status lists opencode sessions per worktree; ORPHAN with abort hint | dropped | yes | - | config.md Not read: `attach`; the opencode server is gone (#225) |
 | 67 | `case_rejoined_session_is_not_an_orphan` | a session marked for rejoin shows REJOIN, not ORPHAN | dropped | yes | - | config.md Not read: `attach`; design-baml-native.md: the rejoin protocol is gone |
