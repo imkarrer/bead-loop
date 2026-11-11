@@ -5,7 +5,8 @@
 #                                          answer TEXT as the session's result
 #   {"exit": N, "stderr": "TEXT"}          the CLI failing
 # Its arguments, one per line, are kept as $E2E_CTRL/claude/argv-NNN; its prompt (stdin,
-# when the client sends one) as prompt-NNN.
+# when the client sends one) as prompt-NNN; the background and Bash timeout variables it
+# was run with as env-NNN.
 set -euo pipefail
 C=$E2E_CTRL/claude
 mkdir -p "$C/replies/used"
@@ -13,6 +14,7 @@ mkdir -p "$C/replies/used"
 n=$(( $(find "$C" -maxdepth 1 -name 'argv-*' | wc -l) + 1 ))
 id=$(printf '%03d' "$n")
 printf '%s\n' "$@" >"$C/argv-$id"
+env | grep -E '^(CLAUDE_CODE_DISABLE_BACKGROUND_TASKS|BASH_DEFAULT_TIMEOUT_MS|BASH_MAX_TIMEOUT_MS)=' | sort >"$C/env-$id" || true
 [ -t 0 ] || cat >"$C/prompt-$id"
 f=$(find "$C/replies" -maxdepth 1 -name '*.json' | sort | head -1)
 [ -n "$f" ] || { echo "stub claude: the script ran out" >&2; exit 1; }

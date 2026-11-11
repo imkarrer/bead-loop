@@ -32,6 +32,14 @@ function claude_allowed(writes: bool) -> string throws never {
     }
 }
 
+/// A Claude round's Bash: a command waits in the foreground for up to 15 minutes by
+/// default, 30 at most, inside the round's hour. Claude Code moves a command that outlives
+/// its timeout (2 minutes by default) into the background, and a one-turn round then ends
+/// waiting for it with no report: bl-lkb.27, 11 Nov, ran the e2e suite that way. With
+/// background tasks off, a command that times out is stopped instead.
+const CLAUDE_BASH_DEFAULT_MS: int = 900000;
+const CLAUDE_BASH_MAX_MS: int = 1800000;
+
 /// The wrapper's text: the CLI with the allow-list, its stream teed into `log`, its stderr
 /// beside it, and its own exit status.
 function claude_wrapper(log: string, writes: bool) -> string throws never {
@@ -40,6 +48,8 @@ function claude_wrapper(log: string, writes: bool) -> string throws never {
         "#!/bin/sh",
         "# One Claude Code turn for a bead-loop round (baml_src/ns_agents/claude.baml).",
         `log='${log}'`,
+        "# One turn has no later turn to read a background command: none, and long timeouts.",
+        `export CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 BASH_DEFAULT_TIMEOUT_MS=${CLAUDE_BASH_DEFAULT_MS} BASH_MAX_TIMEOUT_MS=${CLAUDE_BASH_MAX_MS}`,
         `{ claude "$@" '--allowedTools=${allowed}' --strict-mcp-config 2>>"$log.err"; echo $? >"$log.rc"; } | tee -a "$log"`,
         `exit "$(cat "$log.rc" 2>/dev/null || echo 1)"`,
         "",
@@ -135,6 +145,10 @@ test "the wrapper tees the stream into the log and keeps the CLI's status" {
     assert.contains(w, "log='/s/logs/x.1.Work.jsonl'");
     assert.contains(w, "'--allowedTools=Read(./**),Edit(./**),Write(./**),Glob,Grep,Bash'");
     assert.contains(w, "| tee -a \"$log\"");
+    assert.contains(
+        w,
+        "export CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 BASH_DEFAULT_TIMEOUT_MS=900000 BASH_MAX_TIMEOUT_MS=1800000",
+    );
     assert.contains(w, "exit \"$(cat \"$log.rc\"")
 }
 
