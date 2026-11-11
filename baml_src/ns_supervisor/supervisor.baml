@@ -453,7 +453,9 @@ const RESET_SLACK: int = 60;
 /// `usage limit reached|<unix seconds>`. A time of day is the next one within six hours
 /// (a session limit lasts five), so it reads the same after a restart: one more than
 /// six hours ahead is one that has just passed. The bl-lkb beads (9 Nov) met a limit that
-/// reset at 00:40 and were held to 01:06 by the fixed half hour.
+/// reset at 00:40 and were held to 01:06 by the fixed half hour. A weekly limit states the
+/// same bare time of day up to a day ahead, so one more than six hours ahead is null, not
+/// just-passed: the half-hour retry holds it instead.
 function reset_left(words: string, now: int) -> int? throws never {
     if (words.includes("limit reached|")) {
         let digits = (words.split("limit reached|").at(1) ?? "").split(" ").at(0) ?? "";
@@ -478,7 +480,11 @@ function reset_left(words: string, now: int) -> int? throws never {
         let day = 86400;
         let ahead = ((t + RESET_SLACK - now % day) % day + day) % day;
         if (ahead > 6 * 3600) {
-            0
+            if (words.includes("weekly limit")) {
+                null
+            } else {
+                0
+            }
         } else {
             ahead
         }

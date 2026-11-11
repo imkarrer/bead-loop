@@ -934,6 +934,24 @@ test "a usage limit is held until the reset it states" {
     assert.equal(clock_seconds("13:00pm") == null, true)
 }
 
+test "a weekly limit far from its reset is tried on the half hour" {
+    // 00:36:31 UTC, 9 Nov: the same now as the limit bl-lkb.1 met.
+    let now = 1794184591;
+    assert.equal(
+        reset_left("usage limit on claude: You've hit your weekly limit · resets 9am (UTC)", now)
+            == null,
+        true,
+    );
+    assert.equal(
+        reset_left("usage limit on claude: You've hit your weekly limit · resets 3am (UTC)", now),
+        8669,
+    );
+    assert.equal(
+        reset_left("usage limit on claude: You've hit your session limit · resets 9am (UTC)", now),
+        0,
+    );
+}
+
 test "a test tally is its round records and nothing else" {
     let t = tally_of(
         "t-1",

@@ -32,8 +32,9 @@ other than the loop's account do the same, with the comments as the order. And
 **infrastructure is never the bead's failure**: setup failing, git refusing the worktree,
 a session that returns nothing from the model, `gh` or the push refusing, a usage limit.
 The round did not happen. The bead stays where it is, **held** with the reason, and is
-tried again a few ticks later (a usage limit: a minute past the reset it states, or half
-an hour when it states none, and every round on that provider waits with it). A harness that fails five times in a row, with nothing else
+tried again a few ticks later (a usage limit: a minute past the reset it states, half an
+hour when it states none, or half an hour when a weekly limit states a reset more than six
+hours off, and every round on that provider waits with it). A harness that fails five times in a row, with nothing else
 between, parks the bead with its words: it is broken, and retrying all night fixes nothing.
 
 The failure count chooses the **stage** ([config.md](config.md#stages)). Ready beads go
