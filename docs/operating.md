@@ -32,12 +32,12 @@ fails when they differ). It reads `/api/status` every five seconds. Top to botto
   passed the gate, **Ready for PR** (the branch pushed, the bead ready for PR); each bead
   ready for PR with its compare link, the PR's title and body to edit, and **Open PR**;
   each held bead with its reason.
-- **Supervisor log**: the loop's journal.
+- **Supervisor log**: the loop's own lines, the tail of each repo's `STATE/loop.log`.
 
 Each supervisor writes what the page shows to `STATE/view.json` every tick: its beads
 from its own state (their places, holds, titles, rounds in flight and their last tool
 calls) and the scoreboard's tallies. The page reads those files and adds only the
-config, the lane slots, systemd and the journal: it folds no log and asks neither bd,
+config, the lane slots, systemd and each `STATE/loop.log`: it folds no log and asks neither bd,
 git nor gh, so what it shows is what the loop holds, as of its last tick. Its levers are
 mail in the repo's inbox (answer, reopen, escalate, ready, publish; abort a round; note a
 bead), and `systemctl --user` for the loop's own units. Mail wakes the loop within a
@@ -49,7 +49,7 @@ browser cannot pull a lever.
 ## The terminal
 
 ```bash
-journalctl --user -u bead-supervisor.service -f -o cat     # the loop's own lines
+tail -f ~/.local/state/bead-loop/<repo>/baml/loop.log     # the loop's own lines (the packed binary writes none to the journal)
 bead-supervisor tell --config_file ~/src/repo/.bead-loop.toml --id ID --what answer --text "..."
 bead-supervisor lint --config_file ~/src/repo/.bead-loop.toml --ids "ID ID" --run true
 cat ~/.local/state/bead-loop/<repo>/baml/beads/<id>/events.jsonl   # one bead's history, each event with its time

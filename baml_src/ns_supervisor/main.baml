@@ -67,7 +67,7 @@ function world_of(c: LoopConfig) -> root.world.LiveWorld throws never {
 }
 
 function start_config(c: LoopConfig, group: string) -> Supervisor throws never {
-    let s = recover(world_of(c), FileLog { state: c.state }, c.policy);
+    let s = recover(world_of(c), FileLog { state: c.state }, c.policy, group = group);
     s.lanes = c.lanes;
     s.capacity = c.capacity;
     s.max_inflight = c.max_inflight;

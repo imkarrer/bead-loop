@@ -16,14 +16,14 @@ class FileLog {
             };
             let json = baml.json.stringify(event) catch_all (e) {
                 _ => {
-                    log.error(`cannot encode an event for ${id}: ${e}`);
+                    self.say("error", `cannot encode an event for ${id}: ${e}`);
                     return;
                 },
             };
             let line = stamped(json, root.supervisor.unix_seconds());
             let wrote = write_line(self.path(id), line) catch_all (e) {
                 _ => {
-                    log.error(`cannot append to ${id}'s log: ${e}`);
+                    self.say("error", `cannot append to ${id}'s log: ${e}`);
                 },
             };
         }
@@ -57,7 +57,7 @@ class FileLog {
                 if (line.length() > 0) {
                     let parsed = decode_line(line) catch_all (e) {
                         _ => {
-                            log.warn(`skipping a bad line in ${id}'s log: ${line}`);
+                            self.say("warn", `skipping a bad line in ${id}'s log: ${line}`);
                             null
                         },
                     };
@@ -106,7 +106,43 @@ class FileLog {
                 _ => null,
             };
         }
+
+        function say(self, level: string, text: string) -> void throws never {
+            let line = loop_line(root.supervisor.unix_seconds(), level, text);
+            let path = `${self.state}/loop.log`;
+            let wrote = write_line(path, line) catch_all (e) {
+                _ => {
+                    // A state dir not made yet (a repo whose config failed): make it, once.
+                    let _ = baml.sys.run("mkdir", args = ["-p", self.state]) catch_all (e2) {
+                        _ => null,
+                    };
+                    let again = write_line(path, line) catch_all (e2) {
+                        _ => null,
+                    };
+                },
+            };
+        }
     }
+}
+
+/// One line of STATE/loop.log: the second, the level, and the text on one line.
+function loop_line(at: int, level: string, text: string) -> string throws never {
+    `${at} ${level} ${text.split("\n").join(" | ")}`
+}
+
+test "a loop log line is the second, the level and the text, on one line" {
+    assert.equal(loop_line(5, "warn", "a\nb"), "5 warn a | b");
+}
+
+test "the file log keeps what the loop says in STATE/loop.log" {
+    let dir = root.tools.scratch("loop-log-test");
+    let _ = baml.sys.run("rm", args = ["-rf", dir]);
+    let log_file = FileLog { state: dir };
+    log_file.say("error", "first");
+    log_file.say("info", "second");
+    let text = baml.fs.read(`${dir}/loop.log`);
+    assert.is_true(text.includes(" error first\n"));
+    assert.is_true(text.includes(" info second\n"));
 }
 
 function write_line(path: string, line: string) -> void {

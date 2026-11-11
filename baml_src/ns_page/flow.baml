@@ -461,32 +461,73 @@ function unit_of(name: string) -> FUnit throws never {
     FUnit { available: active.length() > 0, active: active, since: since, result: result }
 }
 
-/// The loop's journal, one line each with its second: `short-unix` puts it first.
-function journal_of() -> FLog[] throws never {
+/// The loop's own log: the last 200 lines of each repo's STATE/loop.log, merged by time.
+/// Not the journal: the packed binary writes nothing to it (FileLog's `say`).
+function loop_log_of(configs: root.supervisor.LoopConfig[]) -> FLog[] throws never {
     let out: FLog[] = [];
-    let text = shell_out("journalctl --user -u bead-supervisor.service -n 200 --no-pager -o short-unix 2>/dev/null");
-    for (let line in text.split("\n")) {
-        if (line.length() == 0 || line.includes("detect_shell") || line.starts_with("-- ")) {
-            continue;
+    for (let c in configs) {
+        let text = shell_out(`tail -n 200 '${c.state}/loop.log' 2>/dev/null`);
+        for (let line in text.split("\n")) {
+            if let l: FLog = log_line_of(line) {
+                out.push(l);
+            }
         }
-        let stamp = line.split(" ").at(0) ?? "";
-        let secs = (stamp.split(".").at(0) ?? "").trim();
-        let t = baml.json.parse(secs) catch_all (e) {
-            _ => null,
-        };
-        let at = baml.json.to<int>(t) catch_all (e) {
-            _ => 0,
-        };
-        let rest = line.slice(stamp.length(), line.length());
-        let colon = rest.index_of(": ") ?? -1;
-        let msg = if (colon >= 0) {
-            rest.slice(colon + 2, rest.length())
-        } else {
-            rest.trim()
-        };
-        out.push(FLog { t: at, msg: msg });
     }
-    out
+    out.sort_by_key((l) -> {
+        l.t
+    });
+    let n = out.length();
+    if (n > 200) {
+        out.slice(n - 200, n)
+    } else {
+        out
+    }
+}
+
+/// One line of STATE/loop.log (`<second> <level> <text>`) as the page shows it: an
+/// info line is its text, any other level leads with the level.
+function log_line_of(line: string) -> FLog? throws never {
+    let secs = line.split(" ").at(0) ?? "";
+    let level = line.split(" ").at(1) ?? "";
+    if (secs.length() == 0 || level.length() == 0) {
+        return null;
+    }
+    let t = baml.json.parse(secs) catch_all (e) {
+        _ => {
+            return null;
+        },
+    };
+    let at = baml.json.to<int>(t) catch_all (e) {
+        _ => {
+            return null;
+        },
+    };
+    let start = secs.length() + level.length() + 2;
+    let text = if (line.length() > start) {
+        line.slice(start, line.length())
+    } else {
+        ""
+    };
+    let msg = if (level == "info") {
+        text
+    } else {
+        `${level}: ${text}`
+    };
+    FLog { t: at, msg: msg }
+}
+
+test "a loop log line reads back as the page shows it" {
+    assert.equal(
+        log_line_of("100 info bead-loop: t-1: picked")?.msg ?? "",
+        "bead-loop: t-1: picked",
+    );
+    assert.equal(
+        log_line_of("100 error t-1: cannot append")?.msg ?? "",
+        "error: t-1: cannot append",
+    );
+    assert.equal(log_line_of("100 info x")?.t ?? 0, 100);
+    assert.is_true(log_line_of("") == null);
+    assert.is_true(log_line_of("not-a-number info x") == null);
 }
 
 function flow_status(configs: root.supervisor.LoopConfig[]) -> FStatus throws never {
@@ -507,7 +548,7 @@ function flow_status(configs: root.supervisor.LoopConfig[]) -> FStatus throws ne
         repos: repos,
         service: unit_of("bead-supervisor.service"),
         timer: unit_of("bead-supervisor.timer"),
-        log: journal_of(),
+        log: loop_log_of(configs),
         stats: fstats(configs, tallies, now),
         doctor: [],
     }

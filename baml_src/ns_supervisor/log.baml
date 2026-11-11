@@ -12,6 +12,10 @@ interface Log {
     function round_logs(self, id: string) -> string[] throws never;
     /// What the page shows: STATE/view.json.
     function put_view(self, text: string) -> void throws never;
+    /// One line of the loop's own log (level: info, warn or error). A packed binary
+    /// writes nothing to stdout or stderr, so `log.info` never reached the journal: the
+    /// file log keeps these lines in STATE/loop.log, which the page reads.
+    function say(self, level: string, text: string) -> void throws never;
 }
 
 class Entry {
@@ -63,6 +67,9 @@ class MemoryLog {
         }
         function put_view(self, text: string) -> void throws never {
             self.view = text;
+        }
+        function say(self, level: string, text: string) -> void throws never {
+            log.info(`${level}: ${text}`);
         }
     }
 }
