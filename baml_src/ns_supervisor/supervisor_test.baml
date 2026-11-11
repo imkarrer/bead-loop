@@ -4,6 +4,10 @@ function ticket(id: string) -> root.world.Ticket throws never {
     root.world.Ticket { id: id, title: "t", description: "d", acceptance: "a" }
 }
 
+function carried_ticket(id: string) -> root.world.Ticket throws never {
+    root.world.Ticket { id: id, title: "t", description: "d", acceptance: "a", carried: true }
+}
+
 function committed() -> root.machine.Event[] throws never {
     [
         root.machine.Committed { kind: "committed", sha: "s" },
@@ -506,6 +510,35 @@ test "a ready bead that left bd ready is not picked" {
     w.tickets_now = [];
     turn(s, w);
     assert.is_type<root.machine.Ready>(place_of(s));
+    assert.equal(starts(w, "start_round Work devbox/coder"), 1)
+}
+
+test "a labelled bead someone else set in_progress is not picked" {
+    let w = one_bead([committed()], [approved()], [merged()]);
+    w.tickets_now = [carried_ticket("t-1")];
+    let s = Supervisor.new(w, MemoryLog.new(), policy());
+    turns(s, w, 2);
+    assert.equal(s.bead("t-1"), null);
+    assert.equal(starts(w, "start_round Work devbox/coder"), 0)
+}
+
+test "the loop's own in_progress bead is still picked" {
+    let w = one_bead([no_commit(), committed()], [approved()], [merged()]);
+    let s = Supervisor.new(w, MemoryLog.new(), policy());
+    turn(s, w);
+    // bd ready no longer lists it, because the loop set it in_progress.
+    w.tickets_now = [carried_ticket("t-1")];
+    turn(s, w);
+    assert.equal(starts(w, "start_round Work devbox/coder"), 2)
+}
+
+test "an in_progress bead the loop marked is picked after its state is lost" {
+    let w = one_bead([committed()], [approved()], [merged()]);
+    let t = carried_ticket("t-1");
+    t.marked = true;
+    w.tickets_now = [t];
+    let s = Supervisor.new(w, MemoryLog.new(), policy());
+    turn(s, w);
     assert.equal(starts(w, "start_round Work devbox/coder"), 1)
 }
 

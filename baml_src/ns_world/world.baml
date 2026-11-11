@@ -9,6 +9,10 @@ class Ticket {
     acceptance: string,
     /// The stage a `stage:NAME` label starts it on; null without one.
     stage: string?,
+    /// Listed only as in_progress, not by `bd ready`: someone took it, the loop or another.
+    carried: bool?,
+    /// Carries a `loop:` label: the loop moved it before.
+    marked: bool?,
 }
 
 /// The stage a bead's labels name with `stage:NAME`, or null.

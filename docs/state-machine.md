@@ -186,6 +186,7 @@ back to where it was picked from, uncharged.
 | anything else | answer, reopen or escalate | refused, with a note saying why | — |
 | ready | label it `stage:NAME` in bd | ready at that stage's first attempt, as escalate does; never back to an earlier one | set |
 | a bead in bd | close it, block it, defer it, or take its label off | not picked or reviewed again: only what `bd ready` lists, and the loop's own `in_progress`, are. A round already running finishes | — |
+| a labelled bead the loop has never picked | set it in_progress | never picked: the loop carries only the in_progress beads it set itself, by its log or their loop: label; set it open to give it to the loop | — |
 
 ## Not built
 
