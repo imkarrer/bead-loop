@@ -77,8 +77,23 @@ function start_config(c: LoopConfig, group: string) -> Supervisor throws never {
     s
 }
 
-/// A repo's supervisor and one for each of its targets, all in the repo's group.
+/// A repo's supervisor and one for each of its targets, all in the repo's group. A
+/// config that does not parse is never run on defaults (merge = "auto", no gate): the
+/// repo gets no supervisor at all, and its STATE/loop.log says why (bl-lkb.24).
 function start_all(config_file: string) -> Supervisor[] {
+    if (config_file.ends_with(".toml")) {
+        let repo = parent_dir(config_file);
+        for (let path in [config_file, global_config_path()]) {
+            if let problem: string = toml_problem(read_or_empty(path)) {
+                let none: Supervisor[] = [];
+                FileLog { state: state_of(repo) }.say(
+                    "error",
+                    `${path} does not parse, so the loop leaves ${repo} alone: ${problem}`,
+                );
+                return none;
+            }
+        }
+    }
     let c = load_config(config_file);
     let out: Supervisor[] = [start_config(c, c.repo)];
     if (config_file.ends_with(".toml")) {

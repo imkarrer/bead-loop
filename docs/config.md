@@ -10,6 +10,9 @@ The loop reads both when it starts (`baml_src/ns_supervisor/config.baml`), so an
 takes effect at the next start: `systemctl --user restart bead-supervisor.service`, or
 Restart on the page. Rounds in flight keep running through it.
 
+A file that does not parse is never read as defaults: the loop leaves that repo, and its
+targets, alone, and logs the file and the parse error in the repo's `STATE/loop.log`.
+
 A model is named `PROVIDER/MODEL`. `claude/*` is one Claude Code turn with Claude's own
 tools; any other runs `MODEL` on that provider's OpenAI-compatible server
 (`[providers.NAME] url`), with the loop's own tools.

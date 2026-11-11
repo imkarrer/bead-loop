@@ -283,23 +283,46 @@ function read_or_empty(path: string) -> string throws never {
     }
 }
 
-/// `bead-loop run --config_file REPO/.bead-loop.toml`. The global file, when it
-/// is there, supplies the stages. State lands beside the Rust loop's state.
-function config_from_toml_file(path: string) -> LoopConfig throws never {
-    let repo = parent_dir(path);
+/// Where a repo's state lives: beside the Rust loop's state, under HOME.
+function state_of(repo: string) -> string throws never {
     let home = home_dir();
-    let state = if (home.length() > 0) {
+    if (home.length() > 0) {
         `${home}/.local/state/bead-loop/${repo_name(repo)}/baml`
     } else {
         `${repo}/.bead-loop-state`
+    }
+}
+
+/// The global config file every repo's config is read with.
+function global_config_path() -> string throws never {
+    `${home_dir()}/.config/bead-loop/config.toml`
+}
+
+/// `bead-loop run --config_file REPO/.bead-loop.toml`. The global file, when it
+/// is there, supplies the stages.
+function config_from_toml_file(path: string) -> LoopConfig throws never {
+    let repo = parent_dir(path);
+    config_from_toml(read_or_empty(path), read_or_empty(global_config_path()), repo, state_of(repo), own_exe())
+}
+
+/// Why a TOML file does not parse, or null: an empty file, or one that parses, has no
+/// problem. A file with one is never read as defaults (`start_all`).
+function toml_problem(text: string) -> string? throws never {
+    if (text.trim().length() == 0) {
+        return null;
+    }
+    let parsed = baml.toml.Table.parse(text) catch_all (e) {
+        _ => {
+            return `${e}`;
+        },
     };
-    config_from_toml(
-        read_or_empty(path),
-        read_or_empty(`${home}/.config/bead-loop/config.toml`),
-        repo,
-        state,
-        own_exe(),
-    )
+    null
+}
+
+test "a file that does not parse is a problem, an empty one is not" {
+    assert.is_true(toml_problem("") == null);
+    assert.is_true(toml_problem("merge = \"auto\"\n") == null);
+    assert.is_true(toml_problem("merge = \"auto\n") != null);
 }
 
 function load_config(path: string) -> LoopConfig {
