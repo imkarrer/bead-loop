@@ -11,12 +11,6 @@
 # it falls through to the same empty-rollup path as `MERGEABLE`, so it would be held same
 # as a true nocheck. That is a gap, not this file's to fix (its own bead).
 #
-# case_conflict_pr_closed_parks is not ported: the Rust loop checks a conflicting PR's
-# state before ever starting the rebase round, and parks once if it is already closed
-# (bl-eoq, 21 Sep). The BAML loop's `start_work` (ns_supervisor/supervisor.baml) starts
-# the rebase round unconditionally; nothing reads the PR first. Porting the case as
-# written would be asserting a bug, not proving a feature.
-#
 # case_merge_pipeline_label_missing is not ported: it needs `gh pr edit --add-label` to
 # fail, and the gh stub (test/e2e/bin/gh) has no control for that — a helper for it would
 # have to live in the stub, not here, and this bead's files are this one alone.
@@ -253,4 +247,23 @@ case_conflicting_pr_rebased_by_the_last_stage() {
   assert_match "$(cat "$E2E_CTRL/claude/prompt-001")" "Rebase this branch onto the base" "with the rebase order"
   assert_eq "$(view_bead .place)" merge "back in the merge queue"
   assert_eq "$(grep -c '^pr create' "$E2E_CTRL/gh/calls")" 1 "the same PR, updated"
+}
+
+# A conflict's rebase round is approved after the PR it is for has been closed: the push
+# checks that PR first, finds it closed, and parks instead of opening a second one.
+case_conflict_pr_closed_parks() {
+  setup 'test -e work.txt'
+  echo '[{"context":"ci","state":"PENDING"}]' >"$E2E_CTRL/gh/checks.json"
+  land_pr
+  set_pr '.[0].mergeable = "CONFLICTING"'
+  reply coder '{"tool":"run","args":{"command":"echo rebased >> work.txt && git add -A && git commit -qm rebase"}}' "$(done_report)"
+  reply reviewer "$(approve)"
+  until_event conflicting 30 || bad "not seen as conflicting: $(events)"
+  local url
+  url=$(jq -r '.[0].url' "$E2E_CTRL/gh/prs.json")
+  set_pr '.[0].state = "CLOSED"'
+  until_place parked 60 || bad "never parked: $(events)"
+  assert_eq "$(grep -c '^pr create' "$E2E_CTRL/gh/calls")" 1 "no second PR for the closed one"
+  assert_eq "$(bd_field status)" blocked "bd says blocked"
+  assert_match "$(bd_field notes)" "$url" "the closed PR's url is named"
 }

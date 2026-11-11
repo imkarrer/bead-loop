@@ -371,13 +371,19 @@ function on_reviewing(b: Bead, e: Event, p: Policy) -> Step throws never {
             let effects: Effect[] = if (p.ask_before_pr) {
                 [PushBranch {}]
             } else {
-                [PushAndOpenPr { title: null, body: null }]
+                [PushAndOpenPr { title: null, body: null, was: b.pr }]
             };
             let n = b.copy();
             n.rebutted = false;
             Step { bead: n, effects: effects }
         },
         let x: PrOpened => opened(b, x, p),
+        let x: PrClosed => {
+            let n = b.copy();
+            n.pr = null;
+            park(n, `PR closed unmerged while its round ran: ${x.url}`)
+        },
+        let x: PrMerged => closed(b, x.url),
         let x: BranchPushed => {
             stay(b.at(Publishable { kind: "publishable", compare_url: x.compare_url }))
         },
@@ -407,7 +413,10 @@ function on_publishable(b: Bead, e: Event, p: Policy) -> Step throws never {
         let x: PrRequested => {
             Step {
                 bead: b,
-                effects: [Note { text: "you opened the PR" }, PushAndOpenPr { title: x.title, body: x.body }],
+                effects: [
+                    Note { text: "you opened the PR" },
+                    PushAndOpenPr { title: x.title, body: x.body, was: null },
+                ],
             }
         },
         _ => elsewhere(b, e),

@@ -298,10 +298,13 @@ class WriteParkBrief {
     because: string,
 }
 
-/// Push and open the PR; with a title, the one you gave, else the bead's.
+/// Push and open the PR; with a title, the one you gave, else the bead's. `was` is the
+/// PR the bead had, if any: checked just before the push, so a round that closes while
+/// it ran does not get a second one.
 class PushAndOpenPr {
     title: string?,
     body: string?,
+    was: string?,
 }
 
 /// open_pr = "ask": push the branch and stop short of a PR, for you to open.

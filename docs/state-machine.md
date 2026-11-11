@@ -165,6 +165,7 @@ is **lost**: back to where it was picked from, uncharged.
 | A parked bead's `bead/ID` PR, opened or merged by hand | open: merging, as above; merged: closed, the bead closed in bd with the url | deleted |
 | PR merged | closed, the bead closed in bd with the url | deleted |
 | PR closed unmerged | parked, the url in the question | gone |
+| PR closed while a rebase or feedback round ran | parked once the round is approved, the url in the question; no new PR | gone |
 | Stages exhausted (`on_exhaust = "park"`) | parked | removed |
 | The last stage says BLOCKED after an earlier round's work passed the gate | parked | kept, for a publish |
 | A round's process gone with no result | lost: back where it was picked from, **no failure** | as it was |

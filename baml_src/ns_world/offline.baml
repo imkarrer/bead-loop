@@ -228,7 +228,8 @@ class OfflineWorld {
             id: string,
             title: string?,
             body: string?,
-        ) -> root.machine.PrOpened throws root.machine.Infra {
+            was: string?,
+        ) -> root.machine.Event throws root.machine.Infra {
             let head = self.run_git(["rev-parse", "HEAD"], self.worktree(id)).trim();
             root.machine.PrOpened { kind: "pr_opened", url: `bench://${id}`, head: head }
         }
@@ -418,7 +419,10 @@ test "a bench PR is local, not github" {
         `{"id":"t-1","title":"t","description":"d","acceptance":"a","repo":"/tmp/x","base":"HEAD","gate":"true"}`,
     );
     let w = OfflineWorld.new(c, root.tools.scratch("offline"), "/bin/false");
-    let opened = w.push_and_open_pr("t-1", null, null);
-    assert.equal(opened.url, "bench://t-1");
-    assert.is_type<root.machine.ChecksGreen>(w.observe_pr("t-1", opened.url).at(0));
+    let opened = w.push_and_open_pr("t-1", null, null, null);
+    assert.is_type<root.machine.PrOpened>(opened);
+    if let o: root.machine.PrOpened = opened {
+        assert.equal(o.url, "bench://t-1");
+        assert.is_type<root.machine.ChecksGreen>(w.observe_pr("t-1", o.url).at(0));
+    }
 }
