@@ -102,8 +102,9 @@ it is held; a researcher past it lets the worker go without a brief.
 
 - `beads/<id>/events.jsonl` — the bead's log, the source of truth: its state is a fold
   of these events. Beside it `report` (the worker's last words, for the reviewer),
-  `brief` (the researcher's), `park.md` (a parking's question) and `watch.json` (the PR
-  watcher's clocks and the newest comment seen).
+  `brief` (the researcher's), `park.md` (a parking's question), `watch.json` (the PR
+  watcher's clocks and the newest comment seen) and `uncommitted.patch` (what a round
+  left uncommitted when its worktree was removed: `git apply` it in a fresh one).
 - `rounds/<id>.{spec.json,pid,result.json,timedout}` — a round in flight and what it
   left.
 - `wt/<id>` — the bead's worktree, on branch `bead/<id>`.

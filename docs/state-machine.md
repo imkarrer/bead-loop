@@ -19,7 +19,8 @@ Three things end a round early and send the bead **back to ready**, with a note 
 bead saying what happened and **one more failure** on its count:
 
 - the work round: the worker reports blocked, makes no commit, times out, crashes, or
-  the gate fails twice. The branch is removed and the next round starts fresh.
+  the gate fails twice. The branch is removed and the next round starts fresh. A change
+  the round left uncommitted is saved first, as a patch beside the bead's log.
 - the pre-check says SEND BACK, or the reviewer rejects. The branch is *kept*, and the
   next worker fixes its commit in place.
 - the merge queue: CI red. Same branch, kept; the next round's push updates the PR.
@@ -52,7 +53,7 @@ The loop's state is its event log. A bead's place is a fold of its events:
 | where | what |
 | --- | --- |
 | `STATE/beads/ID/events.jsonl` | every event, in order, each with `at` (the second it was written). The source of truth: a restart folds it again |
-| `STATE/beads/ID/{brief,report,park.md,watch.json}` | the researcher's brief (every worker prompt carries it), the worker's last report (for the reviewer), a parking's question, the PR watcher's clocks |
+| `STATE/beads/ID/{brief,report,park.md,watch.json,uncommitted.patch}` | the researcher's brief (every worker prompt carries it), the worker's last report (for the reviewer), a parking's question, the PR watcher's clocks, and what the last removed worktree held uncommitted |
 | `STATE/rounds/ID.{spec.json,pid,result.json,timedout}` | a round in flight: what it was given, its process, what it found, and whether its time ran out |
 | `STATE/wt/ID`, branch `bead/ID` | the work |
 | `STATE/inbox/` | your answers, reopens and escalations, taken on the next tick |
@@ -130,7 +131,7 @@ is **lost**: back to where it was picked from, uncharged.
 | … the second opinion writes a brief | ready, **no failure** | stays |
 | … the second opinion is blocked too | parked before any edit | removed |
 | No brief yet, and the worker's server has a slot | worked without one: the GPU never waits on the CPU | as any work round |
-| Worker blocked | +1 failure; ready, or parked at the last stage | removed |
+| Worker blocked | +1 failure; ready, or parked at the last stage | removed; what the round left uncommitted is saved first as `STATE/beads/ID/uncommitted.patch`, and a note on the bead says so |
 | No commit, timed out, ran out of steps, worker crashed | +1 failure; ready | removed |
 | Done with no new commit, on a branch that already holds work, and the gate still passes | **rebutted**: back to review, **no failure**, the report as the rebuttal, reviewed by the last stage's reviewer | kept |
 | Worker reports done with its change uncommitted | the round commits it, and the gate decides | — |
