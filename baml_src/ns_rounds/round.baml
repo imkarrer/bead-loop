@@ -483,23 +483,27 @@ function research_round(spec: RoundSpec) -> root.machine.Event[] throws never {
             return out;
         },
     };
-    if (result.outcome == "brief" && spec.brief_file.length() > 0) {
+    let second = spec.note.starts_with("BLOCKED:");
+    let read = root.tools.probes();
+    let event = unread_block(root.agents.research_outcome(result, second), read);
+    if (result.outcome == "brief" && spec.brief_file.length() > 0 && read > 0) {
         let _ = baml.fs.write(spec.brief_file, root.agents.brief_text(result)) catch_all (e) {
             _ => null,
         };
     }
-    let second = spec.note.starts_with("BLOCKED:");
-    [unread_block(root.agents.research_outcome(result, second), root.tools.probes())]
+    [event]
 }
 
-/// A BLOCK from a researcher that read nothing is no brief: the worker goes, and a
-/// worker's own BLOCKED needs the file and line. bl-dze.6's researcher (8 Nov) answered
-/// "insights.baml: no `lane_wait` function found" on its first call, with no read, of a
-/// file that defines it; its second opinion did the same, and the bead parked.
+/// Any answer from a researcher that read nothing is no brief: the worker goes, and a
+/// worker's own BLOCKED needs the file and line, and a brief written on guesswork
+/// restates the bead under <research> instead of helping. bl-dze.6's researcher (8 Nov)
+/// answered "insights.baml: no `lane_wait` function found" on its first call, with no
+/// read, of a file that defines it; its second opinion did the same, and the bead
+/// parked. 39 of 45 research rounds on 8-11 Nov made no tool call at all.
 /// `read` is the round's reads, searches and listings: a researcher never edits, so the
 /// probe count is all of them.
 function unread_block(e: root.machine.Event, read: int) -> root.machine.Event throws never {
-    if (e is root.machine.ResearchBlocked && read == 0) {
+    if (read == 0) {
         root.machine.BriefWritten { kind: "brief_written", overruled: false, text: "" }
     } else {
         e
@@ -521,6 +525,22 @@ test "a research BLOCK with nothing read is no brief, and one after reading stan
     assert.is_type<root.machine.ResearchBlocked>(unread_block(blocked, 3));
     let brief = root.machine.BriefWritten { kind: "brief_written", overruled: false, text: "x" };
     assert.is_type<root.machine.BriefWritten>(unread_block(brief, 0));
+}
+
+test "a brief with nothing read is no brief" {
+    let brief = root.machine.BriefWritten { kind: "brief_written", overruled: false, text: "x" };
+    let unread = unread_block(brief, 0);
+    if let b: root.machine.BriefWritten = unread {
+        assert.equal(b.text, "");
+    } else {
+        assert.is_true(false);
+    }
+    assert.is_type<root.machine.BriefWritten>(unread_block(brief, 3));
+    if let kept: root.machine.BriefWritten = unread_block(brief, 3) {
+        assert.equal(kept.text, "x");
+    } else {
+        assert.is_true(false);
+    }
 }
 
 /// The process entry: `bead-agent round --spec_file PATH`, started in the worktree, since

@@ -179,6 +179,19 @@ case_unread_research_block_is_no_brief() {
   assert_nomatch "$(events)" "research_blocked" "a BLOCK from nothing read"
 }
 
+# A brief written with nothing read is no brief either: the worker goes without it,
+# rather than get a brief that only restates the bead.
+case_unread_brief_is_no_brief() {
+  GLOBAL_EXTRA=$'research = "first"\nresearch_model = "fake/researcher"' setup 'test -e work.txt'
+  reply researcher '{"content":"{\"outcome\":\"brief\",\"files\":\"work.txt: append one line\",\"shape\":\"append a line to work.txt\",\"check\":\"test -e work.txt\",\"pitfalls\":\"none\"}"}'
+  reply coder "$(write_work)" "$(commit)" "$(done_report)"
+  reply reviewer "$(approve)"
+  until_event committed 90 || bad "the worker never ran: $(events)"
+  assert_match "$(events)" "research_picked brief_written picked" "research, then the worker"
+  [ ! -e "$(STATE)/beads/$BEAD/brief" ] && ok || bad "a brief kept with nothing read"
+  assert_nomatch "$(cat "$E2E_CTRL"/requests/*.json)" "</research>" "no brief carried to the worker"
+}
+
 # A researcher that read the code and found a false claim still blocks, and its second
 # opinion is asked.
 case_read_research_block_stands() {

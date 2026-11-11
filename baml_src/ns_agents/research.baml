@@ -23,6 +23,9 @@ const RESEARCH_CHARTER: string = `
     bead makes against the code. A false claim the bead cannot be done with means you
     stop and report blocked, naming the file and line.
 
+    Read every file the bead names before you answer. An answer given before any read is
+    discarded.
+
     When the prompt carries a previous brief and a send-back note, refine the brief so
     the next round does not fail the same way. Keep what was right.
 `;

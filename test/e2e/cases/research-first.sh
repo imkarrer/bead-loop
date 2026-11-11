@@ -25,7 +25,8 @@ assert_nofile() { [ -e "$1" ] && bad "$2" || ok; }
 # goes to beads/ID/brief, the bead back to the queue, and the worker's prompt carries it.
 case_research_round_before_the_worker() {
   GLOBAL_EXTRA=$'research = "first"\nresearch_model = "fake/researcher"' setup 'test -e work.txt'
-  reply researcher '{"content":"{\"outcome\":\"brief\",\"files\":\"work.txt: append one line\",\"shape\":\"append a line to work.txt\",\"check\":\"test -e work.txt\",\"pitfalls\":\"none - trivial change\"}"}'
+  reply researcher '{"tool":"read_file","args":{"path":"README"}}' \
+    '{"content":"{\"outcome\":\"brief\",\"files\":\"work.txt: append one line\",\"shape\":\"append a line to work.txt\",\"check\":\"test -e work.txt\",\"pitfalls\":\"none - trivial change\"}"}'
   reply coder "$(write_work)" "$(commit)" "$(done_report)"
   reply reviewer "$(approve)"
   until_event pr_merged 90 || bad "never merged: $(events)"
@@ -61,6 +62,7 @@ case_research_second_opinion_overrules_a_block() {
   GLOBAL_EXTRA=$'research = "first"\nresearch_model = "fake/researcher"' setup 'test -e work.txt'
   reply researcher '{"tool":"read_file","args":{"path":"README"}}' \
     '{"content":"{\"outcome\":\"blocked\",\"files\":\"\",\"shape\":\"\",\"check\":\"\",\"pitfalls\":\"\",\"line\":\"BLOCKED: work.txt is not the file the bead means\"}"}' \
+    '{"tool":"read_file","args":{"path":"README"}}' \
     '{"content":"{\"outcome\":\"brief\",\"files\":\"work.txt: append one line\",\"shape\":\"append a line to work.txt\",\"check\":\"test -e work.txt\",\"pitfalls\":\"none\"}"}'
   reply coder "$(write_work)" "$(commit)" "$(done_report)"
   reply reviewer "$(approve)"
