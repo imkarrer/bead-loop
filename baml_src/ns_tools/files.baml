@@ -34,7 +34,37 @@ function already_read(path: string, offset: int) -> bool throws never {
     let text = baml.fs.read(seen_path()) catch_all (e) {
         _ => "",
     };
-    text.split("\n").includes(`${path}\t${offset}`)
+    let target = `${path}\t${offset}`;
+    let edited_line = `${path}\tedited`;
+    let lines = text.split("\n");
+    let seen = false;
+    let i = 0;
+    while (i < lines.length()) {
+        let line = lines.at(i) ?? "";
+        if (line == target) {
+            seen = true;
+        } else if (line == edited_line) {
+            seen = false;
+        }
+        i = i + 1;
+    }
+    seen
+}
+
+/// A write that leaves the record's earlier reads of `path` stale: appends one line so a
+/// later read sees them as unread, without rewriting what came before (bl-gc1.3, 11 Nov).
+function forget_path(path: string) -> void throws never {
+    let out = baml.fs.open(seen_path(), "a") catch_all (e) {
+        _ => {
+            return;
+        },
+    };
+    let _ = out.write(`${path}\tedited\n`) catch_all (e) {
+        _ => 0,
+    };
+    let _ = out.close() catch_all (e) {
+        _ => null,
+    };
 }
 
 /// Drop the session's read memory. Compaction has removed those tool results from
@@ -246,6 +276,7 @@ function write_file(path: string, content: string) -> string throws never {
             return `cannot write ${path}: ${e}`;
         },
     };
+    forget_path(path);
     `wrote ${n} bytes to ${path}`
 }
 
@@ -300,6 +331,7 @@ function replace_once(
             return `cannot write ${path}: ${e}`;
         },
     };
+    forget_path(path);
     `edited ${path}${how}`
 }
 
@@ -513,6 +545,19 @@ test "a second read of the same lines is a stub" {
     let _ = baml.fs.write(p, "alpha\nbeta\n");
     assert.contains(read_file(p), "alpha");
     assert.contains(read_file(p), "already read this session");
+    let _ = baml.fs.remove(p);
+}
+
+test "an edit lets the file be read again" {
+    let p = root.tools.scratch("read-edit.txt");
+    let _ = baml.fs.write(p, "alpha\nbeta\n");
+    assert.contains(read_file(p), "alpha");
+    assert.contains(read_file(p), "already read");
+    let _ = edit_file(p, "beta", "gamma");
+    let third = read_file(p);
+    assert.contains(third, "gamma");
+    assert.is_true(!third.includes("already read"));
+    assert.contains(read_file(p), "already read");
     let _ = baml.fs.remove(p);
 }
 
