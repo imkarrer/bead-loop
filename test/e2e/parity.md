@@ -17,15 +17,15 @@ The rows were read from the code on 9 Nov 2026, after the bl-lkb ports (#251 to 
 
 | status | rows | meaning |
 | --- | --- | --- |
-| `e2e` | 70 | a case in `test/e2e/cases` proves it against real git, bd and a gate |
+| `e2e` | 72 | a case in `test/e2e/cases` proves it against real git, bd and a gate |
 | `changed` | 2 | a case keeps the Rust name but asserts what the BAML loop does instead |
-| `core` | 13 | the loop does it, but only a FakeWorld test proves it; 9 of these cross the world, which FakeWorld cannot see |
+| `core` | 12 | the loop does it, but only a FakeWorld test proves it; 9 of these cross the world, which FakeWorld cannot see |
 | `untested` | 10 | the code is there, and no test covers it |
-| `missing` | 16 | the loop does not do it |
+| `missing` | 15 | the loop does not do it |
 | `dropped` | 27 | removed on purpose: opencode, aider, stamps, stats, bench, `[[lanes]]`, seats ([config.md](../../docs/config.md#not-read)) |
 | `moot` | 10 | the design makes the failure impossible |
 
-That leaves 41 rows to prove, build or decide: 2 are P1, 22 P2 and 17 P3. `port` is P1
+That leaves 39 rows to prove, build or decide: none is P1, 22 are P2 and 17 P3. `port` is P1
 when the live config uses the behaviour and getting it wrong wastes rounds, loses work,
 or merges the wrong thing. P2 means it is used but cheap to notice. P3 is an edge case,
 or unused. `seam` is yes when the behaviour crosses git, bd, gh, Claude, a model server,
@@ -35,17 +35,7 @@ the gate, a process or a restart.
 
 These differ from the Rust loop today, and each one was checked in the code.
 
-1. **A red PR under `merge = "pipeline"` can rebuild forever** (row 32). When CI is red
-   on a head that has already been charged, `red()` relabels (`step.baml:480`) with no
-   count. After a fix round that commits nothing, every red re-run starts another build
-   and is never charged. Rust charged the re-run's red. The port,
-   `case_ci_red_unchanged_head_reruns`, checks the relabel and leaves that assertion out.
-   bead-loop and inquire-platform merge by pipeline.
-2. **A `.bead-loop.toml` that does not parse reads as empty** (row 50).
-   `config_from_toml` turns the parse error into an empty table (`config.baml:201`), so
-   the repo runs with `merge = "auto"` and no gate or setup. In preservation-workbench,
-   which merges `manual` and `external`, one typo would turn on auto-merge. Rust stopped.
-3. **Two cases now assert the new hold behaviour under the Rust names** (rows 112, 113,
+1. **Two cases now assert the new hold behaviour under the Rust names** (rows 112, 113,
    and 94). A held bead is retried every 5 ticks and noted each time, and five holds in
    a row park it (`step.baml:7`, `:75`). So a model server, or a signed-out Claude, that
    is down for five retries parks every bead that tries it. Rust doubled the backoff,
@@ -53,21 +43,23 @@ These differ from the Rust loop today, and each one was checked in the code.
    rather than port a case the loop fails; it rewrote the assertions instead, so the
    gate now defends the change. Decide whether it is wanted: if it is, rename the cases
    and say so in [state-machine.md](../../docs/state-machine.md); if not, it is a bug.
-4. **A merged bead keeps its worktree** (rows 2, 65). `closed()` deletes only the remote
+2. **A merged bead keeps its worktree** (rows 2, 65). `closed()` deletes only the remote
    branch (`step.baml:213`), so `wt/ID` and the local `bead/ID` stay. On 9 Nov,
    bead-loop's state held 27 worktrees and 220 MB, including bl-dze.1's a day after it
    merged.
-5. **A waiting PR's note repeats** (rows 35, 116). The waiting holds put the elapsed
+3. **A waiting PR's note repeats** (rows 35, 116). The waiting holds put the elapsed
    minutes in their words (`github.baml:190`, `:226`), and `hold_for` writes a note
    whenever the words change, so the bead gets a bd note on every look. Rust noted once.
-6. **A labelled bead someone else set in_progress is picked.** `tickets()` adds every
+4. **A labelled bead someone else set in_progress is picked.** `tickets()` adds every
    labelled `in_progress` bead (`live.baml:234`), and one the loop has never seen starts
    Ready (`supervisor.baml:389`). [state-machine.md](../../docs/state-machine.md) says
    only the loop's own are picked.
 
-Two bugs found while porting are fixed: a bead ready to publish counts toward
-`max_inflight` (row 107, bl-lkb.8), and a stage with no reviewer goes straight to the PR
-(row 26, bl-lkb.11).
+Fixed since the list was made: a red PR under the pipeline merge re-runs CI once, then
+charges the re-run's red (row 32, bl-lkb.23); a config that does not parse runs nothing,
+not defaults (row 50, bl-lkb.24); a PR closed during a rebase or feedback round parks the
+bead (row 98, bl-lkb.25); a bead ready to publish counts toward `max_inflight` (row 107,
+bl-lkb.8); and a stage with no reviewer goes straight to the PR (row 26, bl-lkb.11).
 
 These smaller differences came up while classifying the rows. The e2e file headers
 confirm the slug, the blind second opinion and the fixed park brief; the rest were not
@@ -111,7 +103,7 @@ each re-checked:
 | 19 | `case_claim_line` | one claim stamp, at the first claim | dropped | yes | - | #225: stamps not carried over |
 | 20 | `case_lint` | lint flags missing paths and prose acceptance, notes the verdict | core | yes | P2 | lint.baml:267, :272; on_base git check and bd note untested; `linted` claim field dropped with stamps |
 | 21 | `case_lint_run` | --run: setup in a throwaway worktree, green-on-base acceptance flagged | untested | yes | P2 | lint.baml:119-186 run_problems; no test |
-| 22 | `case_stats_rows` | stats --rows prints JSONL, one row per bead | dropped | yes | - | #225: stats --rows and the scoreboard not carried over |
+| 22 | `case_stats_rows` | stats --rows prints JSONL, one row per bead | dropped | yes | - | #225: stats --rows not carried over (the page's scoreboard came back in #228) |
 | 23 | `case_bench_freeze` | bench freeze writes case.json from the merge commit | dropped | yes | - | #225: bench freeze not carried over (offline.baml runs cases, no freeze) |
 | 24 | `case_bench_freeze_hidden` | bench freeze cuts hidden tests by name | dropped | yes | - | #225: bench freeze not carried over |
 | 25 | `case_rows_reverted` | stats rows flag landings reverted after 14 days | dropped | yes | - | #225: stats --rows not carried over |
@@ -139,7 +131,7 @@ each re-checked:
 | 47 | `case_inflight_limits_per_target` | max_inflight counts per target: a full target queue spares the default | e2e | no | - | case_inflight_limits_per_target (targets-lanes.sh); targets no longer inherit the repo's max_inflight (config.baml:495) |
 | 48 | `case_nothing_ready` | a bead without the queue label is never picked | e2e | yes | - | case_nothing_ready (queue.sh) |
 | 49 | `case_lock_skips` | a held state lock makes a tick a clean no-op | missing | yes | P3 | not ported: no lock file by design (resident.sh header); a second `run` on one state dir starts every round twice |
-| 50 | `case_config_layers` | global stages serve repos, repo stages win, ~ in repos, bad TOML dies | core | no | P1 | config.baml:331, :343; repo-wins untested; unparseable TOML is read as empty, not a stop (config.baml:201) |
+| 50 | `case_config_layers` | global stages serve repos, repo stages win, ~ in repos, bad TOML dies | e2e | no | - | case_repo_config_that_does_not_parse_runs_nothing, case_global_config_that_does_not_parse_runs_nothing (config.sh); the layering is config.baml's tests |
 | 51 | `case_a_stage_with_no_worker_stops` | a stage with no worker, or no stages, stops the run loudly | missing | no | P2 | not ported: the stages are never checked (last-stage.sh header); a stage with no worker runs on the default client (clients.baml:36) |
 | 52 | `case_escalation_stages` | failures walk fast×2 then slow×1, then park; parked bead not retried | e2e | no | - | case_escalation_stages (escalation.sh); the notes leave out the round, the model and the park count |
 | 53 | `case_same_reject_twice_escalates` | the same REJECT twice jumps to the next stage's worker, noted | e2e | no | - | case_same_reject_twice_escalates (escalation.sh) |
