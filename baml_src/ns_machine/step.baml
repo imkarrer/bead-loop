@@ -53,6 +53,7 @@ function elsewhere(b: Bead, e: Event) -> Step throws never {
         let a: Answered => Step { bead: b, effects: [Refuse { why: refusal(b) }] },
         let r: Reopened => Step { bead: b, effects: [Refuse { why: refusal(b) }] },
         let s: Escalated => Step { bead: b, effects: [Refuse { why: refusal(b) }] },
+        let q: PrRequested => Step { bead: b, effects: [Refuse { why: refusal(b) }] },
         _ => stay(b),
     }
 }
@@ -549,6 +550,12 @@ function on_parked(b: Bead, e: Event, p: Policy) -> Step throws never {
             stay(back)
         },
         let x: Published => {
+            if (!b.kept) {
+                return Step {
+                    bead: b,
+                    effects: [Refuse { why: "no work on its branch to push: Reopen it instead" }],
+                };
+            }
             Step {
                 bead: b,
                 effects: [
