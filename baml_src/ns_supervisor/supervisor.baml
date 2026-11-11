@@ -237,9 +237,9 @@ function tick(s: Supervisor) -> void throws never {
     take_finished(s);
     settle_lost(s, alive);
     take_inbox(s);
+    admit_tickets(s);
     adopt_prs(s);
     watch_prs(s);
-    admit_tickets(s);
     expire_holds(s);
     start_rounds(s);
     write_view(s, alive);
@@ -311,7 +311,7 @@ function carry_out(s: Supervisor, id: string, o: root.world.Order) -> void throw
 
 /// An open `bead/ID` PR this loop is not already carrying joins the merge queue. The
 /// step decides: only a ready or parked bead with no PR of its own takes it. A merged one
-/// closes a parked bead: it was landed by hand.
+/// closes a parked bead, or a ready one `bd ready` lists: it was landed by hand.
 function adopt_prs(s: Supervisor) -> void throws never {
     if (!s.adopt) {
         return;
@@ -324,10 +324,13 @@ function adopt_prs(s: Supervisor) -> void throws never {
     };
     for (let a in open) {
         if (a.merged ?? false) {
-            // Only a bead the loop parked: the merged branch of a bead you reopened, or
-            // never gave the loop, is no reason to close it.
-            if let parked: root.machine.Bead = s.bead(a.id) {
-                if (parked.place is root.machine.Parked) {
+            // A bead the loop parked, or a ready one `bd ready` still lists: the merged
+            // branch of a bead you reopened, or never gave the loop, is no reason to
+            // close it.
+            if let known: root.machine.Bead = s.bead(a.id) {
+                let adopt_it = known.place is root.machine.Parked
+                    || (known.place is root.machine.Ready && s.ready.includes(a.id));
+                if (adopt_it) {
                     apply(s, a.id, root.machine.MergedOutside { kind: "merged_outside", url: a.url });
                 }
             }

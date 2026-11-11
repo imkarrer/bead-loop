@@ -811,7 +811,7 @@ test "a parked bead whose PR already merged is closed" {
     assert.is_true(w.calls.includes("close_bead"))
 }
 
-test "a merged bead PR closes no bead the loop has not parked" {
+test "a merged bead PR closes no bead bd ready does not list" {
     let w = one_bead([], [], []);
     w.tickets_now = [];
     w.adoptable_now = [root.world.Adoptable { id: "t-1", url: "pr/t-1", own: false, merged: true }];
@@ -819,6 +819,16 @@ test "a merged bead PR closes no bead the loop has not parked" {
     tick(s);
     assert.equal(s.bead("t-1"), null);
     assert.equal(w.calls.includes("close_bead"), false)
+}
+
+test "a ready bead whose PR merged outside the loop is closed before it is picked" {
+    let w = one_bead([committed()], [approved()], []);
+    w.adoptable_now = [root.world.Adoptable { id: "t-1", url: "u", own: false, merged: true }];
+    let s = Supervisor.new(w, MemoryLog.new(), policy());
+    tick(s);
+    assert.is_type<root.machine.Closed>(place_of(s));
+    assert.is_true(w.calls.includes("close_bead"));
+    assert.equal(starts(w, "start_round Work devbox/coder"), 0)
 }
 
 test "ftally records each round" {
