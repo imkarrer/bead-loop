@@ -4,15 +4,18 @@
 # the hold clears. Ported from the Rust suite's cases of the same name (git show
 # 8907dfa:test/run.sh), to what the BAML loop actually does with each.
 #
-# The BAML loop has no calendar backoff: BEAD_LOOP_HOLD_BACKOFF and its doubling minutes
-# don't exist here. A hold just keeps the bead off the pick list for a fixed run of ticks
-# (hold_ticks, 5 — supervisor.baml), counted in-memory, so an e2e tick must be a single
+# The BAML loop has no calendar backoff, by the owner's decision (11 Nov): the Rust
+# loop's BEAD_LOOP_HOLD_BACKOFF and its doubling minutes are gone on purpose. A hold
+# just keeps the bead off the pick list for a fixed run of ticks (hold_ticks, 5 —
+# supervisor.baml), counted in-memory, so an e2e tick must be a single
 # `tick N` call wide enough to hold that count; a restart (a fresh `tick` call, as every
 # other case takes one) starts the count over, same as it would on a real restart. A bead
 # held by the same broken harness five times running (HARNESS_STREAK, step.baml) is
 # parked with its words — the BAML loop's stand-in for the Rust suite's "held over a day".
-# case_repeated_hold_restarts_backoff and case_hold_backs_off_exponentially_then_parks are
-# ported against that mechanism, not the Rust one.
+# The Rust suite's case_repeated_hold_restarts_backoff and
+# case_hold_backs_off_exponentially_then_parks asserted that backoff; their places here,
+# case_a_hold_is_retried_on_a_fixed_pace and case_five_harness_holds_in_a_row_park, assert
+# this loop's own (test/e2e/parity.md rows 112 and 113).
 
 # infra_count: how many "infra" (held) events the bead has logged so far.
 infra_count() { events | tr ' ' '\n' | grep -c infra || true; }
@@ -82,7 +85,7 @@ case_harness_error_is_held() {
 # A hold only keeps the bead off the pick list for hold_ticks — not a doubling wait, and
 # not one that grows the more often the same reason holds it: every hold, even the same
 # reason again and again, costs the same fixed run of ticks and charges nothing.
-case_repeated_hold_restarts_backoff() {
+case_a_hold_is_retried_on_a_fixed_pace() {
   setup; echo '{"status":500,"error":"connection refused"}' >"$E2E_CTRL/replies/coder.last"
   tick 6
   assert_eq "$(infra_count)" 1 "one hold so far, still inside its own wait"
@@ -95,7 +98,7 @@ case_repeated_hold_restarts_backoff() {
 
 # The harness held five times in a row (the same broken CLI, or server) parks the bead
 # with its words, not held forever — and nothing is charged for it.
-case_hold_backs_off_exponentially_then_parks() {
+case_five_harness_holds_in_a_row_park() {
   setup; echo '{"status":500,"error":"connection refused"}' >"$E2E_CTRL/replies/coder.last"
   tick 35
   assert_eq "$(infra_count)" 5 "five holds, the streak's limit"
