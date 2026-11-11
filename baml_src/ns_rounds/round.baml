@@ -549,6 +549,9 @@ function round(spec_file: string) -> string {
     let spec = baml.json.decode<RoundSpec>(baml.fs.read(spec_file));
     // The probe count is this round's alone: from zero, and gone when it ends.
     root.tools.edited();
+    // The read record is this round's alone too: a research or review round reuses a
+    // pid, and a worker's revision session reuses this one (bl-gc1.4).
+    root.tools.forget_reads();
     let events = if (spec.kind == root.world.RoundKind.Work) {
         work_round(spec)
     } else {
