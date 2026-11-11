@@ -125,7 +125,7 @@ each re-checked:
 | 29 | `case_seats_any_rule` | "any" rule: one approve is enough | dropped | yes | - | config.md Not read: `approvals` |
 | 30 | `case_ci_pending_then_green` | pending holds the merge; green squash-merges, deletes branch, closes bead | e2e | yes | - | case_ci_pending_then_green (merge.sh); the close reason is the URL, not the checks |
 | 31 | `case_ci_red` | CI red → dev queue, +1, not re-adopted, fix pushes to the same PR | e2e | yes | - | case_ci_red (merge.sh); the note names the checks, without description or link |
-| 32 | `case_ci_red_unchanged_head_reruns` | pipeline no-commit fix: relabel, old red not recharged, re-run's red charged | missing | yes | P1 | case_ci_red_unchanged_head_reruns (merge.sh) ports the relabel, not "the re-run's own red is charged": step.baml:480 relabels every red at that head, so it rebuilds forever |
+| 32 | `case_ci_red_unchanged_head_reruns` | pipeline no-commit fix: relabel, old red not recharged, re-run's red charged | e2e | yes | - | case_ci_red_unchanged_head_reruns (merge.sh) |
 | 33 | `case_ci_killed_job_reruns_once` | killed required job re-run once by relabel, then charged | e2e | yes | - | case_ci_killed_job_reruns_once (merge.sh) |
 | 34 | `case_ci_red_unrequired_waits` | red only in unrequired checks waits; held after the CI timeout | e2e | yes | - | case_ci_red_unrequired_waits (merge.sh); the hold after the CI timeout is not asserted |
 | 35 | `case_ci_red_unchanged_head_holds` | auto: the same red is not charged twice, held saying why | e2e | yes | - | case_ci_red_unchanged_head_holds (merge.sh); the hold is noted again every 5 ticks |

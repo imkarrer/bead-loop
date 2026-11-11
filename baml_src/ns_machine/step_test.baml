@@ -503,6 +503,17 @@ test "CI red again on the commit already charged, pipeline" {
     assert.equal(s.bead.failures, 1);
     assert.is_true(relabels(s));
     assert.is_type<Merging>(s.bead.place);
+    assert.equal(s.bead.rerun_head, "h");
+}
+
+test "CI red on a charged head that was re-run is charged" {
+    let b = bead(merging(), failures = 1);
+    b.charged_head = "h";
+    b.rerun_head = "h";
+    let s = step(b, ChecksRed { kind: "checks_red", checks: "c", head: "h" }, policy());
+    assert.equal(s.bead.failures, 2);
+    assert.is_type<Ready>(s.bead.place);
+    assert.is_true(!relabels(s));
 }
 
 test "CI red again on the commit already charged, otherwise held" {
