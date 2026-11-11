@@ -102,8 +102,10 @@ stateDiagram-v2
 | **closed** | terminal |
 
 A **hold** is orthogonal to the place: the bead stays where it is, nothing is charged,
-and the hold clears by trying again. A bead whose round's process is gone with no result
-is **lost**: back to where it was picked from, uncharged.
+and the hold clears by trying again. In the merge queue a hold is noted on the bead once
+for each kind while its PR waits there; a later look of the same kind changes only the
+words the page shows. A bead whose round's process is gone with no result is **lost**:
+back to where it was picked from, uncharged.
 
 ## Invariants
 

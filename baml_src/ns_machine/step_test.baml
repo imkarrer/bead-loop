@@ -547,6 +547,29 @@ test "CI red again on the commit already charged, otherwise held" {
     assert.is_true(is_held(s))
 }
 
+test "a waiting hold is noted once, however its words change" {
+    let a = step(bead(merging()), WaitedTooLong { kind: "waited_too_long", why: "green for 30 min" }, policy());
+    assert.equal(notes(a), 1);
+    let b = step(a.bead, WaitedTooLong { kind: "waited_too_long", why: "green for 31 min" }, policy());
+    assert.equal(notes(b), 0);
+    assert.equal(b.bead.hold?.words, "green for 31 min");
+    let c = step(b.bead, HoldCleared { kind: "hold_cleared" }, policy());
+    let d = step(c.bead, WaitedTooLong { kind: "waited_too_long", why: "green for 33 min" }, policy());
+    assert.equal(notes(d), 0);
+    assert.is_true(is_held(d))
+}
+
+test "a different hold in the merge queue is noted" {
+    let a = step(
+        bead(merging()),
+        WaitedTooLong { kind: "waited_too_long", why: "no checks for 5 min" },
+        with_merge(MergeMode.Manual),
+    );
+    let b = step(a.bead, ChecksGreen { kind: "checks_green" }, with_merge(MergeMode.Manual));
+    assert.equal(notes(b), 1);
+    assert.equal(b.bead.hold?.words, "yours to merge")
+}
+
 test "CI red, every failing required check killed, runs once more" {
     let s = step(bead(merging()), RedKilled { kind: "red_killed", checks: "c", head: "h" }, policy());
     assert.equal(s.bead.failures, 0);
