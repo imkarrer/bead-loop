@@ -43,6 +43,8 @@ case_claude_stage() {
   assert_match "$worker" "allowedTools=Read(./\*\*),Edit" "the worker's allow-list"
   assert_match "$reviewer" "^Read,Glob,Grep$" "the reviewer's tools"
   assert_nomatch "$reviewer" "Bash" "a shell for the reviewer"
+  assert_match "$(cat "$E2E_CTRL/claude/env-001" 2>/dev/null)" "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1" "no background command in a one-turn round"
+  assert_match "$(cat "$E2E_CTRL/claude/env-001" 2>/dev/null)" "BASH_DEFAULT_TIMEOUT_MS=900000" "and a long foreground timeout"
 }
 
 # A Claude CLI that fails leaves what it said where the bead's history shows it.
