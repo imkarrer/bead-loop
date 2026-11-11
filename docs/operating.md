@@ -107,7 +107,7 @@ it is held; a researcher past it lets the worker go without a brief.
   left uncommitted when its worktree was removed: `git apply` it in a fresh one).
 - `rounds/<id>.{spec.json,pid,result.json,timedout}` — a round in flight and what it
   left.
-- `wt/<id>` — the bead's worktree, on branch `bead/<id>`.
+- `wt/<id>` — the bead's worktree, on branch `bead/<id>`, removed with its branch once the PR merges.
 - `logs/` — each round's tool calls; `inbox/` — mail from the page and `tell`.
 - `view.json` — what the page shows, written each tick.
 - `gh-login` — the account the loop acts as, asked once.

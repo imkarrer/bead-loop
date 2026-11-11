@@ -634,6 +634,13 @@ test "merged" {
     );
 }
 
+test "a merged bead loses its worktree and local branch" {
+    let a = step(bead(merging()), PrMerged { kind: "pr_merged", url: "u" }, policy());
+    assert.is_true(removes(a));
+    let b = step(bead(parked()), MergedOutside { kind: "merged_outside", url: "u" }, policy());
+    assert.is_true(removes(b))
+}
+
 test "Merged, but bd close fails" {
     let s = step(bead(merging()), PrMerged { kind: "pr_merged", url: "pr/1" }, policy());
     assert.is_true(is_held(step(s.bead, infra(Trouble.Bd), policy())))

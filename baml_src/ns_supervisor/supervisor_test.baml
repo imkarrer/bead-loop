@@ -163,7 +163,7 @@ test "a no-commit after a reject keeps the branch the worker already landed" {
     turns(s, w, 12);
     assert.is_type<root.machine.Closed>(place_of(s));
     assert.equal(s.bead("t-1")?.failures, 2);
-    assert.is_true(!w.calls.includes("remove_branch"))
+    assert.equal(starts(w, "remove_branch"), 1)
 }
 
 test "a reviewer with no verdict is held and tried again, and nothing is charged" {

@@ -17,6 +17,8 @@ case_lands() {
   assert_match "$(cat "$E2E_CTRL/gh/calls")" "pr merge bead/$BEAD --squash" "the merge"
   assert_match "$(cat "$(STATE)/loop.log" 2>/dev/null)" "info repo: $BEAD: pr_merged" "the loop's own log has the bead's moves"
   assert_match "$(cat "$(STATE)/loop.log" 2>/dev/null)" "info repo: $BEAD: committed" "a result taken at start names its repo too"
+  [ -e "$(STATE)/wt/$BEAD" ] && bad "the worktree is still there" || ok
+  git -C "$REPO" show-ref -q "refs/heads/bead/$BEAD" && bad "the local branch is still there" || ok
 }
 
 # While a round runs, bd says so: in_progress, and a label naming where it is.

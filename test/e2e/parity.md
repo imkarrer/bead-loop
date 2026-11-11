@@ -78,7 +78,7 @@ each re-checked:
 | # | Rust case | what it checked | status | seam | port | where it stands |
 | --- | --- | --- | --- | --- | --- | --- |
 | 1 | `case_dry_run` | `--dry-run` prints the prompt, leaves the bead alone, calls no model | missing | yes | P3 | main.baml has run/tell/lint/round only; a prompt is seen only in a round's log |
-| 2 | `case_done_to_pr` | worker→reviewer→push→PR to base, in_progress, URL noted, assignee=label, worktree removed | e2e | yes | - | case_lands (+case_bd_follows_the_round); missing: no assignee set; worktree never removed, even after merge |
+| 2 | `case_done_to_pr` | worker→reviewer→push→PR to base, in_progress, URL noted, assignee=label, worktree removed | e2e | yes | - | case_lands (+case_bd_follows_the_round); missing: no assignee set; the worktree and local branch go at the merge, not at the push |
 | 3 | `case_plain_pr` | pr_style plain: bead title, no id prefix, verify section, bead marker | untested | yes | P2 | live.baml:495-505; body is the description alone: no "How to verify", no `<!-- bead: -->` |
 | 4 | `case_actor_from_env` | BEADS_ACTOR beats the label as the bd assignee | missing | yes | P3 | mark_args (live.baml:1507) writes only status and labels; no assignee is ever set |
 | 5 | `case_blocked` | BLOCKED at last stage parks, line noted, model brief in worktree, nothing pushed | core | yes | P2 | step_test.baml:227, :882; brief is static text (live.baml:642); ParkBriefAgent never called |
@@ -141,7 +141,7 @@ each re-checked:
 | 62 | `case_adopted_prs_do_not_block_new_work` | an adopted PR pending CI is tracked but not counted toward max_inflight | e2e | no | - | case_adopted_prs_do_not_block_new_work (adopt.sh) |
 | 63 | `case_adopt_off` | adopt = false leaves other people's bead PRs alone | e2e | no | - | case_adopt_off (adopt.sh) |
 | 64 | `case_closes_bead_merged_outside_the_loop` | a ready bead whose PR merged outside the loop is closed with the url | missing | yes | P2 | not ported: only a parked bead's merged PR closes it (adopt.sh header, supervisor.baml:326); the bead is worked again |
-| 65 | `case_parked_bead_whose_pr_merged` | a parked bead's open PR is not adopted; once merged, bead closed, branches gone | e2e | yes | - | case_parked_bead_whose_pr_merged (adopt.sh); the worktree and local branch are kept (step.baml:213) |
+| 65 | `case_parked_bead_whose_pr_merged` | a parked bead's open PR is not adopted; once merged, bead closed, branches gone | e2e | yes | - | case_parked_bead_whose_pr_merged (adopt.sh) |
 | 66 | `case_status_lists_worktree_sessions` | status lists opencode sessions per worktree; ORPHAN with abort hint | dropped | yes | - | config.md Not read: `attach`; the opencode server is gone (#225) |
 | 67 | `case_rejoined_session_is_not_an_orphan` | a session marked for rejoin shows REJOIN, not ORPHAN | dropped | yes | - | config.md Not read: `attach`; design-baml-native.md: the rejoin protocol is gone |
 | 68 | `case_timeout_aborts_server_session` | a timed-out worker is charged and its server session aborted | dropped | yes | - | config.md Not read: `attach`, a stage's `timeout`; the timeout charge itself is live.baml:1472 |
