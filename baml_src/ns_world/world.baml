@@ -102,13 +102,16 @@ interface World {
         id: string,
         pr: string,
     ) -> root.machine.Event[] throws root.machine.Infra;
-    /// With a title, the PR you asked for; else the bead's, in pr_style.
+    /// With a title, the PR you asked for; else the bead's, in pr_style. `was`, if set,
+    /// is checked before the push: closed or merged while its round ran returns that
+    /// instead of opening a second PR.
     function push_and_open_pr(
         self,
         id: string,
         title: string?,
         body: string?,
-    ) -> root.machine.PrOpened throws root.machine.Infra;
+        was: string?,
+    ) -> root.machine.Event throws root.machine.Infra;
     /// Push the branch, open no PR, and say where one would be opened.
     function push_branch(self, id: string) -> root.machine.BranchPushed throws root.machine.Infra;
     function merge_pr(self, id: string) -> void throws root.machine.Infra;

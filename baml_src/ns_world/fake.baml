@@ -127,7 +127,8 @@ class FakeWorld {
             id: string,
             title: string?,
             body: string?,
-        ) -> root.machine.PrOpened throws root.machine.Infra {
+            was: string?,
+        ) -> root.machine.Event throws root.machine.Infra {
             self.record("push_and_open_pr");
             root.machine.PrOpened { kind: "pr_opened", url: `pr/${id}`, head: "head" }
         }

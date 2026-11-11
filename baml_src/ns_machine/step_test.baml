@@ -397,6 +397,29 @@ test "Reviewer APPROVE pushes, then the PR moves it to merge" {
     assert.is_type<Merging>(s.bead.place);
 }
 
+test "an approved round carries the PR it had" {
+    let b = bead(reviewing());
+    b.pr = "pr-1";
+    let s = step(b, Approved { kind: "approved" }, policy());
+    assert.is_true(
+        s.effects.some((e) -> {
+            if let p: PushAndOpenPr = e {
+                p.was == "pr-1"
+            } else {
+                false
+            }
+        }),
+    )
+}
+
+test "a PR closed while its round ran parks the bead" {
+    let b = bead(reviewing());
+    b.pr = "pr-1";
+    let s = step(b, PrClosed { kind: "pr_closed", url: "pr-1" }, policy());
+    assert.is_type<Parked>(s.bead.place);
+    assert.equal(s.bead.pr, null)
+}
+
 test "Reviewer APPROVE under ask is ready to publish" {
     let s = step(bead(reviewing()), BranchPushed { kind: "branch_pushed", compare_url: "c" }, policy());
     assert.is_type<Publishable>(s.bead.place);

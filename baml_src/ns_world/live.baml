@@ -482,7 +482,24 @@ class LiveWorld {
             id: string,
             title: string?,
             body: string?,
-        ) -> root.machine.PrOpened throws root.machine.Infra {
+            was: string?,
+        ) -> root.machine.Event throws root.machine.Infra {
+            if let pr: string = was {
+                let state = self
+                    .tool(
+                        root.machine.Trouble.Gh,
+                        "gh",
+                        self.gh_args(["pr", "view", pr, "--json", "state", "--jq", ".state"]),
+                        self.repo,
+                    )
+                    .trim();
+                if (state == "CLOSED") {
+                    return root.machine.PrClosed { kind: "pr_closed", url: pr };
+                }
+                if (state == "MERGED") {
+                    return root.machine.PrMerged { kind: "pr_merged", url: pr };
+                }
+            }
             let head = self.push(id);
             let existing = self.open_pr_url(id);
             let url = if (existing.length() > 0) {

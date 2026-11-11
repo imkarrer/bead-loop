@@ -17,15 +17,15 @@ The rows were read from the code on 9 Nov 2026, after the bl-lkb ports (#251 to 
 
 | status | rows | meaning |
 | --- | --- | --- |
-| `e2e` | 69 | a case in `test/e2e/cases` proves it against real git, bd and a gate |
+| `e2e` | 70 | a case in `test/e2e/cases` proves it against real git, bd and a gate |
 | `changed` | 2 | a case keeps the Rust name but asserts what the BAML loop does instead |
 | `core` | 13 | the loop does it, but only a FakeWorld test proves it; 9 of these cross the world, which FakeWorld cannot see |
 | `untested` | 10 | the code is there, and no test covers it |
-| `missing` | 17 | the loop does not do it |
+| `missing` | 16 | the loop does not do it |
 | `dropped` | 27 | removed on purpose: opencode, aider, stamps, stats, bench, `[[lanes]]`, seats ([config.md](../../docs/config.md#not-read)) |
 | `moot` | 10 | the design makes the failure impossible |
 
-That leaves 42 rows to prove, build or decide: 3 are P1, 22 P2 and 17 P3. `port` is P1
+That leaves 41 rows to prove, build or decide: 2 are P1, 22 P2 and 17 P3. `port` is P1
 when the live config uses the behaviour and getting it wrong wastes rounds, loses work,
 or merges the wrong thing. P2 means it is used but cheap to notice. P3 is an edge case,
 or unused. `seam` is yes when the behaviour crosses git, bd, gh, Claude, a model server,
@@ -60,11 +60,7 @@ These differ from the Rust loop today, and each one was checked in the code.
 5. **A waiting PR's note repeats** (rows 35, 116). The waiting holds put the elapsed
    minutes in their words (`github.baml:190`, `:226`), and `hold_for` writes a note
    whenever the words change, so the bead gets a bd note on every look. Rust noted once.
-6. **A PR closed during a rebase or feedback round goes unseen** (row 98). Only a Merging
-   bead's PR is watched (`supervisor.baml:349`), and the rebase round starts without
-   reading the PR, so once the round is approved the loop opens a new PR for the work you
-   closed.
-7. **A labelled bead someone else set in_progress is picked.** `tickets()` adds every
+6. **A labelled bead someone else set in_progress is picked.** `tickets()` adds every
    labelled `in_progress` bead (`live.baml:234`), and one the loop has never seen starts
    Ready (`supervisor.baml:389`). [state-machine.md](../../docs/state-machine.md) says
    only the loop's own are picked.
@@ -191,7 +187,7 @@ each re-checked:
 | 95 | `case_provider_probe_down_beads_wait` | A failing probe: rounds wait, with no round, no failure and no hold | dropped | - | - | state-machine.md Not built; not ported (limits.sh header): a down server is found one round at a time |
 | 96 | `case_conflicting_pr_rebased_by_the_last_stage` | A CONFLICTING PR gets an uncharged rebase round (last stage or conflict_worker); same PR updated | e2e | yes | - | case_conflicting_pr_rebased_by_the_last_stage (merge.sh); conflict_worker is not asserted |
 | 97 | `case_feedback_review_sends_back_to_same_pr` | A CHANGES_REQUESTED review sends the bead back on the same PR, once | e2e | yes | - | case_feedback_review_sends_back_to_same_pr (levers.sh) |
-| 98 | `case_conflict_pr_closed_parks` | A conflict round whose PR closed, with the branch matching main, parks once | missing | yes | P1 | not ported: the rebase round starts without reading the PR (merge.sh header); a PR closed meanwhile gets a new one |
+| 98 | `case_conflict_pr_closed_parks` | A conflict round whose PR closed, with the branch matching main, parks once | e2e | yes | - | case_conflict_pr_closed_parks (merge.sh) |
 | 99 | `case_mergeable_unknown_is_pending_not_nocheck` | Mergeable UNKNOWN with an empty rollup is pending, not the no-checks hold | missing | yes | P3 | not ported: UNKNOWN falls through to the no-checks path (merge.sh header) |
 | 100 | `case_target` | A work:NAME bead is worked in the target checkout, pushed to the fork, PR on pr_repo, closed | e2e | yes | - | case_target (targets-merge.sh) |
 | 101 | `case_target_skills` | The repo's .agents skills are linked into the target worktree and excluded once | missing | yes | P3 | not ported: nothing links skills into a worktree (targets-lanes.sh header) |

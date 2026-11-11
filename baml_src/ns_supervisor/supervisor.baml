@@ -194,7 +194,7 @@ function perform(
             none
         },
         let x: root.machine.PushAndOpenPr => {
-            let opened: root.machine.Event = s.world.push_and_open_pr(id, x.title, x.body);
+            let opened: root.machine.Event = s.world.push_and_open_pr(id, x.title, x.body, x.was);
             [opened]
         },
         let x: root.machine.PushBranch => {
