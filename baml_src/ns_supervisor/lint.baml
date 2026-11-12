@@ -26,7 +26,11 @@ const ACCEPTANCE_PREFIXES: string[] = [
 ];
 
 /// The tokens a DESCRIPTION names a path by: every whitespace-separated token with a slash
-/// or a dot, trimmed of punctuation at either end. No existence check.
+/// or a dot, trimmed of punctuation at either end. A line indented four spaces is code, not
+/// prose, and none of its words are paths; a word with a dollar sign in it is a shell
+/// variable, not a path; a trailing line number or line range is cut off a word before it is
+/// checked; a word that still holds a character outside letters, digits, underscore, dot,
+/// slash and hyphen is code, not a path. No existence check.
 function path_tokens(desc: string) -> string[] throws never {
     let space = baml.regex.new("\\s+") catch_all (e) {
         _ => {
@@ -46,11 +50,31 @@ function path_tokens(desc: string) -> string[] throws never {
             return none;
         },
     };
+    let line_num = baml.regex.new(":[0-9]+(-[0-9]+)?$") catch_all (e) {
+        _ => {
+            let none: string[] = [];
+            return none;
+        },
+    };
+    let bad_char = baml.regex.new("[^A-Za-z0-9_./-]") catch_all (e) {
+        _ => {
+            let none: string[] = [];
+            return none;
+        },
+    };
     let out: string[] = [];
-    for (let raw in space.split(desc)) {
-        let t = raw.replace(lead, "").replace(tail, "");
-        if (t.length() > 0 && (t.includes("/") || t.includes("."))) {
-            out.push(t);
+    for (let line in desc.split("\n")) {
+        if (line.starts_with("    ")) {
+            continue;
+        }
+        for (let raw in space.split(line)) {
+            if (raw.includes("$")) {
+                continue;
+            }
+            let t = raw.replace(lead, "").replace(tail, "").replace(line_num, "");
+            if (t.length() > 0 && (t.includes("/") || t.includes(".")) && !bad_char.has_match(t)) {
+                out.push(t);
+            }
         }
     }
     out
@@ -276,6 +300,13 @@ function lint(config_file: string, ids: string = "", run: bool = false) -> strin
 test "a description's paths are its slashed or dotted words, trimmed" {
     let t = path_tokens("Edit `src/a.rs` and (docs/b.md), then run it. See README.md: done");
     assert.equal(t.join(","), "src/a.rs,docs/b.md,README.md")
+}
+
+test "code in a description is not a path" {
+    let t = path_tokens(
+        "See baml_src/a.baml:120 and docs/b.md:3-9, then `reply.starts_with(\"x\")` and $T/sup.log\n    let b = a.b;\nthen README.md",
+    );
+    assert.equal(t.join(","), "baml_src/a.baml,docs/b.md,README.md")
 }
 
 test "an acceptance is a command, prose or nothing" {
