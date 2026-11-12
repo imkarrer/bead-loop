@@ -297,6 +297,44 @@ test "Gate fails twice" {
     assert.is_true(removes(s))
 }
 
+test "the note of a failed round carries its post-mortem" {
+    let postmortem = "Post-mortem (m):\n1. Tried x";
+
+    let no_commit = step(bead(working()), NoCommit { kind: "no_commit", postmortem: postmortem }, policy());
+    assert.equal(no_commit.bead.last_note, "worker made no commit\n\nPost-mortem (m):\n1. Tried x");
+    let no_commit_bare = step(bead(working()), NoCommit { kind: "no_commit", postmortem: null }, policy());
+    assert.equal(no_commit_bare.bead.last_note, "worker made no commit");
+
+    let worker_crashed = step(
+        bead(working()),
+        WorkerCrashed { kind: "worker_crashed", words: "rc 1", postmortem: postmortem },
+        policy(),
+    );
+    assert.equal(
+        worker_crashed.bead.last_note,
+        "worker exited: rc 1\n\nPost-mortem (m):\n1. Tried x",
+    );
+    let worker_crashed_bare = step(
+        bead(working()),
+        WorkerCrashed { kind: "worker_crashed", words: "rc 1", postmortem: null },
+        policy(),
+    );
+    assert.equal(worker_crashed_bare.bead.last_note, "worker exited: rc 1");
+
+    let gate_failed_twice = step(
+        bead(working()),
+        GateFailedTwice { kind: "gate_failed_twice", errors: "e", postmortem: postmortem },
+        policy(),
+    );
+    assert.equal(gate_failed_twice.bead.last_note, "gate failed: e\n\nPost-mortem (m):\n1. Tried x");
+    let gate_failed_twice_bare = step(
+        bead(working()),
+        GateFailedTwice { kind: "gate_failed_twice", errors: "e", postmortem: null },
+        policy(),
+    );
+    assert.equal(gate_failed_twice_bare.bead.last_note, "gate failed: e")
+}
+
 test "Gate passes" {
     let s = step(bead(committed_work()), GatePassed { kind: "gate_passed" }, policy());
     assert.is_type<InReview>(s.bead.place);

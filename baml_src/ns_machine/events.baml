@@ -10,6 +10,7 @@ class WorkerBlocked {
 
 class NoCommit {
     kind: "no_commit",
+    postmortem: string?,
 }
 
 class RoundTimedOut {
@@ -19,11 +20,13 @@ class RoundTimedOut {
 class WorkerCrashed {
     kind: "worker_crashed",
     words: string,
+    postmortem: string?,
 }
 
 class GateFailedTwice {
     kind: "gate_failed_twice",
     errors: string,
+    postmortem: string?,
 }
 
 class DiffProblems {

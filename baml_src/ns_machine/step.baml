@@ -96,14 +96,24 @@ function hold_for(b: Bead, m: Merging, what: string, words: string) -> Step thro
     }
 }
 
+/// `line`, then the post-mortem below a blank line, when there is one.
+function with_postmortem(line: string, postmortem: string?) -> string throws never {
+    let text = postmortem ?? "";
+    if (text.length() > 0) {
+        `${line}\n\n${text}`
+    } else {
+        line
+    }
+}
+
 /// What a send-back says on the bead.
 function note_of(o: ModelOutcome) -> string throws never {
     match (o) {
         let x: WorkerBlocked => x.line,
-        let x: NoCommit => "worker made no commit",
+        let x: NoCommit => with_postmortem("worker made no commit", x.postmortem),
         let x: RoundTimedOut => "worker timed out",
-        let x: WorkerCrashed => `worker exited: ${x.words}`,
-        let x: GateFailedTwice => `gate failed: ${x.errors}`,
+        let x: WorkerCrashed => with_postmortem(`worker exited: ${x.words}`, x.postmortem),
+        let x: GateFailedTwice => with_postmortem(`gate failed: ${x.errors}`, x.postmortem),
         let x: DiffProblems => `diff checks: ${x.problems}`,
         let x: PrecheckSentBack => `precheck sent back: ${x.block}`,
         let x: Rejected => `review rejected: ${x.text}`,
