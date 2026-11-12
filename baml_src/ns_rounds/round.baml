@@ -343,13 +343,76 @@ function precheck_outcome(v: root.agents.PrecheckVerdict) -> root.machine.Event?
     }
 }
 
+const POSTMORTEM_CHARS: int = 6000;
+
+/// The pre-check model's post-mortem on a round that already failed, for the note: the
+/// last `POSTMORTEM_CHARS` of the round's own log as the transcript, `gate_output` when
+/// the failure followed a gate run. Any error, or no pre-check model, holds nothing
+/// back — the round is charged exactly as it is today.
+function postmortem(spec: RoundSpec, gate_output: string) -> string? throws never {
+    if (spec.precheck.length() == 0) {
+        return null;
+    }
+    let log = baml.fs.read(spec.log_file) catch_all (e) {
+        _ => {
+            return null;
+        },
+    };
+    let n = log.length();
+    let transcript = if (n > POSTMORTEM_CHARS) {
+        log.slice(n - POSTMORTEM_CHARS, n)
+    } else {
+        log
+    };
+    let agent = ai.Agent.new(client = root.agents.client_for(spec.precheck, spec.precheck_url), max_steps = 2) catch_all (e) {
+        _ => {
+            return null;
+        },
+    };
+    let v = agent.run(root.agents.Postmortem@spec(spec.bead, transcript, gate_output)) catch_all (e) {
+        _ => {
+            return null;
+        },
+    };
+    `Post-mortem (${spec.precheck}):\n${v.value}`
+}
+
+/// `e`, with a pre-check model's post-mortem folded into it when it is one of the three
+/// events a post-mortem explains.
+function charge_postmortem(
+    spec: RoundSpec,
+    gate_output: string,
+    e: root.machine.Event,
+) -> root.machine.Event throws never {
+    match (e) {
+        let x: root.machine.NoCommit => {
+            root.machine.NoCommit { kind: "no_commit", postmortem: postmortem(spec, gate_output) }
+        },
+        let x: root.machine.WorkerCrashed => {
+            root.machine.WorkerCrashed {
+                kind: "worker_crashed",
+                words: x.words,
+                postmortem: postmortem(spec, gate_output),
+            }
+        },
+        let x: root.machine.GateFailedTwice => {
+            root.machine.GateFailedTwice {
+                kind: "gate_failed_twice",
+                errors: x.errors,
+                postmortem: postmortem(spec, gate_output),
+            }
+        },
+        _ => e,
+    }
+}
+
 function work_round(spec: RoundSpec) -> root.machine.Event[] throws never {
     let before = git_head(spec.dir);
     let task = worker_task(spec);
     let failed: root.machine.Event? = null;
     let report = run_worker(spec, task) catch_all (e) {
         _ => {
-            let out: root.machine.Event[] = [failed_session(spec, e)];
+            let out: root.machine.Event[] = [charge_postmortem(spec, "", failed_session(spec, e))];
             return out;
         },
     };
@@ -370,7 +433,7 @@ function work_round(spec: RoundSpec) -> root.machine.Event[] throws never {
     }
     let stop = work_outcome(report, before, after);
     if let event: root.machine.Event = stop {
-        return [event];
+        return [charge_postmortem(spec, "", event)];
     }
     let done: root.machine.Event = root.machine.Committed { kind: "committed", sha: after };
     let first = run_gate(spec.dir, spec.gate);
@@ -385,7 +448,7 @@ function work_round(spec: RoundSpec) -> root.machine.Event[] throws never {
     );
     let fixed = run_worker(spec, fix) catch_all (e) {
         _ => {
-            let out: root.machine.Event[] = [done, failed_session(spec, e)];
+            let out: root.machine.Event[] = [done, charge_postmortem(spec, first.output, failed_session(spec, e))];
             return out;
         },
     };
@@ -398,7 +461,14 @@ function work_round(spec: RoundSpec) -> root.machine.Event[] throws never {
     if (second.ok) {
         passed(spec, done)
     } else {
-        [done, root.machine.GateFailedTwice { kind: "gate_failed_twice", errors: second.output }]
+        [
+            done,
+            charge_postmortem(
+                spec,
+                second.output,
+                root.machine.GateFailedTwice { kind: "gate_failed_twice", errors: second.output },
+            ),
+        ]
     }
 }
 

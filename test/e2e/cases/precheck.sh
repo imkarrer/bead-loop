@@ -17,6 +17,32 @@
 # `catch_all` at both the client and the call (round.baml's `precheck`) — so a server
 # error and anything else that agent could throw are the same path, covered once below.
 
+# A round that ends "no commit" gets a post-mortem from the pre-check model, folded into
+# the note below the usual line (round.baml's `postmortem`, `charge_postmortem`).
+case_postmortem() {
+  GLOBAL_EXTRA='precheck_model = "fake/precheck"' setup
+  reply coder "$(done_report)"
+  reply precheck '{"content":"1. Tried to edit work.txt.\n2. Never committed it: no diff to the base.\n3. Write work.txt and commit it."}'
+  until_place parked 90 || bad "never parked: $(events)"
+  assert_eq "$(events)" "picked no_commit picked" "one round, no commit, then parked"
+  assert_match "$(bd_field notes)" "Post-mortem (fake/precheck):" "the note carries the post-mortem"
+  assert_match "$(bd_field notes)" "1. Tried to edit work.txt." "the stub's three lines"
+}
+
+# A pre-check model that errors writing the post-mortem (same catch_all as the pre-check
+# itself) costs the note nothing but its usual line: no post-mortem, and the failure and
+# park go on exactly as they do with no pre-check model at all.
+case_postmortem_unavailable() {
+  GLOBAL_EXTRA='precheck_model = "fake/precheck"' setup
+  reply coder "$(done_report)"
+  echo '{"status":500,"error":"down"}' >"$E2E_CTRL/replies/precheck.last"
+  until_place parked 90 || bad "never parked: $(events)"
+  assert_eq "$(events)" "picked no_commit picked" "one round, no commit, then parked"
+  assert_match "$(bd_field notes)" "worker made no commit" "the tail alone"
+  assert_nomatch "$(bd_field notes)" "Post-mortem" "no post-mortem line when it errored"
+  assert_eq "$(view_bead .failures)" 1 "one failure, no hold"
+}
+
 # A PASS from the pre-check model falls through to the reviewer, same as no pre-check at
 # all: the bead still lands.
 case_precheck_pass() {

@@ -49,3 +49,40 @@ function Precheck(bead: string, report: string, diff: string) -> PrecheckVerdict
         ${ctx.output_format()}
     `
 }
+
+const POSTMORTEM_CHARTER: string = `
+    You are the post-mortem on one failed round. The bead and the worker's transcript
+    are in your prompt — the gate's output too, when the round failed there. You read
+    nothing else; everything you need is already in front of you.
+
+    In at most five lines, as three numbered lines:
+
+    1. What the worker tried.
+    2. Where and why it stopped.
+    3. The first thing the next round should do.
+
+    Name files and commands from the transcript exactly as they appear; do not guess
+    what the worker meant. No verdict, no format beyond the three numbered lines.
+`;
+
+/// The pre-check model's second job, once a round has already failed: the three lines
+/// that go on the bead, so the next round does not start cold.
+function Postmortem(bead: string, transcript: string, gate: string) -> string {
+    client: Acbox
+    prompt: `
+        ${role("system")}
+        ${POSTMORTEM_CHARTER}
+        ${role("user")}
+        <bead>
+        ${bead}
+        </bead>
+
+        <worker-transcript>
+        ${transcript}
+        </worker-transcript>
+
+        <gate-output>
+        ${gate}
+        </gate-output>
+    `
+}
