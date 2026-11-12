@@ -83,8 +83,8 @@ each re-checked:
 | 4 | `case_actor_from_env` | BEADS_ACTOR beats the label as the bd assignee | missing | yes | P3 | mark_args (live.baml:1507) writes only status and labels; no assignee is ever set |
 | 5 | `case_blocked` | BLOCKED at last stage parks, line noted, model brief in worktree, nothing pushed | core | yes | P2 | step_test.baml:227, :882; brief is static text (live.baml:642); ParkBriefAgent never called |
 | 6 | `case_no_commit` | no commit is noted, nothing pushed | e2e | yes | - | case_no_commit (sendbacks.sh) |
-| 7 | `case_postmortem` | after a failed round the precheck model writes a post-mortem into the note | missing | yes | P2 | no post-mortem call in baml_src; note is note_of alone ("worker made no commit"); README:52 still describes it |
-| 8 | `case_postmortem_unavailable` | post-mortem error: note is the tail alone, one failure, no hold | moot | yes | - | no post-mortem call exists to fail; charge as in step_test.baml:239 |
+| 7 | `case_postmortem` | after a failed round the precheck model writes a post-mortem into the note | e2e | yes | - | case_postmortem (precheck.sh) |
+| 8 | `case_postmortem_unavailable` | post-mortem error: note is the tail alone, one failure, no hold | e2e | yes | - | case_postmortem_unavailable (precheck.sh) |
 | 9 | `case_precheck_pass` | precheck PASS sits between worker and reviewer, in the worktree, logged | e2e | yes | - | case_precheck_pass (precheck.sh) |
 | 10 | `case_precheck_sendback` | SEND BACK charges one failure, work order noted, reviewer skipped | e2e | yes | - | case_precheck_sendback (precheck.sh) |
 | 11 | `case_precheck_unavailable` | precheck server error or crash falls through to review, uncharged | e2e | yes | - | case_precheck_unavailable (precheck.sh); one path now: the pre-check is a call inside the round |
