@@ -20,6 +20,10 @@ The local stages' worker is a BAML agent with six tools: `read_file`, `write_fil
 - Name one acceptance command that fails on the base branch and passes once the change is in. The gate runs after the worker whatever it reports; the reviewer holds the diff to the bead.
 - Leave out what a worker cannot do in a worktree: clone, download, sign in, touch another repo.
 - Where the change uses an idiom a reader might take for a mistake, say why in a few words (`sort $xs "value" "desc"` is Hugo's form for plain values). A reviewer that thinks it a bug rejects good work.
+- Make the acceptance command the narrowest test that proves the change, one test by name where the runner allows it, printing its own failure: a quiet grep after a pipe shows only an exit code.
+- Where the change uses a language or idiom a small model may not know, give the code itself, or name a function in the repo to copy: a worker that doesn't know the language lands nothing.
+- For a file over 20000 characters, name the function to change or one exact anchor line: the worker reads such a file in parts.
+- Where the gate checks formatting, name the command that fixes it, in the bead: the local worker is never shown AGENTS.md, so a fixer named only there is never run.
 
 A bead with two possible shapes, or a decision in it, is not ready: settle it first, or the last stage parks it with your question.
 
