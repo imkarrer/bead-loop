@@ -224,6 +224,7 @@ function config_from_toml(
         only: "",
         skip: `${pick(repo_table, global, "target_label", "work")}:`,
         gate: pick(repo_table, global, "gate", ""),
+        primer: pick(repo_table, global, "primer", ""),
         setup: pick(repo_table, global, "setup", ""),
         pr_style: pick(
             repo_table,
@@ -490,6 +491,7 @@ function target_config(
         only: `${label}:${name}`,
         skip: "",
         gate: text_at(t, "gate"),
+        primer: text_at(t, "primer"),
         setup: text_at(t, "setup"),
         pr_style: or_else(
             text_at(t, "pr_style"),

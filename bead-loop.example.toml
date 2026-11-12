@@ -7,6 +7,7 @@ base = "master"                        # branch to fork from and PR into        
 # remote = "origin"                    # where the base is fetched and bead/* pushed (default "origin")
 setup = "npm ci"                       # runs in a fresh worktree before its first round
 gate = "npm run typecheck && npm run lint"   # after the worker, whatever it reports; unset = CI is the gate
+# primer = "NOTES.md"                  # a repo file read into every worker prompt, cut at 4000 characters
 merge = "auto"                         # auto: the loop squash-merges once every check is green
                                        # pipeline: the loop labels the PR (merge_label) and CI merges it
                                        # manual: PR only (held for you once green)

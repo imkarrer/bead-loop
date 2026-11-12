@@ -31,3 +31,19 @@ case_global_config_that_does_not_parse_runs_nothing() {
   assert_eq "$(bd_field status)" open "bd untouched"
   assert_match "$(config_loop_log)" "error .*config\.toml does not parse, so the loop leaves" "the loop's log says why"
 }
+
+# primer names a file in the repo: it reaches the worker's prompt, wrapped in its own tag.
+case_primer_reaches_the_worker() {
+  setup 'test -e work.txt'
+  (
+    cd "$REPO" || exit
+    echo "MARKER-REPO-NOTE" >NOTES.md
+    printf 'primer = "NOTES.md"\n' >>.bead-loop.toml
+    git add -A && git commit -qm notes && git push -q
+  )
+  reply coder "$(write_work)" "$(commit)" "$(done_report)"
+  reply reviewer "$(approve)"
+  until_event pr_merged 90 || bad "never merged: $(events)"
+  assert_match "$(cat "$E2E_CTRL"/requests/*.json)" "<repo-notes>" "the primer is wrapped in its tag"
+  assert_match "$(cat "$E2E_CTRL"/requests/*.json)" "MARKER-REPO-NOTE" "the primer's text reaches the worker"
+}
