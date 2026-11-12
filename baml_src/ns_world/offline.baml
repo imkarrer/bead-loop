@@ -346,6 +346,7 @@ class OfflineWorld {
             base: self.base,
             bead: self.bead_text(id),
             gate: self.gate,
+            primer: "",
             note: note,
             report: root.rounds.load_report(`${self.state}/beads/${id}/report`),
             report_file: `${self.state}/beads/${id}/report`,

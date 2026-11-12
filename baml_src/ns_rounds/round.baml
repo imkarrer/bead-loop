@@ -15,6 +15,8 @@ class RoundSpec {
     base: string,
     bead: string,
     gate: string,
+    /// A path from the repo root to a text file read into every worker prompt; empty is none.
+    primer: string,
     /// What the last round was sent back with.
     note: string,
     /// The worker's last report, for the reviewer.
@@ -174,6 +176,24 @@ function load_report(path: string) -> string throws never {
     }
 }
 
+const PRIMER_CHARS: int = 4000;
+
+/// The repo's own notes, read from the round's worktree; "" when the key is unset or the
+/// file is missing.
+function primer_text(spec: RoundSpec) -> string throws never {
+    if (spec.primer.length() == 0) {
+        return "";
+    }
+    let text = baml.fs.read(`${spec.dir}/${spec.primer}`) catch_all (e) {
+        _ => "",
+    };
+    if (text.length() > PRIMER_CHARS) {
+        text.slice(0, PRIMER_CHARS)
+    } else {
+        text
+    }
+}
+
 function event_log(path: string) -> (ai.events.Event) -> void throws never {
     let out = baml.fs.open(path, "a") catch_all (e) {
         _ => {
@@ -256,7 +276,18 @@ function worker_task(spec: RoundSpec) -> string throws never {
     if (spec.note.length() > 0) {
         body = `${body}\n\nThe last round was sent back:\n${spec.note}`;
     }
-    body
+    with_primer(spec, body)
+}
+
+/// `body`, with the repo's primer (if any) ahead of it, wrapped as the brief is wrapped
+/// in `<research>`, then an empty line.
+function with_primer(spec: RoundSpec, body: string) -> string throws never {
+    let primer = primer_text(spec);
+    if (primer.length() > 0) {
+        `<repo-notes>\n${primer}\n</repo-notes>\n\n${body}`
+    } else {
+        body
+    }
 }
 
 /// The gate passed: the pre-check, when there is one, may still send it back.
@@ -348,7 +379,10 @@ function work_round(spec: RoundSpec) -> root.machine.Event[] throws never {
         return passed(spec, done);
     }
     //# One fix round, with the gate's output
-    let fix = `${spec.bead}\n\nYour commit is on this branch, but the gate failed. Fix it and commit:\n${first.output}`;
+    let fix = with_primer(
+        spec,
+        `${spec.bead}\n\nYour commit is on this branch, but the gate failed. Fix it and commit:\n${first.output}`,
+    );
     let fixed = run_worker(spec, fix) catch_all (e) {
         _ => {
             let out: root.machine.Event[] = [done, failed_session(spec, e)];
@@ -595,7 +629,12 @@ test "an approval" {
     assert.is_type<root.machine.Approved>(review_outcome(v));
 }
 
-function spec_of(brief: string, note: string) -> RoundSpec throws never {
+function spec_of(
+    brief: string,
+    note: string,
+    primer: string = "",
+    dir: string = ".",
+) -> RoundSpec throws never {
     RoundSpec {
         id: "t-1",
         kind: root.world.RoundKind.Work,
@@ -603,10 +642,11 @@ function spec_of(brief: string, note: string) -> RoundSpec throws never {
         base_url: "",
         precheck: "",
         precheck_url: "",
-        dir: ".",
+        dir: dir,
         base: "main",
         bead: "BEAD",
         gate: "",
+        primer: primer,
         note: note,
         report: "",
         report_file: "",
@@ -622,6 +662,17 @@ test "the worker prompt carries the brief and the send-back" {
     assert.contains(worker_task(spec_of("the brief", "")), "<research>");
     assert.contains(worker_task(spec_of("the brief", "")), "the brief");
     assert.contains(worker_task(spec_of("", "REJECT: x")), "sent back")
+}
+
+test "the worker prompt opens with the primer of its repo" {
+    let dir = root.tools.scratch("primer");
+    let _ = baml.sys.run("mkdir", args = ["-p", dir]);
+    baml.fs.write(`${dir}/NOTES.md`, "house rules");
+    assert.is_true(
+        worker_task(spec_of("", "", primer = "NOTES.md", dir = dir)).starts_with("<repo-notes>"),
+    );
+    assert.contains(worker_task(spec_of("", "", primer = "NOTES.md", dir = dir)), "house rules");
+    assert.is_true(worker_task(spec_of("", "")).starts_with("BEAD"))
 }
 
 test "the worker's report is what the reviewer reads" {

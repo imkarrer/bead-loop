@@ -14,6 +14,8 @@ class LoopConfig {
     only: string,
     skip: string,
     gate: string,
+    /// A path from the repo root to a text file read into every worker prompt; empty is none.
+    primer: string,
     setup: string,
     pr_style: string,
     merge_label: string,
@@ -51,6 +53,7 @@ function world_of(c: LoopConfig) -> root.world.LiveWorld throws never {
         only: c.only,
         skip: c.skip,
         gate: c.gate,
+        primer: c.primer,
         setup: c.setup,
         agent_bin: c.agent_bin,
         merge: root.machine.merge_name(c.policy.merge),

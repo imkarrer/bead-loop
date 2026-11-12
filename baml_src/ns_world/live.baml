@@ -29,6 +29,8 @@ class LiveWorld {
     /// The repo itself leaves the beads with a label of this prefix (`work:`) to its targets.
     skip: string,
     gate: string,
+    /// A path from the repo root to a text file read into every worker prompt; empty is none.
+    primer: string,
     /// Runs in a fresh worktree before the first round (`npm ci`).
     setup: string,
     agent_bin: string,
@@ -357,6 +359,7 @@ class LiveWorld {
                 base: `${self.remote}/${self.base}`,
                 bead: self.bead_text(id),
                 gate: self.gate,
+                primer: self.primer,
                 note: note,
                 report: root.rounds.load_report(`${self.state}/beads/${id}/report`),
                 report_file: `${self.state}/beads/${id}/report`,
