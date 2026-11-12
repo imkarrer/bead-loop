@@ -264,9 +264,21 @@ function read_file(path: string, offset: int = 1) -> string throws never {
     `${header}\n${body}`
 }
 
+/// True when `reply` is one of the two answers a change that happened gives.
+function changed_a_file(reply: string) -> bool throws never {
+    reply.starts_with("edited ") || reply.starts_with("wrote ")
+}
+
 /// Create a file, or replace all of one.
 function write_file(path: string, content: string) -> string throws never {
-    edited();
+    let reply = try_write(path, content);
+    if (changed_a_file(reply)) {
+        edited();
+    }
+    reply
+}
+
+function try_write(path: string, content: string) -> string throws never {
     let refused = outside(path, confined_to());
     if let why: string = refused {
         return `cannot write ${why}`;
@@ -283,7 +295,14 @@ function write_file(path: string, content: string) -> string throws never {
 /// Replace `old_text` with `new_text` in a file. `old_text` must match exactly, whitespace
 /// included, and appear exactly once.
 function edit_file(path: string, old_text: string, new_text: string) -> string throws never {
-    edited();
+    let reply = try_edit(path, old_text, new_text);
+    if (changed_a_file(reply)) {
+        edited();
+    }
+    reply
+}
+
+function try_edit(path: string, old_text: string, new_text: string) -> string throws never {
     let refused = outside(path, confined_to());
     if let why: string = refused {
         return `cannot edit ${why}`;
@@ -571,6 +590,14 @@ test "a round's file tools stay in its worktree" {
     assert.contains(outside("../../etc/passwd", "/w/t-1") ?? "", "climbs out");
     assert.contains(outside("/w/t-10/x", "/w/t-1") ?? "", "outside");
     assert.equal(outside("/anywhere", "") == null, true)
+}
+
+test "only a change that happened starts the probe count again" {
+    assert.equal(changed_a_file("edited a"), true);
+    assert.equal(changed_a_file("wrote 3 bytes to a"), true);
+    assert.equal(changed_a_file("old_text not found in a"), false);
+    assert.equal(changed_a_file("old_text appears 2 times in a"), false);
+    assert.equal(changed_a_file("cannot write a is outside the worktree"), false)
 }
 
 test "a round that only probes is told to finish, then refused" {
