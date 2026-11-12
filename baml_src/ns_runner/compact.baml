@@ -61,14 +61,18 @@ function compact_outputs(outputs: string[], budget: int) -> string[] throws neve
         }
         i = i + 1;
     }
-    i = 0;
-    while (i < keep_from && total_len(out) > budget) {
-        let s = out.at(i) ?? "";
-        let cut = stub(s);
-        if (s.length() > cut.length()) {
-            out = replace_at(out, i, cut);
+    // Only stub if we're over budget
+    if (total_len(out) > budget) {
+        i = 0;
+        // Stub until we're at or under half the budget, or until only KEEP_LAST are left
+        while (i < keep_from && total_len(out) > budget / 2) {
+            let s = out.at(i) ?? "";
+            let cut = stub(s);
+            if (s.length() > cut.length()) {
+                out = replace_at(out, i, cut);
+            }
+            i = i + 1;
         }
-        i = i + 1;
     }
     out
 }
@@ -88,4 +92,40 @@ test "the oldest output is stubbed first" {
 test "the last output is kept even when it is the whole budget" {
     let out = compact_outputs(["zzzzzzzzzz"], 4);
     assert.contains(out.at(0) ?? "", "zzzz")
+}
+
+test "over the budget it is cut to half, and then left alone" {
+    // Ten outputs of 100 characters each with budget 900
+    // Should stub the first 7 (700 chars) and keep the last 3 (300 chars)
+    // Total would be 700 + 300 = 1000, which is over budget 900
+    // After stubbing to half budget (450), we should have 7 stubs + 3 full outputs
+    let outputs: string[] = [];
+    let i = 0;
+    while (i < 10) {
+        outputs.push("x".repeat(100));
+        i = i + 1;
+    }
+    let out = compact_outputs(outputs, 900);
+    // Should have 7 stubbed outputs and 3 full outputs
+    assert.equal(out.length(), 10);
+    // First 7 should be stubbed
+    i = 0;
+    while (i < 7) {
+        assert.contains(out.at(i) ?? "", "[100 characters cut]");
+        i = i + 1;
+    }
+    // Last 3 should be full
+    i = 7;
+    while (i < 10) {
+        assert.equal(out.at(i) ?? "", "x".repeat(100));
+        i = i + 1;
+    }
+    // Running it again with same budget should return unchanged
+    let out2 = compact_outputs(out, 900);
+    assert.equal(out2.length(), 10);
+    i = 0;
+    while (i < 10) {
+        assert.equal(out2.at(i) ?? "", out.at(i) ?? "");
+        i = i + 1;
+    }
 }
