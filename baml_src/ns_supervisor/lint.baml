@@ -76,10 +76,19 @@ function acceptance_commands(s: string) -> string[] throws never {
 }
 
 function acceptance_problem(s: string) -> string? throws never {
+    let quiet_grep = baml.regex.new("\\|\\s*grep\\s+-[A-Za-z]*q") catch_all (e) {
+        _ => null,
+    };
     if (s.trim().length() == 0) {
         "no acceptance criteria"
     } else if (acceptance_commands(s).length() == 0) {
         "acceptance has no command"
+    } else if (
+        acceptance_commands(s).some((c) -> {
+            quiet_grep?.has_match(c) ?? false
+        })
+    ) {
+        "acceptance hides its output: a quiet grep after a pipe shows the worker an exit code alone; drop the q"
     } else {
         null
     }
@@ -278,6 +287,24 @@ test "an acceptance is a command, prose or nothing" {
     assert.equal(acceptance_problem("") ?? "", "no acceptance criteria");
     assert.equal(acceptance_problem("work.txt exists") ?? "", "acceptance has no command");
     assert.equal(acceptance_problem("Run `cargo test`") == null, true)
+}
+
+test "an acceptance piped into a quiet grep is flagged" {
+    assert.equal(
+        acceptance_problem("Run `bash -c 'cargo test 2>&1 | grep -q PASS'`")?.starts_with(
+            "acceptance hides its output",
+        )
+            ?? false,
+        true,
+    );
+    assert.equal(
+        acceptance_problem("Run `cargo test | grep -qE ok`")?.starts_with(
+            "acceptance hides its output",
+        )
+            ?? false,
+        true,
+    );
+    assert.equal(acceptance_problem("Run `test -f a && grep -q x a`") == null, true)
 }
 
 test "a bead labelled for a target is linted against the target" {
