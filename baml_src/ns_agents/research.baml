@@ -23,6 +23,10 @@ const RESEARCH_CHARTER: string = `
     bead makes against the code. A false claim the bead cannot be done with means you
     stop and report blocked, naming the file and line.
 
+    A claim is what the bead says is in the code now: a file, a function, a line to find.
+    What the bead asks you to build is not a claim. That it is not there yet is why the
+    bead exists, and never a reason to block.
+
     Read every file the bead names before you answer. An answer given before any read is
     discarded.
 
@@ -96,4 +100,9 @@ test "a brief need not carry the BLOCKED line" {
         "{\"outcome\":\"brief\",\"files\":\"layouts/_default/sponsors.html\",\"shape\":\"1. ...\",\"check\":\"hugo\",\"pitfalls\":\"p\"}",
     );
     assert.is_type<root.machine.BriefWritten>(research_outcome(r, false));
+}
+
+test "the charter tells a claim from the change asked for" {
+    assert.contains(RESEARCH_CHARTER, "is not a claim");
+    assert.contains(RESEARCH_CHARTER, "never a reason to block");
 }
