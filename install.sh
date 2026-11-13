@@ -16,11 +16,11 @@ OS=${BEAD_LOOP_OS:-$(uname -s)}   # BEAD_LOOP_OS: the suite drives the macOS pat
 # SRC is where the links point: the checkout, or the environment holding the package.
 packaged=
 SRC=$HERE
-if [ "$(basename "$HERE")" = bin ] && [ -d "$HERE/../agents" ] && [ ! -f "$HERE/../Cargo.toml" ]; then
+if [ "$(basename "$HERE")" = bin ] && [ -d "$HERE/../skills" ] && [ ! -f "$HERE/../Cargo.toml" ]; then
   packaged=1
   HERE=$(cd "$HERE/.." && pwd)
   SRC=$HERE
-  if sup=$(command -v bead-supervisor) && [ -d "$(dirname "$sup")/../agents" ]; then
+  if sup=$(command -v bead-supervisor) && [ -d "$(dirname "$sup")/../skills" ]; then
     SRC=$(cd "$(dirname "$sup")/.." && pwd)
   fi
 fi
@@ -29,9 +29,11 @@ mkdir -p "$OC/skills" "$OC/agents" "$HOME/.local/bin" "$HOME/.config/bead-loop"
 for s in "$SRC"/skills/*/; do
   s=${s%/}; n=$(basename "$s"); ln -sfn "$s" "$OC/skills/$n"; echo "skill  $OC/skills/$n -> $s"
 done
-for a in "$SRC"/agents/*.md; do
-  n=$(basename "$a"); ln -sfn "$a" "$OC/agents/$n"; echo "agent  $OC/agents/$n -> $a"
+# The worker is BAML now. Remove the links an earlier install left behind.
+for n in bead-briefer bead-postmortem bead-prechecker bead-researcher bead-reviewer bead-worker; do
+  rm -f "$OC/agents/$n.md"
 done
+rm -f "$OC/skills/bead-workflow" "$HOME/.claude/skills/bead-workflow"
 # Claude Code (the claude/<model> stages, and you at the terminal) reads ~/.claude/skills.
 if command -v claude >/dev/null; then
   mkdir -p "$HOME/.claude/skills"
