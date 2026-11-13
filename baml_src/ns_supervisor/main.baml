@@ -56,6 +56,7 @@ function world_of(c: LoopConfig) -> root.world.LiveWorld throws never {
         skip: c.skip,
         gate: c.gate,
         primer: c.primer,
+        fixer: c.fixer,
         setup: c.setup,
         agent_bin: c.agent_bin,
         merge: root.machine.merge_name(c.policy.merge),
