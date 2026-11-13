@@ -577,3 +577,29 @@ test "a repo is its config and its supervisor's view, each bead in its node" {
     assert.equal(r.parked.at(0)?.id, "t-park");
     assert.equal(r.ready_to_publish.at(0)?.id, "t-pub")
 }
+
+test "the scoreboard counts what landed inside a window" {
+    let a_recs: root.supervisor.FRoundRec[] = [];
+    let a = root.supervisor.tally_of("a", a_recs);
+    a.landed_at = 950;
+
+    let b_recs: root.supervisor.FRoundRec[] = [];
+    let b = root.supervisor.tally_of("b", b_recs);
+    b.landed_at = 960;
+    b.charged = true;
+    b.local = false;
+
+    let c_recs: root.supervisor.FRoundRec[] = [];
+    let c = root.supervisor.tally_of("c", c_recs);
+    c.landed_at = 100;
+
+    let d_recs: root.supervisor.FRoundRec[] = [];
+    let d = root.supervisor.tally_of("d", d_recs);
+
+    let tallies = [a, b, c, d];
+    let w = fwindow(tallies, 900, 100);
+    assert.equal(w.landed, 2);
+    assert.equal(w.landed_first_try, 1);
+    assert.equal(w.landed_local, 1);
+    assert.equal(fwindow(tallies, 0, 1000).landed, 3)
+}
