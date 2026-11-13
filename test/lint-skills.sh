@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Skills: frontmatter with name matching the directory and a description that says when.
-# Agents: frontmatter with description, mode and an explicit permission block.
+
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")/.." && pwd); rc=0
 fm() { awk 'NR==1 && $0!="---" {exit 1} NR>1 && $0=="---" {exit} NR>1' "$1"; }
