@@ -1,6 +1,6 @@
 # shellcheck shell=bash
 # A usage limit holds the provider that hit it, not just the bead. Ported from the Rust
-# suite (`git show 8907dfa:test/run.sh`), minus two cases the BAML loop has no code path
+# suite (`git show 8907dfa:test/run.sh`), minus one case the BAML loop has no code path
 # for:
 #
 #   case_claude_signed_out_beads_wait: the Rust loop asked `claude auth status` before
@@ -11,11 +11,11 @@
 #   round here, and the round fails the way any Claude CLI failure does — the usage-limit
 #   cases below, and core.sh's case_claude_failure_is_kept, are what that looks like now.
 #
-#   case_provider_probe_down_beads_wait: same code path, for a `[providers.NAME] probe`
-#   URL instead of Claude's. The Rust loop GET it before a round and held the lane, no
-#   round attempted, on a failure. Nothing in the BAML loop makes that GET; a provider
-#   whose server is actually down is only found out by trying a round on it and having it
-#   fail, which core.sh's case_server_down_is_a_hold already covers.
+# case_provider_probe_down_beads_wait is below too, on a different code path than the
+# Rust loop's: not a GET before the round, but the round's own one-token completion
+# (round.baml's server_answers, slow_words) — a `[providers.NAME]` server that does not
+# answer that holds the provider the same way a usage limit does, which
+# case_server_down_holds_the_provider proves.
 #
 # What is left: a usage limit's own words hold every claude/* round, not only the bead
 # that hit it (round.baml's limit_hit, supervisor.baml's lane_free). core.sh's
@@ -78,4 +78,18 @@ case_usage_limit_ends_for_every_bead() {
   done
   [ -e "$E2E_CTRL/claude/argv-002" ] && ok || bad "the held bead's round never ran once the reset passed"
   [ -e "$E2E_CTRL/claude/argv-003" ] && ok || bad "the queued second bead's round never ran either"
+}
+
+# A `[providers.NAME]` server that does not answer the round's one-token probe
+# (round.baml's server_answers) holds the provider, not the bead: no round, no failure,
+# and the hold alone does not park it.
+case_server_down_holds_the_provider() {
+  setup 'test -e work.txt'
+  kill "$MODEL_PID"
+  until_event infra 60 || bad "no hold: $(events)"
+  assert_eq "$(events)" "picked infra" "held, no round attempted"
+  assert_match "$(bd_field notes)" "server slow on fake" "the hold's words on the bead"
+  tick 10
+  assert_nomatch "$(view_bead .place)" parked "parked on a single hold"
+  assert_nomatch "$(bd_field status)" blocked "bd status"
 }
