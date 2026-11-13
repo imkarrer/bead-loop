@@ -10,6 +10,8 @@
 //   {"status": 500, "error": "TEXT"}      the server failing
 // With the queue empty, the reply is CTRL/replies/MODEL.last if there is one, else a 500
 // that says the script ran out, so a case that asks more than it scripted fails loudly.
+// A request with max_tokens === 1 is the one-token probe, answered immediately without
+// using a scripted reply.
 import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
@@ -74,6 +76,16 @@ const server = http.createServer((req, res) => {
   let body = "";
   req.on("data", (c) => (body += c));
   req.on("end", () => {
+    // A round's one-token probe: answered at once, kept nowhere, no scripted reply used.
+    let probe = false;
+    try {
+      probe = JSON.parse(body).max_tokens === 1;
+    } catch {}
+    if (probe) {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify(completion("probe", { content: "" })));
+      return;
+    }
     n += 1;
     fs.writeFileSync(path.join(ctrl, "requests", `${String(n).padStart(3, "0")}.json`), body);
     let model = "unknown";
