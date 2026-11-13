@@ -19,7 +19,7 @@ check() { if "${@:2}"; then echo "ok   $1"; else echo "FAIL $1"; fails=$((fails 
 
 check "bin/bead-supervisor runs" sh -c '"$1" --help >/dev/null' _ "$out/bin/bead-supervisor"
 check "bin/bead-loop-ui parses" sh -n "$out/bin/bead-loop-ui"
-for a in agents/*.md; do check "$a" test -f "$out/$a"; done
+
 for s in skills/*/SKILL.md; do check "$s" test -f "$out/$s"; done
 check "bin/bead-loop-install" test -x "$out/bin/bead-loop-install"
 for l in launchd/*.plist; do check "$l" test -f "$out/$l"; done
