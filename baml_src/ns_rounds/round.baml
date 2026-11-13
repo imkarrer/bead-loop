@@ -461,6 +461,21 @@ function charge_postmortem(
     }
 }
 
+/// What a round whose server did not answer comes to. A researcher's is no brief, so
+/// the worker goes without one; any other is held on its server and not charged.
+function unanswered(spec: RoundSpec) -> root.machine.Event[] throws never {
+    if (spec.kind == root.world.RoundKind.Research) {
+        return [root.machine.BriefWritten { kind: "brief_written", overruled: false, text: "" }];
+    }
+    [
+        root.machine.Infra {
+            kind: "infra",
+            what: root.machine.Trouble.SignedOut,
+            words: slow_words(spec.model),
+        },
+    ]
+}
+
 function work_round(spec: RoundSpec) -> root.machine.Event[] throws never {
     let before = git_head(spec.dir);
     let task = worker_task(spec);
@@ -711,7 +726,9 @@ function round(spec_file: string) -> string {
     // The read record is this round's alone too: a research or review round reuses a
     // pid, and a worker's revision session reuses this one (bl-gc1.4).
     root.tools.forget_reads();
-    let events = if (spec.kind == root.world.RoundKind.Work) {
+    let events = if (!server_answers(spec.model, spec.base_url)) {
+        unanswered(spec)
+    } else if (spec.kind == root.world.RoundKind.Work) {
         work_round(spec)
     } else {
         if (spec.kind == root.world.RoundKind.Review) {
@@ -881,6 +898,24 @@ test "a usage limit is the provider's, not the worker's" {
     assert.is_type<root.machine.Infra>(e);
     assert.is_type<root.machine.Infra>(limit_hit("Claude AI usage limit reached|1794120000"));
     assert.equal(limit_hit("there is a limit on how much I can help") == null, true)
+}
+
+test "a round whose server is silent is held, and a research round is no brief" {
+    let events = unanswered(spec_of("", ""));
+    assert.equal(events.length(), 1);
+    if let infra: root.machine.Infra = events[0] {
+        assert.is_true(infra.words.starts_with("server slow on"));
+    } else {
+        assert.is_true(false);
+    }
+    let research = RoundSpec { ...spec_of("", ""), kind: root.world.RoundKind.Research };
+    let research_events = unanswered(research);
+    assert.equal(research_events.length(), 1);
+    if let brief: root.machine.BriefWritten = research_events[0] {
+        assert.equal(brief.text, "");
+    } else {
+        assert.is_true(false);
+    }
 }
 
 /// A worker that reports done with its change still uncommitted has done the work and
