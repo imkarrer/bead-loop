@@ -495,6 +495,12 @@ test "a log is asked for by its repo and file name" {
     )
 }
 
+test "a log from a state the page does not show is refused" {
+    let none: root.supervisor.LoopConfig[] = [];
+    let reply = log_text("/api/log?repo=%2Fetc&file=passwd", none);
+    assert.equal(reply.status, 403)
+}
+
 test "a lever comes back with what the loop did" {
     let state = root.tools.scratch("await");
     let _ = baml.sys.run("mkdir", args = ["-p", state]);
