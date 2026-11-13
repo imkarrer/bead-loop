@@ -225,6 +225,7 @@ function config_from_toml(
         skip: `${pick(repo_table, global, "target_label", "work")}:`,
         gate: pick(repo_table, global, "gate", ""),
         primer: pick(repo_table, global, "primer", ""),
+        fixer: pick(repo_table, global, "fixer", ""),
         setup: pick(repo_table, global, "setup", ""),
         pr_style: pick(
             repo_table,
@@ -378,6 +379,13 @@ test "a repo toml keeps its merge mode and takes the global stages" {
     assert.equal(c.policy.on_exhaust, root.machine.OnExhaust.Park)
 }
 
+test "the fixer key is read from the repo table" {
+    let c = config_from_toml("fixer = \"make fmt\"\n", GLOBAL_SAMPLE, "/src/r", "/state", "bead-loop");
+    assert.equal(c.fixer, "make fmt");
+    let none = config_from_toml("", GLOBAL_SAMPLE, "/src/r", "/state", "bead-loop");
+    assert.equal(none.fixer, "")
+}
+
 /// `[providers.NAME] parallel` for each provider that sets it. A provider that does not
 /// runs one round at a time, the Rust loop's default.
 function capacity_of(global: baml.toml.Table) -> map<string, int> throws never {
@@ -492,6 +500,7 @@ function target_config(
         skip: "",
         gate: text_at(t, "gate"),
         primer: text_at(t, "primer"),
+        fixer: text_at(t, "fixer"),
         setup: text_at(t, "setup"),
         pr_style: or_else(
             text_at(t, "pr_style"),
