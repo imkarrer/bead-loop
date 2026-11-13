@@ -16,6 +16,8 @@ class LoopConfig {
     gate: string,
     /// A path from the repo root to a text file read into every worker prompt; empty is none.
     primer: string,
+    /// A command run in the worktree before each gate run (a formatter); empty is none.
+    fixer: string,
     setup: string,
     pr_style: string,
     merge_label: string,
