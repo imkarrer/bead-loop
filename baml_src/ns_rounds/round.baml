@@ -957,6 +957,26 @@ test "a done report's uncommitted change is committed for it" {
     assert.equal(msg.stdout.to_string().trim(), "t-1: wrote a.txt")
 }
 
+test "the fixer runs and what it changes is committed" {
+    let dir = root.tools.scratch("run-fixer");
+    let _ = baml.sys.run("rm", args = ["-rf", dir]);
+    let _ = baml.sys.run("mkdir", args = ["-p", dir]);
+    let _ = baml.sys.run("git", args = ["init", "-q"], cwd = dir);
+    let _ = baml.sys.run(
+        "git",
+        args = ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "base"],
+        cwd = dir,
+    );
+    let _ = baml.sys.run("git", args = ["config", "user.email", "t@t"], cwd = dir);
+    let _ = baml.sys.run("git", args = ["config", "user.name", "t"], cwd = dir);
+    run_fixer(dir, "t-1", "echo fixed > f.txt");
+    let msg = baml.sys.run("git", args = ["log", "-1", "--format=%s"], cwd = dir, capture_output = true);
+    assert.equal(msg.stdout.to_string().trim(), "t-1: fixer");
+    let before = git_head(dir);
+    run_fixer(dir, "t-1", "");
+    assert.equal(git_head(dir), before)
+}
+
 test "a researcher's answer that will not parse is no brief, not a hold" {
     let e = research_failed(ai.errors.ParseFailed { provider: "openai-generic", raw_output: "{" });
     if let b: root.machine.BriefWritten = e {
