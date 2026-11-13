@@ -249,6 +249,24 @@ function primer_text(spec: RoundSpec) -> string throws never {
     }
 }
 
+/// The repo's fixer, run for the worker before each gate run. What it changes is
+/// committed; its exit code is not read: the gate decides.
+function run_fixer(dir: string, id: string, fixer: string) -> void throws never {
+    if (fixer.length() == 0) {
+        return;
+    }
+    let quoted = fixer.split("'").join("'\\''");
+    let _ = baml.sys.shell(
+        root.tools.unconfined(`sh -c '${quoted}'`),
+        cwd = dir,
+        capture_output = true,
+        timeout = baml.time.Duration.from_seconds(600),
+    ) catch_all (e) {
+        _ => null,
+    };
+    commit_left(dir, id, "fixer");
+}
+
 function event_log(path: string) -> (ai.events.Event) -> void throws never {
     let out = baml.fs.open(path, "a") catch_all (e) {
         _ => {
@@ -491,6 +509,7 @@ function work_round(spec: RoundSpec) -> root.machine.Event[] throws never {
         return [charge_postmortem(spec, "", event)];
     }
     let done: root.machine.Event = root.machine.Committed { kind: "committed", sha: after };
+    run_fixer(spec.dir, spec.id, spec.fixer);
     let first = run_gate(spec.dir, spec.gate);
     save_gate(spec, first);
     if (first.ok) {
@@ -511,6 +530,7 @@ function work_round(spec: RoundSpec) -> root.machine.Event[] throws never {
     if (fixed.outcome == "done") {
         commit_left(spec.dir, spec.id, fixed.summary);
     }
+    run_fixer(spec.dir, spec.id, spec.fixer);
     let second = run_gate(spec.dir, spec.gate);
     save_gate(spec, second);
     if (second.ok) {
