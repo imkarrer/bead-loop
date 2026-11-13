@@ -201,7 +201,7 @@ flox install imkarrer/bead-loop                    # into the environment you li
 bead-loop-install                                   # links, config, and the launchd agents
 ```
 
-`bead-loop-install` builds nothing. It links `agents/` and `skills/` into opencode
+`bead-loop-install` builds nothing. It links `skills/` into opencode
 through that environment, whose path an upgrade keeps, seeds the config, and starts two
 launchd agents in `~/Library/LaunchAgents`: `dev.bead-loop.supervisor` (the loop) and
 `dev.bead-loop.ui` (the page). launchd keeps both up (`KeepAlive`) and starts them at

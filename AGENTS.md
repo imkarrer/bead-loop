@@ -25,7 +25,7 @@ bash -c "$(sed -n 's/^gate = "\(.*\)"$/\1/p' .bead-loop.toml)"   # the whole gat
 
 Run the parts on their own while iterating:
 - `baml-cli --agent-skill-check off test` for the loop;
-- `test/lint-skills.sh` for `skills/` and `agents/` (frontmatter, under 700 words);
+- `test/lint-skills.sh` for `skills/` (frontmatter, under 700 words);
 - `scripts/pack.sh target/bead-supervisor` for the binary the unit execs, then
   `test/e2e/run.sh [CASE...]` for the end-to-end cases on it (`KEEP=1` keeps a passing
   case's directory; a failing one is always kept).
