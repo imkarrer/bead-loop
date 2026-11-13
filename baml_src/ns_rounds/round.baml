@@ -17,6 +17,8 @@ class RoundSpec {
     gate: string,
     /// A path from the repo root to a text file read into every worker prompt; empty is none.
     primer: string,
+    /// The repo's fixer command; empty is none.
+    fixer: string,
     /// What the last round was sent back with.
     note: string,
     /// The worker's last report, for the reviewer.
@@ -756,6 +758,7 @@ function spec_of(
     brief: string,
     note: string,
     primer: string = "",
+    fixer: string = "",
     dir: string = ".",
     model: string = "m",
 ) -> RoundSpec throws never {
@@ -771,6 +774,7 @@ function spec_of(
         bead: "BEAD",
         gate: "",
         primer: primer,
+        fixer: fixer,
         note: note,
         report: "",
         report_file: "",
@@ -799,6 +803,11 @@ test "the worker prompt opens with the primer of its repo" {
     let empty = root.tools.scratch("empty");
     let _ = baml.sys.run("mkdir", args = ["-p", empty]);
     assert.is_true(worker_task(spec_of("", "", dir = empty)).starts_with("BEAD"))
+}
+
+test "a round spec carries the fixer" {
+    assert.equal(spec_of("", "", fixer = "make fmt").fixer, "make fmt");
+    assert.equal(spec_of("", "").fixer, "")
 }
 
 test "a repo with no primer key gets its AGENTS file" {

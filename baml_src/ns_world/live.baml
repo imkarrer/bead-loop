@@ -362,6 +362,7 @@ class LiveWorld {
                 bead: self.bead_text(id),
                 gate: self.gate,
                 primer: self.primer,
+                fixer: self.fixer,
                 note: note,
                 report: root.rounds.load_report(`${self.state}/beads/${id}/report`),
                 report_file: `${self.state}/beads/${id}/report`,
