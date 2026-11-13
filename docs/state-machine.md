@@ -30,8 +30,8 @@ branch with a rebase order, and that round's worker is `conflict_worker` (the la
 stage's by default): resolving a conflict is judgement. **Review comments** from someone
 other than the loop's account do the same, with the comments as the order. And
 **infrastructure is never the bead's failure**: setup failing, git refusing the worktree,
-a session that returns nothing from the model, `gh` or the push refusing, a usage limit.
-The round did not happen. The bead stays where it is, **held** with the reason, and is
+a session that returns nothing from the model, `gh` or the push refusing, a usage limit,
+a model server that does not answer. The round did not happen. The bead stays where it is, **held** with the reason, and is
 tried again a few ticks later (a usage limit: a minute past the reset it states, half an
 hour when it states none, or half an hour when a weekly limit states a reset more than six
 hours off, and every round on that provider waits with it). A harness that fails five times in a row, with nothing else
@@ -141,6 +141,7 @@ back to where it was picked from, uncharged.
 | Worker reports done with its change uncommitted | the round commits it, and the gate decides | — |
 | Setup fails, git refuses the worktree, a session returns nothing | **held**, no failure | removed unless a round had committed |
 | A Claude usage limit | **held**, no failure; no claude round starts until it clears | as it was |
+| A model server that does not answer a one-token probe in 30 s | **held** on that server, no failure, never parked; no round starts there until one answers. A researcher's round is no brief instead: the worker goes without one | as it was |
 | The harness held five times in a row (the same broken CLI) | **parked** with its words, no failure | as it was |
 | Gate fails twice (one fix round with its output) | +1 failure; ready | removed |
 | Gate passes, pre-check passes (or cannot answer) | in review | kept |
