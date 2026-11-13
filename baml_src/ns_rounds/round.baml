@@ -249,6 +249,24 @@ function primer_text(spec: RoundSpec) -> string throws never {
     }
 }
 
+/// The repo's fixer, run for the worker before each gate run. What it changes is
+/// committed; its exit code is not read: the gate decides.
+function run_fixer(dir: string, id: string, fixer: string) -> void throws never {
+    if (fixer.length() == 0) {
+        return;
+    }
+    let quoted = fixer.split("'").join("'\\''");
+    let _ = baml.sys.shell(
+        root.tools.unconfined(`sh -c '${quoted}'`),
+        cwd = dir,
+        capture_output = true,
+        timeout = baml.time.Duration.from_seconds(600),
+    ) catch_all (e) {
+        _ => null,
+    };
+    commit_left(dir, id, "fixer");
+}
+
 function event_log(path: string) -> (ai.events.Event) -> void throws never {
     let out = baml.fs.open(path, "a") catch_all (e) {
         _ => {
@@ -506,6 +524,7 @@ function work_round(spec: RoundSpec) -> root.machine.Event[] throws never {
         return [charge_postmortem(spec, "", event)];
     }
     let done: root.machine.Event = root.machine.Committed { kind: "committed", sha: after };
+    run_fixer(spec.dir, spec.id, spec.fixer);
     let first = run_gate(spec.dir, spec.gate);
     save_gate(spec, first);
     if (first.ok) {
@@ -526,6 +545,7 @@ function work_round(spec: RoundSpec) -> root.machine.Event[] throws never {
     if (fixed.outcome == "done") {
         commit_left(spec.dir, spec.id, fixed.summary);
     }
+    run_fixer(spec.dir, spec.id, spec.fixer);
     let second = run_gate(spec.dir, spec.gate);
     save_gate(spec, second);
     if (second.ok) {
@@ -970,6 +990,26 @@ test "a done report's uncommitted change is committed for it" {
     assert.equal(git_head(dir) != before, true);
     let msg = baml.sys.run("git", args = ["log", "-1", "--format=%s"], cwd = dir, capture_output = true);
     assert.equal(msg.stdout.to_string().trim(), "t-1: wrote a.txt")
+}
+
+test "the fixer runs and what it changes is committed" {
+    let dir = root.tools.scratch("run-fixer");
+    let _ = baml.sys.run("rm", args = ["-rf", dir]);
+    let _ = baml.sys.run("mkdir", args = ["-p", dir]);
+    let _ = baml.sys.run("git", args = ["init", "-q"], cwd = dir);
+    let _ = baml.sys.run(
+        "git",
+        args = ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "base"],
+        cwd = dir,
+    );
+    let _ = baml.sys.run("git", args = ["config", "user.email", "t@t"], cwd = dir);
+    let _ = baml.sys.run("git", args = ["config", "user.name", "t"], cwd = dir);
+    run_fixer(dir, "t-1", "echo fixed > f.txt");
+    let msg = baml.sys.run("git", args = ["log", "-1", "--format=%s"], cwd = dir, capture_output = true);
+    assert.equal(msg.stdout.to_string().trim(), "t-1: fixer");
+    let before = git_head(dir);
+    run_fixer(dir, "t-1", "");
+    assert.equal(git_head(dir), before)
 }
 
 test "a researcher's answer that will not parse is no brief, not a hold" {
