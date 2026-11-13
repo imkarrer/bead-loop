@@ -25,7 +25,7 @@ tools; any other runs `MODEL` on that provider's OpenAI-compatible server
 | `remote` | `"origin"` | where the base is fetched from and `bead/*` branches are pushed |
 | `setup` | none | runs in a fresh worktree before its first round (`npm ci`); not again on a branch sent back. Failing holds the bead, no failure |
 | `gate` | none (CI is the gate) | runs after the worker in its worktree, whatever the worker reported; one fix round with its output on failure |
-| `primer` | none | a path from the repo root to a text file, read into every worker prompt (and the gate's fix prompt), cut at 4000 characters |
+| `primer` | AGENTS.md at the repo root, for a local worker | a path from the repo root to a text file, read into every worker prompt (and the gate's fix prompt), cut at 4000 characters |
 | `precheck_model` | none | after the gate passes, reads the diff, the bead and the worker's report; SEND BACK is a failure, a pass or no answer goes on to review |
 | `[[stages]]` | **required** | the workers and reviewers, in order (below) |
 | `on_exhaust` | `"park"` | after the last stage: `park` for you, or `repeat` the stages |

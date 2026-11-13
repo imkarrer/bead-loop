@@ -178,13 +178,19 @@ function load_report(path: string) -> string throws never {
 
 const PRIMER_CHARS: int = 4000;
 
-/// The repo's own notes, read from the round's worktree; "" when the key is unset or the
-/// file is missing.
+/// The repo's own notes, read from the round's worktree: AGENTS.md when the key is
+/// unset, except for a Claude round, which reads that file itself; "" when the file is
+/// missing.
 function primer_text(spec: RoundSpec) -> string throws never {
-    if (spec.primer.length() == 0) {
+    if (spec.primer.length() == 0 && root.agents.uses_claude(spec.model)) {
         return "";
     }
-    let text = baml.fs.read(`${spec.dir}/${spec.primer}`) catch_all (e) {
+    let name = if (spec.primer.length() == 0) {
+        "AGENTS.md"
+    } else {
+        spec.primer
+    };
+    let text = baml.fs.read(`${spec.dir}/${name}`) catch_all (e) {
         _ => "",
     };
     if (text.length() > PRIMER_CHARS) {
@@ -704,11 +710,12 @@ function spec_of(
     note: string,
     primer: string = "",
     dir: string = ".",
+    model: string = "m",
 ) -> RoundSpec throws never {
     RoundSpec {
         id: "t-1",
         kind: root.world.RoundKind.Work,
-        model: "m",
+        model: model,
         base_url: "",
         precheck: "",
         precheck_url: "",
@@ -742,7 +749,20 @@ test "the worker prompt opens with the primer of its repo" {
         worker_task(spec_of("", "", primer = "NOTES.md", dir = dir)).starts_with("<repo-notes>"),
     );
     assert.contains(worker_task(spec_of("", "", primer = "NOTES.md", dir = dir)), "house rules");
-    assert.is_true(worker_task(spec_of("", "")).starts_with("BEAD"))
+    let empty = root.tools.scratch("empty");
+    let _ = baml.sys.run("mkdir", args = ["-p", empty]);
+    assert.is_true(worker_task(spec_of("", "", dir = empty)).starts_with("BEAD"))
+}
+
+test "a repo with no primer key gets its AGENTS file" {
+    let dir = root.tools.scratch("no-primer-key");
+    let _ = baml.sys.run("mkdir", args = ["-p", dir]);
+    baml.fs.write(`${dir}/AGENTS.md`, "house agents");
+    assert.is_true(worker_task(spec_of("", "", dir = dir)).starts_with("<repo-notes>"));
+    assert.contains(worker_task(spec_of("", "", dir = dir)), "house agents");
+    assert.is_true(
+        worker_task(spec_of("", "", dir = dir, model = "claude/sonnet")).starts_with("BEAD"),
+    )
 }
 
 test "the worker's report is what the reviewer reads" {
