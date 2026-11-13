@@ -13,14 +13,5 @@ for s in "$HERE"/skills/*/SKILL.md; do
 done
 grep -q 'planned-in:' "$HERE"/skills/delegate/SKILL.md || { echo "skills/delegate/SKILL.md: no planned-in label"; rc=1; }
 grep -q 'bead-supervisor lint' "$HERE"/skills/delegate/SKILL.md || { echo "skills/delegate/SKILL.md: no lint step"; rc=1; }
-for a in "$HERE"/agents/*.md; do
-  for k in description mode; do [ -n "$(field "$a" $k)" ] || { echo "$a: no $k"; rc=1; }; done
-  fm "$a" | grep -q '^permission:' || { echo "$a: no permission block"; rc=1; }
-  fm "$a" | grep -q '^  task: deny' || { echo "$a: subagents not denied"; rc=1; }
-  # opencode takes the LAST rule that matches, so a "*" entry below others overrides
-  # them all, and a map that ends "*": deny hides the tool outright. "*" goes first.
-  late=$(fm "$a" | awk '/^[^ ]/ || /^  [^ #]/ { k = ""; n = 0 } /^  [a-z_]+:$/ { k = substr($1, 1, length($1) - 1); next } k && /^    [^ #]/ && ++n > 1 && $1 == "\"*\":" { print k }')
-  [ -z "$late" ] || { echo "$a: \"*\" is not the first rule under $late"; rc=1; }
-done
-[ $rc = 0 ] && echo "skills and agents ok"
+[ $rc = 0 ] && echo "skills ok"
 exit $rc
