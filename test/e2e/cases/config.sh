@@ -47,3 +47,19 @@ case_primer_reaches_the_worker() {
   assert_match "$(cat "$E2E_CTRL"/requests/*.json)" "<repo-notes>" "the primer is wrapped in its tag"
   assert_match "$(cat "$E2E_CTRL"/requests/*.json)" "MARKER-REPO-NOTE" "the primer's text reaches the worker"
 }
+
+# AGENTS.md reaches the worker when no primer is set: it is the default primer file.
+case_agents_file_is_the_default_primer() {
+  setup 'test -e work.txt'
+  (
+    cd "$REPO" || exit
+    echo "MARKER-AGENTS-NOTE" >AGENTS.md
+    # No primer line in .bead-loop.toml, so AGENTS.md is used as the default primer
+    git add -A && git commit -qm agents && git push -q
+  )
+  reply coder "$(write_work)" "$(commit)" "$(done_report)"
+  reply reviewer "$(approve)"
+  until_event pr_merged 90 || bad "never merged: $(events)"
+  assert_match "$(cat "$E2E_CTRL"/requests/*.json)" "<repo-notes>" "the primer is wrapped in its tag"
+  assert_match "$(cat "$E2E_CTRL"/requests/*.json)" "MARKER-AGENTS-NOTE" "the primer's text reaches the worker"
+}
