@@ -63,7 +63,7 @@ past what is deployed — then download the release `main-<sha7>` the pipeline p
 for exactly that commit (the tested binary, byte for byte; no compiler on the box), put
 the clone at the commit, `install.sh` with that binary, and restart what changed: the loop
 always (its rounds are detached processes and keep running); the page always, since it
-is the same binary. The opencode server is still restarted when `agents/` or `skills/`
+is the same binary. The opencode server is still restarted when `skills/`
 moves, though the loop no longer uses it.
 
 The clone is the deploy's alone — nothing else writes there, so a reset is always safe —
