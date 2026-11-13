@@ -78,6 +78,13 @@ function slow_words(model: string) -> string throws never {
     `server slow on ${model.split("/").at(0) ?? model}: no answer to a one-token probe in ${PROBE_SECONDS}s`
 }
 
+test "a server that does not answer fails the probe" {
+    assert.is_true(!server_answers("fake/m", "http://127.0.0.1:9/v1"));
+    assert.is_true(server_answers("claude/sonnet", ""));
+    assert.is_true(server_answers("devbox/coder", ""));
+    assert.is_true(slow_words("devbox/coder").starts_with("server slow on devbox:"))
+}
+
 function infra_harness(words: string) -> root.machine.Event throws never {
     root.machine.Infra { kind: "infra", what: root.machine.Trouble.Harness, words: words }
 }
