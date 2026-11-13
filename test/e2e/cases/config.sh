@@ -74,7 +74,14 @@ case_fixer_runs_before_the_gate() {
   )
   reply coder "$(write_work)" "$(commit)" "$(done_report)"
   reply reviewer "$(approve)"
-  until_event pr_merged 90 || bad "never merged: $(events)"
-  # Verify that the fixer command created the fixed.txt file
-  assert_match "$(git -C "$E2E_ORIGIN" show HEAD:fixed.txt 2>/dev/null || echo '')" "fixed" "the fixer created fixed.txt"
+  # The merge, once seen, also deletes the branch in the same tick, so the branch's log is
+  # read on every tick and the last reading before it is gone is what gets asserted on.
+  local subjects="" seen="" start=$SECONDS
+  while [ $((SECONDS - start)) -lt 90 ]; do
+    tick 1
+    seen=$(git -C "$E2E_ORIGIN" log "bead/$BEAD" --format=%s 2>/dev/null) && [ -n "$seen" ] && subjects=$seen
+    events | grep -qw pr_merged && break
+  done
+  events | grep -qw pr_merged || bad "never merged: $(events)"
+  assert_match "$subjects" "$BEAD: fixer\$" "the fixer's commit landed on the branch before the gate ran"
 }
