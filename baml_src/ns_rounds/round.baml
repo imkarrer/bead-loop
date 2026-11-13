@@ -38,6 +38,46 @@ const MAX_STEPS: int = 80;
 /// and never return a verdict (t-1 e2e, 7 Nov).
 const REVIEW_STEPS: int = 12;
 
+const PROBE_SECONDS: int = 30;
+
+/// Whether the model server answers a one-token completion in time. A Claude round,
+/// and a round with no server url, is not probed.
+function server_answers(model: string, base_url: string) -> bool throws never {
+    if (root.agents.uses_claude(model) || base_url.length() == 0) {
+        return true;
+    }
+    let name = model.split("/").at(1) ?? model;
+    let body = `{"model":"${name}","max_tokens":1,"messages":[{"role":"user","content":"ping"}]}`;
+    let out = baml.sys.run(
+        "curl",
+        args = [
+            "-s",
+            "-o",
+            "/dev/null",
+            "-w",
+            "%{http_code}",
+            "-m",
+            `${PROBE_SECONDS}`,
+            "-H",
+            "content-type: application/json",
+            "-d",
+            body,
+            `${base_url}/chat/completions`,
+        ],
+        capture_output = true,
+    ) catch_all (e) {
+        _ => {
+            return false;
+        },
+    };
+    out.stdout.to_string().trim() == "200"
+}
+
+/// The words a round is held with when its server did not answer the probe.
+function slow_words(model: string) -> string throws never {
+    `server slow on ${model.split("/").at(0) ?? model}: no answer to a one-token probe in ${PROBE_SECONDS}s`
+}
+
 function infra_harness(words: string) -> root.machine.Event throws never {
     root.machine.Infra { kind: "infra", what: root.machine.Trouble.Harness, words: words }
 }
