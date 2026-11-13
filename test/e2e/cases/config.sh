@@ -63,3 +63,25 @@ case_agents_file_is_the_default_primer() {
   assert_match "$(cat "$E2E_CTRL"/requests/*.json)" "<repo-notes>" "the primer is wrapped in its tag"
   assert_match "$(cat "$E2E_CTRL"/requests/*.json)" "MARKER-AGENTS-NOTE" "the primer's text reaches the worker"
 }
+
+# The fixer runs before the gate: a fixer command is configured, and the gate checks for a file it creates.
+case_fixer_runs_before_the_gate() {
+  setup 'test -e work.txt && test -e fixed.txt'
+  (
+    cd "$REPO" || exit
+    printf 'fixer = "echo fixed > fixed.txt"\n' >>.bead-loop.toml
+    git add -A && git commit -qm fixer && git push -q
+  )
+  reply coder "$(write_work)" "$(commit)" "$(done_report)"
+  reply reviewer "$(approve)"
+  # The merge, once seen, also deletes the branch in the same tick, so the branch's log is
+  # read on every tick and the last reading before it is gone is what gets asserted on.
+  local subjects="" seen="" start=$SECONDS
+  while [ $((SECONDS - start)) -lt 90 ]; do
+    tick 1
+    seen=$(git -C "$E2E_ORIGIN" log "bead/$BEAD" --format=%s 2>/dev/null) && [ -n "$seen" ] && subjects=$seen
+    events | grep -qw pr_merged && break
+  done
+  events | grep -qw pr_merged || bad "never merged: $(events)"
+  assert_match "$subjects" "$BEAD: fixer\$" "the fixer's commit landed on the branch before the gate ran"
+}
