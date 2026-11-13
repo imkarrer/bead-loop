@@ -80,7 +80,7 @@ command = '''exec bead-supervisor run --config_file "${BEAD_LOOP_CONFIG:-$HOME/.
 
 # The package `flox install imkarrer/bead-loop` installs: the supervisor, the page,
 # bead-loop-install (install.sh: the opencode links, and the launchd agents or systemd
-# units), and beside bin/ the agents/, ui/ and skills/ the supervisor finds there
+# units), and beside bin/ the ui/ and skills/ the supervisor finds there
 # (config.rs loop_home) and the launchd/ templates. The tools a round shells out to are
 # its runtime packages, so they are on its PATH wherever it is installed. opencode is
 # not one: a build keeps only toplevel
@@ -90,14 +90,14 @@ command = '''exec bead-supervisor run --config_file "${BEAD_LOOP_CONFIG:-$HOME/.
 # The binary is `baml pack` of supervisor.run, rounds.round and page.page. baml-cli
 # is downloaded by scripts/ensure-baml.sh (pinned, not a flox package).
 [build.bead-loop]
-description = "Work beads with local and metered models in any repo: the supervisor, its page and its agents"
+description = "Work beads with local and metered models in any repo: the supervisor, its page and its skills"
 version.command = '''echo 0.1.0'''
 command = '''
   mkdir -p "$out/bin"
   scripts/pack.sh "$out/bin/bead-supervisor"
   cp bin/bead-loop-ui "$out/bin/"
   cp install.sh "$out/bin/bead-loop-install"
-  cp -R agents ui skills launchd "$out/"
+  cp -R ui skills launchd "$out/"
 '''
 runtime-packages = ["bd", "git", "gh", "jq", "curl", "nodejs", "coreutils", "bash"]
 
