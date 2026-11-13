@@ -31,6 +31,8 @@ class LiveWorld {
     gate: string,
     /// A path from the repo root to a text file read into every worker prompt; empty is none.
     primer: string,
+    /// A command run in the worktree before each gate run (a formatter); empty is none.
+    fixer: string,
     /// Runs in a fresh worktree before the first round (`npm ci`).
     setup: string,
     agent_bin: string,
