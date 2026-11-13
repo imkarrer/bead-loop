@@ -10,3 +10,7 @@ base = "main"
 gate = "flox activate -- bash -c 'export PATH=$(scripts/ensure-baml.sh):$PATH DEVBOX_URL=${DEVBOX_URL:-http://127.0.0.1:8100/v1} ACBOX_URL=${ACBOX_URL:-http://192.168.1.51:8100/v1} DO_NOT_TRACK=1 BAML_CLI_ALLOW_DIRECT=1 BOUNDARY_API_KEY=${BOUNDARY_API_KEY:-local} && baml-cli --agent-skill-check off fmt --check && baml-cli --agent-skill-check off test && bash -n install.sh scripts/*.sh test/lint-skills.sh test/package.sh test/e2e/*.sh test/e2e/cases/*.sh test/e2e/bin/* && bash -n bin/bead-loop-ui && shellcheck -S warning -x install.sh scripts/*.sh test/lint-skills.sh test/package.sh bin/bead-loop-ui test/e2e/*.sh test/e2e/cases/*.sh test/e2e/bin/* && test/lint-skills.sh && test/e2e/parity.sh && node scripts/page-html.mjs --check && node test/ui-onclicks.js test/ui-state.json && scripts/pack.sh target/bead-supervisor && test/e2e/run.sh'"
 merge = "pipeline"                   # Buildkite reports, and its automerge step merges a labelled PR on green
 primer = "docs/agents/worker.md"     # BAML notes for a worker that has never seen the language
+
+# The loop runs a repo's fixer in the worktree after the worker and before each gate run: the repo's formatter.
+# What it changes is committed for the worker; its exit code is not read.
+fixer = "bash -c 'export PATH=$(scripts/ensure-baml.sh):$PATH && baml-cli --agent-skill-check off fmt'"   # the loop formats for the worker before the gate
