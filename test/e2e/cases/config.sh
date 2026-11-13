@@ -63,3 +63,18 @@ case_agents_file_is_the_default_primer() {
   assert_match "$(cat "$E2E_CTRL"/requests/*.json)" "<repo-notes>" "the primer is wrapped in its tag"
   assert_match "$(cat "$E2E_CTRL"/requests/*.json)" "MARKER-AGENTS-NOTE" "the primer's text reaches the worker"
 }
+
+# The fixer runs before the gate: a fixer command is configured, and the gate checks for a file it creates.
+case_fixer_runs_before_the_gate() {
+  setup 'test -e work.txt && test -e fixed.txt'
+  (
+    cd "$REPO" || exit
+    printf 'fixer = "echo fixed > fixed.txt"\n' >>.bead-loop.toml
+    git add -A && git commit -qm fixer && git push -q
+  )
+  reply coder "$(write_work)" "$(commit)" "$(done_report)"
+  reply reviewer "$(approve)"
+  until_event pr_merged 90 || bad "never merged: $(events)"
+  # Verify that the fixer command created the fixed.txt file
+  assert_match "$(git -C "$E2E_ORIGIN" show HEAD:fixed.txt 2>/dev/null || echo '')" "fixed" "the fixer created fixed.txt"
+}
