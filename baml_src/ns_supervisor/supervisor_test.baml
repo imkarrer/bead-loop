@@ -502,6 +502,26 @@ test "a usage limit on claude holds every claude round, and nothing else" {
     assert.equal(lane_free(s, [], "devbox/coder"), true)
 }
 
+test "a server that does not answer holds every round on it, and nothing else" {
+    let w = two_beads();
+    let p = policy();
+    let s = Supervisor.new(w, MemoryLog.new(), p);
+    let _ = s.capacity.set("claude", 2);
+    admit_tickets(s);
+    apply(
+        s,
+        "t-1",
+        root.machine.Infra {
+            kind: "infra",
+            what: root.machine.Trouble.SignedOut,
+            words: "server slow on devbox: no answer",
+        },
+    );
+    start_rounds(s);
+    assert.equal(starts(w, "start_round Work devbox/coder"), 0);
+    assert.equal(lane_free(s, [], "claude/sonnet"), true)
+}
+
 test "a ready bead that left bd ready is not picked" {
     let w = one_bead([no_commit(), committed()], [approved()], [green(), merged()]);
     let s = Supervisor.new(w, MemoryLog.new(), policy());
