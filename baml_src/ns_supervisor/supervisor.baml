@@ -561,9 +561,11 @@ function lane_free(s: Supervisor, busy: string[], model: string) -> bool throws 
         return true;
     }
     let p = provider_of(model);
-    // A usage limit on the provider holds all of its rounds, not just the bead that met it.
+    // A usage limit on the provider, or a server on it that did not answer its probe,
+    // holds all of its rounds, not just the bead that met it.
     let limited = s.beads.some((b) -> {
-        (b.hold?.words ?? "").starts_with(`usage limit on ${p}:`)
+        let w = b.hold?.words ?? "";
+        w.starts_with(`usage limit on ${p}:`) || w.starts_with(`server slow on ${p}:`)
     });
     if (limited) {
         return false;
