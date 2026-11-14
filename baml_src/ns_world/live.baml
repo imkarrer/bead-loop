@@ -347,6 +347,7 @@ class LiveWorld {
                 ["-p", dir, `${self.state}/logs`],
                 self.repo,
             );
+            prune_logs(`${self.state}/logs`, LOG_DAYS);
             // The round's own second: two rounds of one kind under one supervisor wrote one
             // file when this was its pid (web-2ad.3's second and third rounds, 8 Nov).
             let stamp = root.supervisor.unix_seconds();
@@ -1528,6 +1529,19 @@ function timed_argv(argv: string[], seconds: int, marker: string) -> string[] th
     out
 }
 
+/// Session logs are kept this many days.
+const LOG_DAYS: int = 14;
+
+function prune_logs(dir: string, days: int) -> void throws never {
+    let _ = baml.sys.run(
+        "find",
+        args = [dir, "-type", "f", "-mtime", `+${days}`, "-delete"],
+        capture_output = true,
+    ) catch_all (e) {
+        _ => null,
+    };
+}
+
 /// What a round that ran out of time comes to. A worker's is the model's failure, as in
 /// the Rust loop; a reviewer's is held, since no verdict is nothing from the model; a
 /// researcher's lets the worker go without a brief.
@@ -1566,6 +1580,17 @@ test "a timeout charges a worker, holds a reviewer, and frees a researcher" {
     assert.is_type<root.machine.RoundTimedOut>(timed_out(RoundKind.Work, 1));
     assert.is_type<root.machine.Infra>(timed_out(RoundKind.Review, 1));
     assert.is_type<root.machine.BriefWritten>(timed_out(RoundKind.Research, 1));
+}
+
+test "session logs older than the limit are pruned" {
+    let dir = root.tools.scratch("prune-logs");
+    let _ = baml.sys.run("rm", args = ["-rf", dir]);
+    let _ = baml.sys.run("mkdir", args = ["-p", dir]);
+    let _ = baml.sys.run("touch", args = [`${dir}/new.jsonl`]);
+    let _ = baml.sys.run("touch", args = ["-d", "20 days ago", `${dir}/old.jsonl`]);
+    prune_logs(dir, 14);
+    assert.equal(baml.fs.exists(`${dir}/old.jsonl`), false);
+    assert.equal(baml.fs.exists(`${dir}/new.jsonl`), true)
 }
 
 /// The beads the loop may work: what `bd ready` lists, then what it already carries.
