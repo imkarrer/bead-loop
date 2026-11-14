@@ -30,6 +30,8 @@ class Supervisor {
     /// Ticks a hold lasts before the bead is tried again.
     hold_ticks: int,
     held_for: map<string, int>,
+    /// The waiting looks already recorded for a bead since its last other event.
+    quiet_seen: map<string, string>,
     /// Each bead's title, from the tickets or asked once; and the closed beads' tallies.
     known: map<string, root.world.Ticket>,
     tallies: map<string, FTally>,
@@ -55,6 +57,7 @@ class Supervisor {
             ready: [],
             hold_ticks: 5,
             held_for: {},
+            quiet_seen: {},
             known: {},
             tallies: {},
         }
@@ -365,6 +368,33 @@ function watch_prs(s: Supervisor) -> void throws never {
             }
         }
     }
+}
+
+/// Which of the looks that repeat while a PR waits this is; "" for any other event.
+function quiet_kind(e: root.machine.Event) -> string throws never {
+    if (e is root.machine.RedNotRequired) {
+        "red_not_required"
+    } else if (e is root.machine.WaitedTooLong) {
+        "waited_too_long"
+    } else {
+        ""
+    }
+}
+
+/// A waiting look already recorded since the bead's last other event: applying it
+/// again changes nothing but adds a line to its history and the loop log.
+function same_look(s: Supervisor, id: string, e: root.machine.Event) -> bool throws never {
+    let k = quiet_kind(e);
+    let seen = s.quiet_seen.get(id) ?? "";
+    if (k.length() == 0) {
+        let _ = s.quiet_seen.set(id, "");
+        return false;
+    }
+    if (seen.split(",").includes(k)) {
+        return true;
+    }
+    let _ = s.quiet_seen.set(id, `${seen},${k}`);
+    false
 }
 
 /// A green look that changes nothing: under pipeline or external merging, CI's merge

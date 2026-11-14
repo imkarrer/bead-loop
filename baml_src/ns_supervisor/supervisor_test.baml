@@ -987,3 +987,15 @@ test "a test tally is its round records and nothing else" {
     assert.equal(t.round_log.at(0)?.words, "");
     assert.equal(t.rounds, 0)
 }
+
+test "a waiting look is recorded once until another event" {
+    let s = Supervisor.new(one_bead([], [], []), MemoryLog.new(), policy());
+    let red = root.machine.RedNotRequired { kind: "red_not_required" };
+    let wait = root.machine.WaitedTooLong { kind: "waited_too_long", why: "w" };
+    assert.is_true(!same_look(s, "t-1", red));
+    assert.is_true(!same_look(s, "t-1", wait));
+    assert.is_true(same_look(s, "t-1", red));
+    assert.is_true(same_look(s, "t-1", wait));
+    assert.is_true(!same_look(s, "t-1", root.machine.ChecksGreen { kind: "checks_green" }));
+    assert.is_true(!same_look(s, "t-1", red))
+}
