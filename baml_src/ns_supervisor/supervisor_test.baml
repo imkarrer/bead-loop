@@ -299,8 +299,50 @@ test "a PR waiting on an unrequired red is recorded once, not every tick" {
     let s = Supervisor.new(w, MemoryLog.new(), p);
     turns(s, w, 8);
     let events = s.log.load("t-1");
-    assert.equal(events.filter((e) -> { e is root.machine.RedNotRequired }).length(), 1);
-    assert.equal(events.filter((e) -> { e is root.machine.WaitedTooLong }).length(), 1)
+    assert.equal(
+        events
+            .filter((e) -> {
+                e is root.machine.RedNotRequired
+            })
+            .length(),
+        1,
+    );
+    assert.equal(
+        events
+            .filter((e) -> {
+                e is root.machine.WaitedTooLong
+            })
+            .length(),
+        1,
+    )
+}
+
+test "a PR waiting on an unrequired red is recorded once, not every tick" {
+    let red = root.machine.RedNotRequired { kind: "red_not_required" };
+    let wait = root.machine.WaitedTooLong { kind: "waited_too_long", why: "w" };
+    let looks: root.machine.Event[] = [red, wait];
+    let w = one_bead([committed()], [approved()], [looks, looks, looks]);
+    let p = policy();
+    p.merge = root.machine.MergeMode.Pipeline;
+    let s = Supervisor.new(w, MemoryLog.new(), p);
+    turns(s, w, 8);
+    let events = s.log.load("t-1");
+    assert.equal(
+        events
+            .filter((e) -> {
+                e is root.machine.RedNotRequired
+            })
+            .length(),
+        1,
+    );
+    assert.equal(
+        events
+            .filter((e) -> {
+                e is root.machine.WaitedTooLong
+            })
+            .length(),
+        1,
+    )
 }
 
 // Lanes and caps: a lane is a model server, shared by every repo the process ticks.
