@@ -256,6 +256,9 @@ function read_file(path: string, offset: int = 1) -> string throws never {
     } else {
         `[${path}: lines ${start + 1}-${end} of ${total}]`
     };
+    if (already_read(path, offset) && end < total) {
+        return `[lines ${start + 1}-${end} were given already]\n${read_file(path, offset = end + 1)}`;
+    }
     if (already_read(path, offset)) {
         return `${path} already read this session (lines ${start + 1}-${end} of ${total}). Use that text; do not read it again.`;
     }
@@ -571,6 +574,25 @@ test "a long file comes in parts that compaction keeps whole" {
     let second = read_file(p, offset = 1000);
     assert.contains(second, "row 999");
     assert.contains(second, "lines 1000-1000 of 1000");
+    let _ = baml.fs.remove(p);
+}
+
+test "reading a long file from the top again gives its next part" {
+    let p = root.tools.scratch("read-again-long.txt");
+    let xs = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx";
+    let lines: string[] = [];
+    let i = 0;
+    while (i < 1000) {
+        lines.push(`row ${i} ${xs}`);
+        i = i + 1;
+    }
+    let _ = baml.fs.write(p, lines.join("\n"));
+    assert.contains(read_file(p), "row 0 x");
+    let again = read_file(p);
+    assert.contains(again, "were given already");
+    assert.contains(again, "row 500 x");
+    assert.contains(read_file(p), "row 999 x");
+    assert.contains(read_file(p), "already read this session");
     let _ = baml.fs.remove(p);
 }
 
