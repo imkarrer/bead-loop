@@ -444,11 +444,19 @@ test "a command and the gate run unconfined" {
     assert.equal(out.stdout.to_string().trim(), "unset")
 }
 
+/// A commit is how a round ends well: the probe limit never refuses it.
+function commits(command: string) -> bool throws never {
+    let c = command.trim();
+    c.starts_with("git add") || c.starts_with("git commit")
+}
+
 /// Run a shell command in the worktree and see its exit code and output.
 function run(command: string) -> string throws never {
-    let stop = probe();
-    if let why: string = stop {
-        return why;
+    if (!commits(command)) {
+        let stop = probe();
+        if let why: string = stop {
+            return why;
+        }
     }
     run_for(command, RUN_SECONDS) + probe_nudge()
 }
@@ -480,6 +488,13 @@ test "a command that times out takes what it started with it" {
 
 test "quotes survive the wrapping" {
     assert.contains(run("echo 'it''s' \"ok\""), "its ok")
+}
+
+test "a commit is never refused by the probe limit" {
+    assert.is_true(commits("git add -A && git commit -q -m \"t-1: x\""));
+    assert.is_true(commits("  git commit -m x"));
+    assert.is_true(!commits("grep -n x a.txt"));
+    assert.is_true(!commits("echo git commit"))
 }
 
 test "edit replaces text that appears once" {
