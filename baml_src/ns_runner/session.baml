@@ -5,8 +5,10 @@
 // text was cut can be read again.
 
 /// Characters of tool output kept. The last two results may each be this long;
-/// everything older is stubbed once the total passes it.
-const TOOL_BUDGET: int = 24000;
+/// everything older is stubbed once the total passes it. Four parts of a long file
+/// (read_file returns up to 20000 characters a part) fit before anything is cut;
+/// the devbox model has 64k tokens of context.
+const TOOL_BUDGET: int = 80000;
 
 function tool_texts(events: ai.events.Event[]) -> string[] throws never {
     let out: string[] = [];
@@ -218,4 +220,8 @@ test "older tool results are stubbed and the last two stay" {
     assert.equal(done.at(1), "xx");
     assert.equal(done.at(2), "yy");
     assert.equal(out.length(), 4)
+}
+
+test "the tool budget keeps four parts of a long file before cutting" {
+    assert.is_true(TOOL_BUDGET >= 80000)
 }
