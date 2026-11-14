@@ -433,6 +433,25 @@ class LiveWorld {
                     },
                 };
                 out.push(done);
+                if (leaves_no_log(done.events)) {
+                    let spec = self.read_spec(name) catch_all (e) {
+                        _ => null,
+                    };
+                    if (spec != null) {
+                        let _ = baml.fs.remove(spec.log_file) catch_all (e) {
+                            _ => null,
+                        };
+                        let _ = baml.fs.remove(`${spec.log_file}.err`) catch_all (e) {
+                            _ => null,
+                        };
+                        let _ = baml.fs.remove(`${spec.log_file}.rc`) catch_all (e) {
+                            _ => null,
+                        };
+                        let _ = baml.fs.remove(`${spec.log_file}.sh`) catch_all (e) {
+                            _ => null,
+                        };
+                    }
+                }
                 let _ = baml.fs.remove(path) catch_all (e) {
                     _ => null,
                 };
@@ -1542,6 +1561,17 @@ function prune_logs(dir: string, days: int) -> void throws never {
     };
 }
 
+/// A round that only met its provider's hold has nothing in its log worth keeping.
+function leaves_no_log(events: root.machine.Event[]) -> bool throws never {
+    if (events.length() != 1) {
+        return false;
+    }
+    if let i: root.machine.Infra = events.at(0) {
+        return i.words.starts_with("usage limit on ") || i.words.starts_with("server slow on ");
+    }
+    false
+}
+
 /// What a round that ran out of time comes to. A worker's is the model's failure, as in
 /// the Rust loop; a reviewer's is held, since no verdict is nothing from the model; a
 /// researcher's lets the worker go without a brief.
@@ -1580,6 +1610,29 @@ test "a timeout charges a worker, holds a reviewer, and frees a researcher" {
     assert.is_type<root.machine.RoundTimedOut>(timed_out(RoundKind.Work, 1));
     assert.is_type<root.machine.Infra>(timed_out(RoundKind.Review, 1));
     assert.is_type<root.machine.BriefWritten>(timed_out(RoundKind.Research, 1));
+}
+
+test "a round held on its provider leaves no log" {
+    let usage_limit_event: root.machine.Event[] = [
+        root.machine.Infra {
+            kind: "infra",
+            what: root.machine.Trouble.Harness,
+            words: "usage limit on claude: x",
+        },
+    ];
+    assert.is_true(leaves_no_log(usage_limit_event));
+    let server_slow_event: root.machine.Event[] = [
+        root.machine.Infra {
+            kind: "infra",
+            what: root.machine.Trouble.Harness,
+            words: "server slow on devbox: x",
+        },
+    ];
+    assert.is_true(leaves_no_log(server_slow_event));
+    let different_event: root.machine.Event[] = [root.machine.Infra { kind: "infra", what: root.machine.Trouble.Harness, words: "other" }];
+    assert.is_true(!leaves_no_log(different_event));
+    let empty_event: root.machine.Event[] = [];
+    assert.is_true(!leaves_no_log(empty_event))
 }
 
 test "session logs older than the limit are pruned" {
