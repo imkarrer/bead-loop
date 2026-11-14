@@ -362,7 +362,7 @@ function watch_prs(s: Supervisor) -> void throws never {
                 },
             };
             for (let event in seen) {
-                if (!idle_green(s.policy, event)) {
+                if (!idle_green(s.policy, event) && !same_look(s, b.id, event)) {
                     apply(s, b.id, event);
                 }
             }
