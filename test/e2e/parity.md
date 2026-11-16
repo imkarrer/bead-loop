@@ -96,7 +96,7 @@ each re-checked:
 | 17 | `case_stamps_every_session` | one stamps.jsonl line per session | dropped | yes | - | #225: stamps not carried over; telemetry is the BAML trace store |
 | 18 | `case_reject_until_parked` | rejects use up the stages → parked, history, model brief from logs | e2e | yes | - | case_reject_until_parked (escalation.sh); the park brief is fixed text, not built from the round logs |
 | 19 | `case_claim_line` | one claim stamp, at the first claim | dropped | yes | - | #225: stamps not carried over |
-| 20 | `case_lint` | lint flags missing paths and prose acceptance, notes the verdict | core | yes | P2 | lint.baml:267, :272; on_base git check and bd note untested; `linted` claim field dropped with stamps |
+| 20 | `case_lint` | lint flags missing paths and prose acceptance, notes the verdict | e2e | yes | P2 | lint.baml:267, :272; on_base git check and bd note untested; `linted` claim field dropped with stamps; case_lint (lint.sh) |
 | 21 | `case_lint_run` | --run: setup in a throwaway worktree, green-on-base acceptance flagged | untested | yes | P2 | lint.baml:119-186 run_problems; no test |
 | 22 | `case_stats_rows` | stats --rows prints JSONL, one row per bead | dropped | yes | - | #225: stats --rows not carried over (the page's scoreboard came back in #228) |
 | 23 | `case_bench_freeze` | bench freeze writes case.json from the merge commit | dropped | yes | - | #225: bench freeze not carried over (offline.baml runs cases, no freeze) |
