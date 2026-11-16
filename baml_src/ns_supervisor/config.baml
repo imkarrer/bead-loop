@@ -226,6 +226,7 @@ function config_from_toml(
         gate: pick(repo_table, global, "gate", ""),
         primer: pick(repo_table, global, "primer", ""),
         fixer: pick(repo_table, global, "fixer", ""),
+        edit_check: pick(repo_table, global, "edit_check", ""),
         setup: pick(repo_table, global, "setup", ""),
         pr_style: pick(
             repo_table,
@@ -386,6 +387,13 @@ test "the fixer key is read from the repo table" {
     assert.equal(none.fixer, "")
 }
 
+test "the edit_check key is read from the repo table" {
+    let c = config_from_toml("edit_check = \"make check\"\n", GLOBAL_SAMPLE, "/src/r", "/state", "bead-loop");
+    assert.equal(c.edit_check, "make check");
+    let none = config_from_toml("", GLOBAL_SAMPLE, "/src/r", "/state", "bead-loop");
+    assert.equal(none.edit_check, "")
+}
+
 /// `[providers.NAME] parallel` for each provider that sets it. A provider that does not
 /// runs one round at a time, the Rust loop's default.
 function capacity_of(global: baml.toml.Table) -> map<string, int> throws never {
@@ -501,6 +509,7 @@ function target_config(
         gate: text_at(t, "gate"),
         primer: text_at(t, "primer"),
         fixer: text_at(t, "fixer"),
+        edit_check: text_at(t, "edit_check"),
         setup: text_at(t, "setup"),
         pr_style: or_else(
             text_at(t, "pr_style"),
