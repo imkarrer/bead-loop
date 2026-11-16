@@ -97,6 +97,52 @@ function mark_read(path: string, offset: int) -> void throws never {
 const PROBE_WARN: int = 20;
 const PROBE_STOP: int = 30;
 
+/// Seconds an edit check may run before it is stopped.
+const EDIT_CHECK_SECONDS: int = 60;
+/// Characters of a failed check's output an edit's reply carries: its start, where a
+/// compiler names the first error.
+const EDIT_CHECK_CHARS: int = 2000;
+
+/// The repo's edit check, which the round's launch sets as BEAD_LOOP_EDIT_CHECK.
+function edit_check() -> string throws never {
+    let out = baml.sys.run("printenv", args = ["BEAD_LOOP_EDIT_CHECK"], capture_output = true) catch_all (e) {
+        _ => {
+            return "";
+        },
+    };
+    out.stdout.to_string().trim()
+}
+
+/// What an edit's reply ends with: the check's verdict, and when it failed the start of
+/// its output.
+function check_reply(command: string) -> string throws never {
+    if (command.length() == 0) {
+        return "";
+    }
+    let out = baml.sys.shell(
+        bounded(command, EDIT_CHECK_SECONDS),
+        capture_output = true,
+        timeout = baml.time.Duration.from_seconds(EDIT_CHECK_SECONDS + 30),
+    ) catch_all (e) {
+        _ => {
+            return `\n[check did not run: ${e}]`;
+        },
+    };
+    if (out.exit_code == 0) {
+        return "\n[check passed]";
+    }
+    if (out.exit_code == 124) {
+        return `\n[check timed out after ${EDIT_CHECK_SECONDS}s]`;
+    }
+    let text = out.stdout.to_string() + out.stderr.to_string();
+    let head = if (text.length() > EDIT_CHECK_CHARS) {
+        text.slice(0, EDIT_CHECK_CHARS)
+    } else {
+        text
+    };
+    `\n[check failed, exit ${out.exit_code}]\n${head}`
+}
+
 function probes_path() -> string throws never {
     `/tmp/bead-loop-probes-${baml.sys.pid()}`
 }
@@ -277,6 +323,7 @@ function write_file(path: string, content: string) -> string throws never {
     let reply = try_write(path, content);
     if (changed_a_file(reply)) {
         edited();
+        return reply + check_reply(edit_check());
     }
     reply
 }
@@ -301,6 +348,7 @@ function edit_file(path: string, old_text: string, new_text: string) -> string t
     let reply = try_edit(path, old_text, new_text);
     if (changed_a_file(reply)) {
         edited();
+        return reply + check_reply(edit_check());
     }
     reply
 }
@@ -642,4 +690,12 @@ test "a round that only probes is told to finish, then refused" {
     assert.contains(refusal_at(PROBE_STOP + 1) ?? "", "refused: 30 reads and commands");
     assert.equal(nudge_at(PROBE_WARN - 1), "");
     assert.contains(nudge_at(PROBE_WARN), "since your last edit")
+}
+
+test "an edit check's verdict is added to the reply" {
+    assert.equal(check_reply(""), "");
+    assert.equal(check_reply("true"), "\n[check passed]");
+    let failed = check_reply("echo broken; exit 3");
+    assert.contains(failed, "[check failed, exit 3]");
+    assert.contains(failed, "broken")
 }
