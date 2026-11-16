@@ -104,6 +104,14 @@ function start_all(config_file: string) -> Supervisor[] {
         }
     }
     let c = load_config(config_file);
+    if let problem: string = stages_problem(c.policy.stages) {
+        let none: Supervisor[] = [];
+        FileLog { state: state_of(c.repo) }.say(
+            "error",
+            `${problem}, so the loop leaves ${c.repo} alone`,
+        );
+        return none;
+    }
     let out: Supervisor[] = [start_config(c, c.repo)];
     if (config_file.ends_with(".toml")) {
         for (let t in targets_of(read_or_empty(config_file), c, home_dir())) {
