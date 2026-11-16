@@ -33,6 +33,8 @@ class LiveWorld {
     primer: string,
     /// A command run in the worktree before each gate run (a formatter); empty is none.
     fixer: string,
+    /// A command run in the worktree after each edit the worker makes; empty is none.
+    edit_check: string,
     /// Runs in a fresh worktree before the first round (`npm ci`).
     setup: string,
     agent_bin: string,
