@@ -348,6 +348,7 @@ class OfflineWorld {
             gate: self.gate,
             primer: "",
             fixer: "",
+            edit_check: "",
             note: note,
             report: root.rounds.load_report(`${self.state}/beads/${id}/report`),
             report_file: `${self.state}/beads/${id}/report`,

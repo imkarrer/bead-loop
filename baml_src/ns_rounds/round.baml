@@ -19,6 +19,8 @@ class RoundSpec {
     primer: string,
     /// The repo's fixer command; empty is none.
     fixer: string,
+    /// The repo's edit check; empty is none.
+    edit_check: string,
     /// What the last round was sent back with.
     note: string,
     /// The worker's last report, for the reviewer.
@@ -798,6 +800,7 @@ function spec_of(
     fixer: string = "",
     dir: string = ".",
     model: string = "m",
+    edit_check: string = "",
 ) -> RoundSpec throws never {
     RoundSpec {
         id: "t-1",
@@ -812,6 +815,7 @@ function spec_of(
         gate: "",
         primer: primer,
         fixer: fixer,
+        edit_check: edit_check,
         note: note,
         report: "",
         report_file: "",
@@ -845,6 +849,11 @@ test "the worker prompt opens with the primer of its repo" {
 test "a round spec carries the fixer" {
     assert.equal(spec_of("", "", fixer = "make fmt").fixer, "make fmt");
     assert.equal(spec_of("", "").fixer, "")
+}
+
+test "a round spec carries the edit check" {
+    assert.equal(spec_of("", "", edit_check = "make check").edit_check, "make check");
+    assert.equal(spec_of("", "").edit_check, "")
 }
 
 test "a repo with no primer key gets its AGENTS file" {
