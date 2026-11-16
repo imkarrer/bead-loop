@@ -107,6 +107,7 @@ class FWindow {
     time_to_land_s: FMedian,
     answers: int,
     escalations: int,
+    parks: int,
     holds: int,
     send_backs: FSendBacks,
     model_time: FModelTime,
@@ -314,6 +315,7 @@ function fwindow(tallies: root.supervisor.FTally[], since: int, span: int) -> FW
         time_to_land_s: FMedian { median: null, mean: null },
         answers: 0,
         escalations: 0,
+        parks: 0,
         holds: 0,
         send_backs: FSendBacks { total: 0, by_reason: {}, by_model: {} },
         model_time: FModelTime {
@@ -355,6 +357,7 @@ function fwindow(tallies: root.supervisor.FTally[], since: int, span: int) -> FW
         }
         w.answers = w.answers + count_in(root.supervisor.marks_of(t, "answer"), since);
         w.escalations = w.escalations + count_in(root.supervisor.marks_of(t, "escalation"), since);
+        w.parks = w.parks + count_in(root.supervisor.marks_of(t, "park"), since);
         w.holds = w.holds + count_in(root.supervisor.marks_of(t, "hold"), since);
         w.rebases = w.rebases + count_in(root.supervisor.marks_of(t, "rebase"), since);
         w.closed_unmerged
@@ -602,4 +605,14 @@ test "the scoreboard counts what landed inside a window" {
     assert.equal(w.landed_first_try, 1);
     assert.equal(w.landed_local, 1);
     assert.equal(fwindow(tallies, 0, 1000).landed, 3)
+}
+
+test "the scoreboard counts the parks inside a window" {
+    let recs: root.supervisor.FRoundRec[] = [];
+    let t = root.supervisor.tally_of("a", recs);
+    t.marks.push(root.supervisor.FMark { at: 950, kind: "park", model: "m", what: null });
+    t.marks.push(root.supervisor.FMark { at: 100, kind: "park", model: "m", what: null });
+    let tallies = [t];
+    assert.equal(fwindow(tallies, 900, 100).parks, 1);
+    assert.equal(fwindow(tallies, 0, 1000).parks, 2)
 }
