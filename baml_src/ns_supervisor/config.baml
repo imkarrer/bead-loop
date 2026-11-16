@@ -322,10 +322,43 @@ function toml_problem(text: string) -> string? throws never {
     null
 }
 
+/// Why the stages cannot run, or null: there are none, or one names no worker. A
+/// stage is called by its name, else by its place from 1.
+function stages_problem(stages: root.machine.Stage[]) -> string? throws never {
+    if (stages.length() == 0) {
+        return "no [[stages]] in the repo's .bead-loop.toml or the global config.toml";
+    }
+    let i = 0;
+    while (i < stages.length()) {
+        let s = stages.at(i);
+        if ((s?.worker ?? "").length() == 0) {
+            let name = s?.name ?? "";
+            let label = if (name.length() > 0) {
+                name
+            } else {
+                `${i + 1}`
+            };
+            return `stage ${label} names no worker`;
+        }
+        i = i + 1;
+    }
+    null
+}
+
 test "a file that does not parse is a problem, an empty one is not" {
     assert.is_true(toml_problem("") == null);
     assert.is_true(toml_problem("merge = \"auto\"\n") == null);
     assert.is_true(toml_problem("merge = \"auto\n") != null);
+}
+
+test "a stage with no worker, or no stages, is a problem" {
+    let ok = root.machine.Stage { name: "local", worker: "devbox/coder", reviewer: "", attempts: 1 };
+    let lonely = root.machine.Stage { name: "lonely", worker: "", reviewer: "acbox/reviewer", attempts: 1 };
+    let unnamed = root.machine.Stage { name: "", worker: "", reviewer: "", attempts: 1 };
+    assert.is_true(stages_problem([ok]) == null);
+    assert.equal(stages_problem([ok, lonely]) ?? "", "stage lonely names no worker");
+    assert.equal(stages_problem([unnamed]) ?? "", "stage 1 names no worker");
+    assert.contains(stages_problem([]) ?? "", "no [[stages]]")
 }
 
 function load_config(path: string) -> LoopConfig {
