@@ -14,3 +14,5 @@ primer = "docs/agents/worker.md"     # BAML notes for a worker that has never se
 # The loop runs a repo's fixer in the worktree after the worker and before each gate run: the repo's formatter.
 # What it changes is committed for the worker; its exit code is not read.
 fixer = "bash -c 'export PATH=$(scripts/ensure-baml.sh):$PATH && baml-cli --agent-skill-check off fmt'"   # the loop formats for the worker before the gate
+
+edit_check = "bash -c 'export PATH=$(scripts/ensure-baml.sh):$PATH && baml-cli --agent-skill-check off check --color never'"   # the worker sees type errors after each edit
