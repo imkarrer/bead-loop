@@ -905,14 +905,14 @@ function scoreboard(s) {
   const days = Math.max(w.span_s, 3600) / 86400;
   const landed = w.landed, sb = w.send_backs, mt = w.model_time;
   const since = new Date(st.since * 1000).toLocaleDateString([], { month: 'short', day: 'numeric' });
-  const needed = w.answers + w.escalations;
+  const needed = w.answers + w.escalations + (w.parks || 0);
   const tiles = [
     tile('Landed', `${landed}<small>${days >= 2 ? `${(landed / days).toFixed(1)} a day` : ''}</small>`, `merged and closed by the loop${w.closed_by_hand ? ` · ${w.closed_by_hand} finished by hand` : ''}${w.closed_unmerged ? ` · ${w.closed_unmerged} PR closed unmerged` : ''}`),
     tile('First try', pct(w.landed_first_try, landed), `${w.landed_first_try} of ${landed} landed with no send-back`),
     tile('Without metered models', pct(w.landed_local, landed), `${w.landed_local} of ${landed} landed by a local model`),
     tile('Rounds per landing', `${w.rounds_per_landed.median == null ? '–' : w.rounds_per_landed.median.toFixed(1)}<small>median</small>`, `${w.rounds_per_landed.mean == null ? '–' : w.rounds_per_landed.mean.toFixed(1)} mean · ${sb.total} send-back${sb.total === 1 ? '' : 's'} in all`),
     tile('Time to land', `${dur(w.time_to_land_s.median)}<small>median</small>`, `first claim → merge · ${dur(w.time_to_land_s.mean)} mean`),
-    tile('Needed you', `${needed}`, `${w.escalations} escalated · ${w.answers} answered · ${w.holds} held`, needed ? 'warn' : ''),
+    tile('Needed you', `${needed}`, `${w.parks || 0} parked · ${w.escalations} escalated · ${w.answers} answered · ${w.holds} held`, needed ? 'warn' : ''),
   ].join('');
   // where rounds go back: the reasons, most first, as bars against the biggest
   const reasons = Object.entries(sb.by_reason).sort((a, b) => b[1] - a[1]);
