@@ -127,7 +127,7 @@ each re-checked:
 | 48 | `case_nothing_ready` | a bead without the queue label is never picked | e2e | yes | - | case_nothing_ready (queue.sh) |
 | 49 | `case_lock_skips` | a held state lock makes a tick a clean no-op | missing | yes | P3 | not ported: no lock file by design (resident.sh header); a second `run` on one state dir starts every round twice |
 | 50 | `case_config_layers` | global stages serve repos, repo stages win, ~ in repos, bad TOML dies | e2e | no | - | case_repo_config_that_does_not_parse_runs_nothing, case_global_config_that_does_not_parse_runs_nothing (config.sh); the layering is config.baml's tests |
-| 51 | `case_a_stage_with_no_worker_stops` | a stage with no worker, or no stages, stops the run loudly | missing | no | P2 | not ported: the stages are never checked (last-stage.sh header); a stage with no worker runs on the default client (clients.baml:36) |
+| 51 | `case_a_stage_with_no_worker_stops` | a stage with no worker, or no stages, stops the run loudly | e2e | no | P2 | case_a_stage_with_no_worker_stops (config.sh); the stages are now checked (main.baml:340) |
 | 52 | `case_escalation_stages` | failures walk fast×2 then slow×1, then park; parked bead not retried | e2e | no | - | case_escalation_stages (escalation.sh); the notes leave out the round, the model and the park count |
 | 53 | `case_same_reject_twice_escalates` | the same REJECT twice jumps to the next stage's worker, noted | e2e | no | - | case_same_reject_twice_escalates (escalation.sh) |
 | 54 | `case_different_rejects_do_not_escalate` | two different REJECTs stay on the current stage | e2e | no | - | case_different_rejects_do_not_escalate (escalation.sh) |

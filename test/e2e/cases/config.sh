@@ -32,6 +32,19 @@ case_global_config_that_does_not_parse_runs_nothing() {
   assert_match "$(config_loop_log)" "error .*config\.toml does not parse, so the loop leaves" "the loop's log says why"
 }
 
+# A repo's .bead-loop.toml has a stage with no worker: nothing is picked, bd is untouched,
+# and the loop's log names the stage.
+case_a_stage_with_no_worker_stops() {
+  setup 'test -e work.txt'
+  printf '[[stages]]\nname = "lonely"\nreviewer = "fake/reviewer"\n' >>"$REPO/.bead-loop.toml"
+  reply coder "$(write_work)" "$(commit)" "$(done_report)"
+  reply reviewer "$(approve)"
+  tick 3
+  assert_eq "$(events)" "" "nothing picked"
+  assert_eq "$(bd_field status)" open "bd untouched"
+  assert_match "$(config_loop_log)" "error .*stage lonely names no worker, so the loop leaves" "the loop's log says why"
+}
+
 # primer names a file in the repo: it reaches the worker's prompt, wrapped in its own tag.
 case_primer_reaches_the_worker() {
   setup 'test -e work.txt'
