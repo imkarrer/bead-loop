@@ -925,6 +925,20 @@ test "a tally is one timeline of marks" {
     assert.equal(send_backs.at(0)?.at, 500)
 }
 
+test "a tally marks the moment its bead parks" {
+    let timed: TimedEvent[] = [
+        TimedEvent { at: 100, event: root.machine.Picked { kind: "picked" } },
+        TimedEvent { at: 110, event: root.machine.NoCommit { kind: "no_commit" } },
+        TimedEvent { at: 200, event: root.machine.Picked { kind: "picked" } },
+        TimedEvent { at: 210, event: root.machine.NoCommit { kind: "no_commit" } },
+        TimedEvent { at: 300, event: root.machine.Picked { kind: "picked" } },
+        TimedEvent { at: 310, event: root.machine.NoCommit { kind: "no_commit" } },
+        TimedEvent { at: 400, event: root.machine.Picked { kind: "picked" } },
+    ];
+    let t = ftally("t-1", "t-1", timed, policy());
+    assert.equal(marks_of(t, "park"), [400])
+}
+
 test "a green look is not logged where CI merges, and is where the loop does" {
     let green = root.machine.ChecksGreen { kind: "checks_green" };
     let p = policy();

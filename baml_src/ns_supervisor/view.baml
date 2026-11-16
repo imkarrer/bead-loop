@@ -473,6 +473,7 @@ function ftally(
                 t.charged = true;
             }
         }
+        let was_parked = b.place is root.machine.Parked;
         b = root.machine.step(b, ev, p).bead;
         if (
             b.place is root.machine.Closed
@@ -488,6 +489,9 @@ function ftally(
             if (v.text.length() > 0) {
                 t.url = v.text;
             }
+        }
+        if (b.place is root.machine.Parked && !was_parked) {
+            t.marks.push(FMark { at: e.at, kind: "park", model: st?.worker ?? "", what: null });
         }
     }
     t.rounds = b.rounds;
